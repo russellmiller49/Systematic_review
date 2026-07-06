@@ -1,0 +1,1159 @@
+// Synthesis — systematic review & meta-analysis platform
+// Data-model rationale: docs/02-data-model.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum ProjectRole {
+  OWNER
+  ADMIN
+  REVIEWER
+  ADJUDICATOR
+  EXTRACTOR
+  STATISTICIAN
+  LIBRARIAN
+  PANEL_MEMBER
+  TRAINEE
+  OBSERVER
+}
+
+enum MemberStatus {
+  ACTIVE
+  REMOVED
+}
+
+enum ReviewType {
+  SYSTEMATIC_REVIEW
+  SYSTEMATIC_REVIEW_META_ANALYSIS
+  DIAGNOSTIC_TEST_ACCURACY
+  SCOPING_REVIEW
+  RAPID_REVIEW
+  LIVING_SYSTEMATIC_REVIEW
+  GUIDELINE_EVIDENCE_REVIEW
+}
+
+enum ProjectStatus {
+  PLANNING
+  SCREENING
+  EXTRACTION
+  ANALYSIS
+  COMPLETED
+  ARCHIVED
+}
+
+enum CriterionType {
+  INCLUSION
+  EXCLUSION
+}
+
+enum OutcomeType {
+  PRIMARY
+  SECONDARY
+}
+
+enum ImportFormat {
+  RIS
+  BIBTEX
+  CSV
+  NBIB
+}
+
+enum ImportBatchStatus {
+  PREVIEWED
+  COMMITTED
+  FAILED
+}
+
+enum CitationStatus {
+  ACTIVE
+  DUPLICATE
+}
+
+enum IdentifierType {
+  DOI
+  PMID
+  PMCID
+  URL
+  ISBN
+  REGISTRY_ID
+  OTHER
+}
+
+enum DedupMethod {
+  EXACT_DOI
+  EXACT_PMID
+  NORMALIZED_TITLE
+  FUZZY
+}
+
+enum DedupCandidateStatus {
+  SUGGESTED
+  MERGED
+  REJECTED
+}
+
+enum DedupGroupStatus {
+  OPEN
+  RESOLVED
+}
+
+enum StageType {
+  TITLE_ABSTRACT
+  FULL_TEXT
+}
+
+enum AssignmentStatus {
+  PENDING
+  COMPLETED
+}
+
+enum Decision {
+  INCLUDE
+  EXCLUDE
+  MAYBE
+  UNRESOLVED
+}
+
+enum ConflictStatus {
+  OPEN
+  RESOLVED
+}
+
+enum ReasonStage {
+  TITLE_ABSTRACT
+  FULL_TEXT
+  BOTH
+}
+
+enum RetrievalOutcome {
+  PENDING
+  RETRIEVED
+  NOT_RETRIEVED
+}
+
+enum TemplateStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  SINGLE_SELECT
+  MULTI_SELECT
+  BOOLEAN
+}
+
+enum FormStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum RobJudgmentValue {
+  LOW
+  SOME_CONCERNS
+  HIGH
+  UNCLEAR
+  NOT_APPLICABLE
+}
+
+enum ExportKind {
+  CITATIONS
+  SCREENING
+  EXTRACTION
+  ROB
+  PRISMA
+  AUDIT
+  FULL
+}
+
+enum ExportFormat {
+  CSV
+  JSON
+}
+
+enum ExportStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Users & teams
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique // stored lowercased (service-enforced)
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orgMemberships       OrganizationMember[]
+  projectMemberships   ProjectMember[]
+  createdOrgs          Organization[]            @relation("OrgCreator")
+  createdProjects      Project[]                 @relation("ProjectCreator")
+  sentInvitations      ProjectInvitation[]       @relation("InvitationSender")
+  protocolVersions     ProtocolVersion[]         @relation("ProtocolVersionAuthor")
+  protocolAmendments   ProtocolAmendment[]       @relation("AmendmentAuthor")
+  importBatches        ImportBatch[]             @relation("ImportCreator")
+  dedupDecisions       DeduplicationCandidate[]  @relation("DedupDecider")
+  createdStudies       Study[]                   @relation("StudyCreator")
+  screeningAssignments ScreeningAssignment[]     @relation("AssignmentReviewer")
+  screeningDecisions   ScreeningDecision[]       @relation("DecisionReviewer")
+  adjudications        ScreeningAdjudication[]   @relation("Adjudicator")
+  uploadedFiles        FullTextFile[]            @relation("FileUploader")
+  retrievalAttempts    FullTextRetrievalAttempt[] @relation("RetrievalRecorder")
+  extractionTemplates  ExtractionTemplate[]      @relation("TemplateCreator")
+  extractionAssignments ExtractionAssignment[]   @relation("ExtractionAssignee")
+  extractionForms      ExtractionForm[]          @relation("Extractor")
+  extractionAdjudications ExtractionAdjudication[] @relation("ExtractionAdjudicator")
+  robTools             RiskOfBiasTool[]          @relation("RobToolCreator")
+  robAssessments       RiskOfBiasAssessment[]    @relation("RobAssessor")
+  robAdjudications     RiskOfBiasAdjudication[]  @relation("RobAdjudicator")
+  prismaSnapshots      PrismaSnapshot[]          @relation("SnapshotCreator")
+  exportJobs           ExportJob[]               @relation("ExportRequester")
+  auditEvents          AuditEvent[]              @relation("AuditActor")
+}
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User                 @relation("OrgCreator", fields: [createdById], references: [id])
+  members   OrganizationMember[]
+  projects  Project[]
+}
+
+model OrganizationMember {
+  id        String       @id @default(cuid())
+  orgId     String
+  userId    String
+  role      OrgRole
+  status    MemberStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  org  Organization @relation(fields: [orgId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+
+  @@unique([orgId, userId])
+}
+
+model Project {
+  id                   String        @id @default(cuid())
+  orgId                String
+  title                String
+  reviewType           ReviewType
+  researchQuestion     String?
+  description          String?
+  status               ProjectStatus @default(PLANNING)
+  registrationPlatform String? // e.g. PROSPERO
+  registrationId       String?
+  createdById          String
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  org       Organization @relation(fields: [orgId], references: [id])
+  createdBy User         @relation("ProjectCreator", fields: [createdById], references: [id])
+
+  members          ProjectMember[]
+  invitations      ProjectInvitation[]
+  protocol         Protocol?
+  exclusionReasons ExclusionReason[]
+  importSources    ImportSource[]
+  importBatches    ImportBatch[]
+  citations        Citation[]
+  dedupGroups      DeduplicationGroup[]
+  dedupCandidates  DeduplicationCandidate[]
+  studies          Study[]
+  screeningStages  ScreeningStage[]
+  fullTextFiles    FullTextFile[]
+  extractionTemplates ExtractionTemplate[]
+  robTools         RiskOfBiasTool[]
+  prismaSnapshots  PrismaSnapshot[]
+  exportJobs       ExportJob[]
+  auditEvents      AuditEvent[]
+
+  @@index([orgId])
+}
+
+model ProjectMember {
+  id        String        @id @default(cuid())
+  projectId String
+  userId    String
+  roles     ProjectRole[]
+  status    MemberStatus  @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model ProjectInvitation {
+  id          String        @id @default(cuid())
+  projectId   String
+  email       String // lowercased
+  roles       ProjectRole[]
+  token       String        @unique
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime      @default(now())
+
+  project   Project @relation(fields: [projectId], references: [id])
+  invitedBy User    @relation("InvitationSender", fields: [invitedById], references: [id])
+
+  @@index([projectId])
+  @@index([email])
+}
+
+// ---------------------------------------------------------------------------
+// Protocol
+// ---------------------------------------------------------------------------
+
+model Protocol {
+  id                    String   @id @default(cuid())
+  projectId             String   @unique
+  background            String?
+  reviewQuestion        String?
+  population            String?
+  intervention          String? // intervention / index test / exposure
+  comparator            String? // comparator / reference standard
+  outcomesNarrative     String?
+  studyDesigns          String[]
+  setting               String?
+  dateRestrictionFrom   Int? // publication year lower bound
+  dateRestrictionTo     Int?
+  languageRestrictions  String[]
+  databases             String[] // planned databases to search
+  grayLiteratureSources String[]
+  searchStrategyNotes   String?
+  subgroupAnalysisPlan  String?
+  sensitivityAnalysisPlan String?
+  metaAnalysisPlan      String?
+  gradePlan             String?
+  extractionTemplateId  String?  @unique // planned extraction form (spec: ExtractionFieldDefinition)
+  riskOfBiasToolId      String? // planned RoB tool (spec: RiskOfBiasToolConfig)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  project            Project             @relation(fields: [projectId], references: [id])
+  extractionTemplate ExtractionTemplate? @relation(fields: [extractionTemplateId], references: [id])
+  riskOfBiasTool     RiskOfBiasTool?     @relation(fields: [riskOfBiasToolId], references: [id])
+
+  picoQuestions PICOQuestion[]
+  criteria      EligibilityCriterion[]
+  outcomes      OutcomeDefinition[]
+  versions      ProtocolVersion[]
+  amendments    ProtocolAmendment[]
+}
+
+model PICOQuestion {
+  id           String   @id @default(cuid())
+  protocolId   String
+  order        Int      @default(0)
+  question     String
+  population   String?
+  intervention String?
+  comparator   String?
+  outcome      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  protocol Protocol @relation(fields: [protocolId], references: [id])
+
+  @@index([protocolId])
+}
+
+model EligibilityCriterion {
+  id         String        @id @default(cuid())
+  protocolId String
+  type       CriterionType // INCLUSION | EXCLUSION (spec: InclusionCriterion / ExclusionCriterion)
+  category   String? // population, intervention, design, setting, ...
+  text       String
+  order      Int           @default(0)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  protocol Protocol @relation(fields: [protocolId], references: [id])
+
+  @@index([protocolId, type])
+}
+
+model OutcomeDefinition {
+  id         String      @id @default(cuid())
+  protocolId String
+  name       String
+  type       OutcomeType @default(PRIMARY)
+  measure    String? // e.g. RR, MD, proportion — future meta-analysis/GRADE anchor
+  timepoint  String?
+  order      Int         @default(0)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  protocol Protocol @relation(fields: [protocolId], references: [id])
+
+  @@index([protocolId])
+}
+
+// Immutable full snapshot of protocol + children at publish/amendment time.
+model ProtocolVersion {
+  id            String   @id @default(cuid())
+  protocolId    String
+  versionNumber Int
+  snapshot      Json
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  protocol  Protocol @relation(fields: [protocolId], references: [id])
+  createdBy User     @relation("ProtocolVersionAuthor", fields: [createdById], references: [id])
+
+  @@unique([protocolId, versionNumber])
+}
+
+model ProtocolAmendment {
+  id          String   @id @default(cuid())
+  protocolId  String
+  fromVersion Int
+  toVersion   Int
+  reason      String // required — why the protocol changed after screening began
+  description String?
+  createdById String
+  createdAt   DateTime @default(now())
+
+  protocol  Protocol @relation(fields: [protocolId], references: [id])
+  createdBy User     @relation("AmendmentAuthor", fields: [createdById], references: [id])
+
+  @@index([protocolId])
+}
+
+// Project-scoped exclusion reasons (protocol-derived; FULL_TEXT exclusions must cite one).
+model ExclusionReason {
+  id        String      @id @default(cuid())
+  projectId String
+  label     String
+  stage     ReasonStage @default(BOTH)
+  order     Int         @default(0)
+  isActive  Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  project       Project                 @relation(fields: [projectId], references: [id])
+  decisions     ScreeningDecision[]
+  adjudications ScreeningAdjudication[]
+
+  @@unique([projectId, label])
+}
+
+// ---------------------------------------------------------------------------
+// Imports & citations
+// ---------------------------------------------------------------------------
+
+model ImportSource {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String // "PubMed", "Embase", "Hand search", ...
+  description String?
+  createdAt   DateTime @default(now())
+
+  project Project       @relation(fields: [projectId], references: [id])
+  batches ImportBatch[]
+
+  @@unique([projectId, name])
+}
+
+model ImportBatch {
+  id           String            @id @default(cuid())
+  projectId    String
+  sourceId     String
+  filename     String
+  format       ImportFormat
+  status       ImportBatchStatus @default(PREVIEWED)
+  totalRecords Int               @default(0)
+  parsedRecords Int              @default(0)
+  failedRecords Int              @default(0)
+  committedAt  DateTime?
+  createdById  String
+  createdAt    DateTime          @default(now())
+
+  project       Project                @relation(fields: [projectId], references: [id])
+  source        ImportSource           @relation(fields: [sourceId], references: [id])
+  createdBy     User                   @relation("ImportCreator", fields: [createdById], references: [id])
+  sourceRecords CitationSourceRecord[]
+
+  @@index([projectId])
+}
+
+// The report (article/abstract/registry entry). Never hard-deleted; dedup flips status.
+model Citation {
+  id              String         @id @default(cuid())
+  projectId       String
+  status          CitationStatus @default(ACTIVE)
+  duplicateOfId   String? // set when merged as duplicate of the canonical citation
+  title           String
+  normalizedTitle String // service-maintained, for exact-title dedup
+  authors         Json // [{ family, given, raw }]
+  year            Int?
+  journal         String?
+  volume          String?
+  issue           String?
+  pages           String?
+  abstract        String?
+  doi             String? // normalized lowercase, no https://doi.org/
+  pmid            String?
+  url             String?
+  language        String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  project       Project    @relation(fields: [projectId], references: [id])
+  duplicateOf   Citation?  @relation("DuplicateOf", fields: [duplicateOfId], references: [id])
+  duplicates    Citation[] @relation("DuplicateOf")
+
+  sourceRecords     CitationSourceRecord[]
+  identifiers       CitationIdentifier[]
+  studyLink         StudyReportLink?
+  assignments       ScreeningAssignment[]
+  decisions         ScreeningDecision[]
+  conflicts         ScreeningConflict[]
+  fullTextLinks     CitationFullTextLink[]
+  retrievalAttempts FullTextRetrievalAttempt[]
+  extractionForms   ExtractionForm[]
+
+  @@index([projectId, status])
+  @@index([projectId, normalizedTitle])
+  @@index([projectId, doi])
+  @@index([projectId, pmid])
+}
+
+// Immutable raw import record. Created at preview (citationId null), linked at commit.
+model CitationSourceRecord {
+  id          String   @id @default(cuid())
+  batchId     String
+  citationId  String?
+  rowNumber   Int
+  rawRecord   String // verbatim source chunk (RIS block, BibTeX entry, CSV row)
+  parsed      Json? // parser output
+  parseErrors Json? // row-level errors (record preserved even when unparseable)
+  createdAt   DateTime @default(now())
+
+  batch    ImportBatch @relation(fields: [batchId], references: [id])
+  citation Citation?   @relation(fields: [citationId], references: [id])
+
+  @@index([batchId])
+  @@index([citationId])
+}
+
+model CitationIdentifier {
+  id         String         @id @default(cuid())
+  citationId String
+  type       IdentifierType
+  value      String
+
+  citation Citation @relation(fields: [citationId], references: [id])
+
+  @@unique([citationId, type, value])
+  @@index([type, value])
+}
+
+// ---------------------------------------------------------------------------
+// Deduplication
+// ---------------------------------------------------------------------------
+
+model DeduplicationGroup {
+  id        String           @id @default(cuid())
+  projectId String
+  status    DedupGroupStatus @default(OPEN)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  project    Project                  @relation(fields: [projectId], references: [id])
+  candidates DeduplicationCandidate[]
+
+  @@index([projectId, status])
+}
+
+// A suggested duplicate PAIR with the evidence for why it was suggested.
+model DeduplicationCandidate {
+  id          String               @id @default(cuid())
+  projectId   String
+  groupId     String?
+  citationAId String // invariant: citationAId < citationBId
+  citationBId String
+  method      DedupMethod
+  score       Float // 1.0 for exact methods
+  reasons     Json // human-readable evidence: matched fields, similarity values
+  status      DedupCandidateStatus @default(SUGGESTED)
+  decidedById String?
+  decidedAt   DateTime?
+  createdAt   DateTime             @default(now())
+
+  project   Project             @relation(fields: [projectId], references: [id])
+  group     DeduplicationGroup? @relation(fields: [groupId], references: [id])
+  decidedBy User?               @relation("DedupDecider", fields: [decidedById], references: [id])
+
+  @@unique([citationAId, citationBId])
+  @@index([projectId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Studies (the analysis unit; multiple citations/reports may link to one study)
+// ---------------------------------------------------------------------------
+
+model Study {
+  id          String   @id @default(cuid())
+  projectId   String
+  label       String // e.g. "Smith 2019"
+  notes       String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id])
+  createdBy User    @relation("StudyCreator", fields: [createdById], references: [id])
+
+  reportLinks     StudyReportLink[]
+  extractionAssignments ExtractionAssignment[]
+  extractionForms ExtractionForm[]
+  extractionConflicts ExtractionConflict[]
+  robAssessments  RiskOfBiasAssessment[]
+  robConflicts    RiskOfBiasConflict[]
+
+  @@index([projectId])
+}
+
+model StudyReportLink {
+  id              String  @id @default(cuid())
+  studyId         String
+  citationId      String  @unique // a report belongs to at most one study
+  isPrimaryReport Boolean @default(false)
+
+  study    Study    @relation(fields: [studyId], references: [id])
+  citation Citation @relation(fields: [citationId], references: [id])
+
+  @@unique([studyId, citationId])
+}
+
+// ---------------------------------------------------------------------------
+// Screening
+// ---------------------------------------------------------------------------
+
+model ScreeningStage {
+  id                    String    @id @default(cuid())
+  projectId             String
+  type                  StageType
+  reviewersPerCitation  Int       @default(2)
+  blinded               Boolean   @default(true)
+  maybeGeneratesConflict Boolean  @default(true)
+  unblindedAt           DateTime? // admin unblind action (audited)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  project     Project               @relation(fields: [projectId], references: [id])
+  assignments ScreeningAssignment[]
+  decisions   ScreeningDecision[]
+  conflicts   ScreeningConflict[]
+
+  @@unique([projectId, type])
+}
+
+model ScreeningAssignment {
+  id         String           @id @default(cuid())
+  stageId    String
+  citationId String
+  reviewerId String
+  status     AssignmentStatus @default(PENDING)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  stage    ScreeningStage @relation(fields: [stageId], references: [id])
+  citation Citation       @relation(fields: [citationId], references: [id])
+  reviewer User           @relation("AssignmentReviewer", fields: [reviewerId], references: [id])
+
+  @@unique([stageId, citationId, reviewerId])
+  @@index([reviewerId, status])
+  @@index([stageId, citationId])
+}
+
+// One reviewer's current decision. Updated in place; every change is audited with previousValue.
+model ScreeningDecision {
+  id                   String   @id @default(cuid())
+  stageId              String
+  citationId           String
+  reviewerId           String
+  decision             Decision
+  exclusionReasonId    String? // REQUIRED (service-enforced) for FULL_TEXT + EXCLUDE
+  notes                String?
+  labels               String[]
+  flaggedForDiscussion Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  stage           ScreeningStage   @relation(fields: [stageId], references: [id])
+  citation        Citation         @relation(fields: [citationId], references: [id])
+  reviewer        User             @relation("DecisionReviewer", fields: [reviewerId], references: [id])
+  exclusionReason ExclusionReason? @relation(fields: [exclusionReasonId], references: [id])
+
+  @@unique([stageId, citationId, reviewerId])
+  @@index([stageId, decision])
+  @@index([citationId])
+}
+
+model ScreeningConflict {
+  id         String         @id @default(cuid())
+  stageId    String
+  citationId String
+  status     ConflictStatus @default(OPEN)
+  openedAt   DateTime       @default(now())
+  resolvedAt DateTime?
+
+  stage        ScreeningStage         @relation(fields: [stageId], references: [id])
+  citation     Citation               @relation(fields: [citationId], references: [id])
+  adjudication ScreeningAdjudication?
+
+  @@unique([stageId, citationId])
+  @@index([stageId, status])
+}
+
+model ScreeningAdjudication {
+  id                String   @id @default(cuid())
+  conflictId        String   @unique
+  adjudicatorId     String // always from session — rule 5
+  finalDecision     Decision
+  exclusionReasonId String?
+  reason            String // required rationale
+  createdAt         DateTime @default(now())
+
+  conflict        ScreeningConflict @relation(fields: [conflictId], references: [id])
+  adjudicator     User              @relation("Adjudicator", fields: [adjudicatorId], references: [id])
+  exclusionReason ExclusionReason?  @relation(fields: [exclusionReasonId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// Full text
+// ---------------------------------------------------------------------------
+
+model FullTextFile {
+  id           String   @id @default(cuid())
+  projectId    String
+  storageKey   String   @unique
+  filename     String
+  contentType  String
+  sizeBytes    Int
+  sha256       String
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  project    Project                @relation(fields: [projectId], references: [id])
+  uploadedBy User                   @relation("FileUploader", fields: [uploadedById], references: [id])
+  links      CitationFullTextLink[]
+
+  @@index([projectId])
+  @@index([sha256])
+}
+
+model CitationFullTextLink {
+  id         String   @id @default(cuid())
+  citationId String
+  fileId     String
+  label      String? // "main paper", "supplement", ...
+  createdAt  DateTime @default(now())
+
+  citation Citation     @relation(fields: [citationId], references: [id])
+  file     FullTextFile @relation(fields: [fileId], references: [id])
+
+  @@unique([citationId, fileId])
+}
+
+model FullTextRetrievalAttempt {
+  id           String           @id @default(cuid())
+  citationId   String
+  method       String // publisher site, library, ILL, author email, ...
+  outcome      RetrievalOutcome
+  notes        String?
+  recordedById String
+  attemptedAt  DateTime         @default(now())
+
+  citation   Citation @relation(fields: [citationId], references: [id])
+  recordedBy User     @relation("RetrievalRecorder", fields: [recordedById], references: [id])
+
+  @@index([citationId])
+}
+
+// ---------------------------------------------------------------------------
+// Extraction
+// ---------------------------------------------------------------------------
+
+model ExtractionTemplate {
+  id          String         @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  status      TemplateStatus @default(DRAFT)
+  version     Int            @default(1)
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id])
+  createdBy User    @relation("TemplateCreator", fields: [createdById], references: [id])
+
+  fields      ExtractionField[]
+  assignments ExtractionAssignment[]
+  forms       ExtractionForm[]
+  conflicts   ExtractionConflict[]
+  protocol    Protocol?
+
+  @@index([projectId])
+}
+
+model ExtractionField {
+  id         String    @id @default(cuid())
+  templateId String
+  key        String // machine name, stable across label edits
+  label      String
+  type       FieldType
+  section    String?
+  helpText   String?
+  required   Boolean   @default(false)
+  options    Json? // for selects: [{value, label}]
+  order      Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  template  ExtractionTemplate   @relation(fields: [templateId], references: [id])
+  values    ExtractionValue[]
+  conflicts ExtractionConflict[]
+
+  @@unique([templateId, key])
+  @@index([templateId, order])
+}
+
+model ExtractionAssignment {
+  id          String           @id @default(cuid())
+  templateId  String
+  studyId     String
+  extractorId String
+  status      AssignmentStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  template  ExtractionTemplate @relation(fields: [templateId], references: [id])
+  study     Study              @relation(fields: [studyId], references: [id])
+  extractor User               @relation("ExtractionAssignee", fields: [extractorId], references: [id])
+
+  @@unique([templateId, studyId, extractorId])
+  @@index([extractorId, status])
+}
+
+model ExtractionForm {
+  id          String     @id @default(cuid())
+  templateId  String
+  studyId     String
+  citationId  String? // optional report-level anchor
+  extractorId String
+  status      FormStatus @default(IN_PROGRESS)
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  template  ExtractionTemplate @relation(fields: [templateId], references: [id])
+  study     Study              @relation(fields: [studyId], references: [id])
+  citation  Citation?          @relation(fields: [citationId], references: [id])
+  extractor User               @relation("Extractor", fields: [extractorId], references: [id])
+  values    ExtractionValue[]
+
+  @@unique([templateId, studyId, extractorId])
+  @@index([studyId])
+}
+
+model ExtractionValue {
+  id           String   @id @default(cuid())
+  formId       String
+  fieldId      String
+  value        Json // typed by field.type, validated in service
+  sourceQuote  String?
+  pageNumber   Int?
+  notes        String?
+  sourceAnchor Json? // future AI anchoring: { fileId, page, bbox | paragraphPath | tableCell }
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  form  ExtractionForm  @relation(fields: [formId], references: [id])
+  field ExtractionField @relation(fields: [fieldId], references: [id])
+
+  @@unique([formId, fieldId])
+}
+
+model ExtractionConflict {
+  id         String         @id @default(cuid())
+  templateId String
+  studyId    String
+  fieldId    String
+  status     ConflictStatus @default(OPEN)
+  openedAt   DateTime       @default(now())
+  resolvedAt DateTime?
+
+  template     ExtractionTemplate      @relation(fields: [templateId], references: [id])
+  study        Study                   @relation(fields: [studyId], references: [id])
+  field        ExtractionField         @relation(fields: [fieldId], references: [id])
+  adjudication ExtractionAdjudication?
+
+  @@unique([studyId, fieldId])
+  @@index([templateId, status])
+}
+
+model ExtractionAdjudication {
+  id            String   @id @default(cuid())
+  conflictId    String   @unique
+  adjudicatorId String
+  finalValue    Json
+  reason        String
+  createdAt     DateTime @default(now())
+
+  conflict    ExtractionConflict @relation(fields: [conflictId], references: [id])
+  adjudicator User               @relation("ExtractionAdjudicator", fields: [adjudicatorId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// Risk of bias
+// ---------------------------------------------------------------------------
+
+// Built-in tools have projectId = null (seeded); custom tools are project-scoped.
+model RiskOfBiasTool {
+  id            String   @id @default(cuid())
+  projectId     String?
+  name          String
+  description   String?
+  isBuiltin     Boolean  @default(false)
+  judgmentScale Json // allowed judgment values + labels/colors
+  status        TemplateStatus @default(DRAFT)
+  createdById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project   Project? @relation(fields: [projectId], references: [id])
+  createdBy User?    @relation("RobToolCreator", fields: [createdById], references: [id])
+
+  domains     RiskOfBiasDomain[]
+  assessments RiskOfBiasAssessment[]
+  protocols   Protocol[]
+
+  @@index([projectId])
+}
+
+model RiskOfBiasDomain {
+  id       String  @id @default(cuid())
+  toolId   String
+  name     String
+  guidance String?
+  order    Int     @default(0)
+
+  tool      RiskOfBiasTool               @relation(fields: [toolId], references: [id])
+  questions RiskOfBiasSignalingQuestion[]
+  judgments RiskOfBiasJudgment[]
+  conflicts RiskOfBiasConflict[]
+
+  @@index([toolId, order])
+}
+
+model RiskOfBiasSignalingQuestion {
+  id             String  @id @default(cuid())
+  domainId       String
+  text           String
+  guidance       String?
+  order          Int     @default(0)
+  allowedAnswers Json // default ["Y","PY","PN","N","NI"]
+
+  domain    RiskOfBiasDomain             @relation(fields: [domainId], references: [id])
+  responses RiskOfBiasSignalingResponse[]
+
+  @@index([domainId, order])
+}
+
+model RiskOfBiasAssessment {
+  id              String     @id @default(cuid())
+  toolId          String
+  studyId         String
+  assessorId      String
+  status          FormStatus @default(IN_PROGRESS)
+  overallJudgment RobJudgmentValue?
+  completedAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  tool      RiskOfBiasTool @relation(fields: [toolId], references: [id])
+  study     Study          @relation(fields: [studyId], references: [id])
+  assessor  User           @relation("RobAssessor", fields: [assessorId], references: [id])
+  judgments RiskOfBiasJudgment[]
+  responses RiskOfBiasSignalingResponse[]
+
+  @@unique([toolId, studyId, assessorId])
+  @@index([studyId])
+}
+
+model RiskOfBiasJudgment {
+  id           String           @id @default(cuid())
+  assessmentId String
+  domainId     String
+  judgment     RobJudgmentValue
+  support      String? // "support for judgment" free text
+  notes        String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  assessment RiskOfBiasAssessment @relation(fields: [assessmentId], references: [id])
+  domain     RiskOfBiasDomain     @relation(fields: [domainId], references: [id])
+
+  @@unique([assessmentId, domainId])
+}
+
+model RiskOfBiasSignalingResponse {
+  id           String  @id @default(cuid())
+  assessmentId String
+  questionId   String
+  answer       String
+  note         String?
+
+  assessment RiskOfBiasAssessment        @relation(fields: [assessmentId], references: [id])
+  question   RiskOfBiasSignalingQuestion @relation(fields: [questionId], references: [id])
+
+  @@unique([assessmentId, questionId])
+}
+
+model RiskOfBiasConflict {
+  id         String         @id @default(cuid())
+  studyId    String
+  domainId   String
+  status     ConflictStatus @default(OPEN)
+  openedAt   DateTime       @default(now())
+  resolvedAt DateTime?
+
+  study        Study                   @relation(fields: [studyId], references: [id])
+  domain       RiskOfBiasDomain        @relation(fields: [domainId], references: [id])
+  adjudication RiskOfBiasAdjudication?
+
+  @@unique([studyId, domainId])
+}
+
+model RiskOfBiasAdjudication {
+  id            String           @id @default(cuid())
+  conflictId    String           @unique
+  adjudicatorId String
+  finalJudgment RobJudgmentValue
+  reason        String
+  createdAt     DateTime         @default(now())
+
+  conflict    RiskOfBiasConflict @relation(fields: [conflictId], references: [id])
+  adjudicator User               @relation("RobAdjudicator", fields: [adjudicatorId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// PRISMA reporting
+// ---------------------------------------------------------------------------
+
+// Counts are computed live by the service; snapshots freeze them for reporting.
+model PrismaSnapshot {
+  id          String   @id @default(cuid())
+  projectId   String
+  label       String
+  data        Json // full structured snapshot (PRISMA 2020 shape)
+  createdById String
+  createdAt   DateTime @default(now())
+
+  project   Project       @relation(fields: [projectId], references: [id])
+  createdBy User          @relation("SnapshotCreator", fields: [createdById], references: [id])
+  counts    PrismaCount[]
+
+  @@index([projectId])
+}
+
+model PrismaCount {
+  id         String @id @default(cuid())
+  snapshotId String
+  key        String // e.g. "records_identified", "reports_excluded"
+  label      String
+  value      Int
+  breakdown  Json? // per-source / per-reason detail (spec: FullTextExclusionSummary)
+
+  snapshot PrismaSnapshot @relation(fields: [snapshotId], references: [id])
+
+  @@unique([snapshotId, key])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail (append-only; see docs/06-audit-design.md)
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  id            String   @id @default(cuid())
+  projectId     String?
+  userId        String
+  entityType    String
+  entityId      String
+  action        String
+  previousValue Json?
+  newValue      Json?
+  reason        String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  project Project? @relation(fields: [projectId], references: [id])
+  user    User     @relation("AuditActor", fields: [userId], references: [id])
+
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+  @@index([projectId, userId])
+  @@index([projectId, action])
+}
+
+// ---------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------
+
+model ExportJob {
+  id            String       @id @default(cuid())
+  projectId     String
+  kind          ExportKind
+  format        ExportFormat
+  status        ExportStatus @default(PENDING)
+  storageKey    String?
+  error         String?
+  requestedById String
+  createdAt     DateTime     @default(now())
+  completedAt   DateTime?
+
+  project     Project @relation(fields: [projectId], references: [id])
+  requestedBy User    @relation("ExportRequester", fields: [requestedById], references: [id])
+
+  @@index([projectId])
+}
