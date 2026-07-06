@@ -5,8 +5,13 @@
 
 ## Current state
 
-- **M1 Plan**: docs 01–08 written; prisma/schema.prisma drafted. Design review: pending.
-- **M2 Scaffold**: not started
+- **M1 Plan**: ✅ docs 01–08 + 09 (design-review resolutions — READ IT, it is the implementation
+  contract for lifecycle/blinding/security policies). Adversarial review done: 32 confirmed
+  findings, all resolved in schema + docs/09.
+- **M2 Scaffold**: ✅ Next.js 15 + TS strict + Tailwind v4 + owned UI kit (src/components/ui),
+  docker Postgres (5442, srb_dev + srb_test), Prisma migrated (init), Auth.js credentials
+  (sign-up/sign-in working), errors/api-utils/permissions/audit-service backbone, Vitest unit +
+  integration infra (tests/), matrix unit tests green, `next build` green.
 - **M3 Core domain**: not started
 - **M4 Import & dedup**: not started
 - **M5 Screening**: not started

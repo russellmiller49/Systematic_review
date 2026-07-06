@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: srb-postgres
+    ports:
+      - "5442:5432"
+    environment:
+      POSTGRES_USER: srb
+      POSTGRES_PASSWORD: srb
+      POSTGRES_DB: srb_dev
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./scripts/db-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U srb -d srb_dev"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  db-data:
