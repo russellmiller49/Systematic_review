@@ -4,7 +4,35 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.claude/skills/continue-build/SKILL.md`.
 
-## Current state (2026-07-05)
+## Current state (2026-07-06)
+
+- **M8 UI wave + seed + E2E + docs**: ✅ All 12 project workspace pages built (9 parallel agents,
+  disjoint file groups) as client components over the REST API — dashboard, protocol (6 tabs +
+  inline amendment gate), import (upload→preview→commit), dedup (PairCompare + merge/undo),
+  screening (keyboard-first queue + optimistic advance + **new assign-reviewers dialog**),
+  conflicts (adjudicate/reopen), full text (retrieval + PDF up/serve + FT decisions), extraction
+  (template builder + dynamic typed forms + conflicts), RoB (tool builder + assess + traffic-light
+  summary), PRISMA (grouped counts + snapshots + exports), audit (filter + DiffViewer), settings.
+  `prisma/seed.ts` seeds the full demo THROUGH the services (verified: 17 active citations, 3
+  dedup pairs merged, 3 screening conflicts [2 adjudicated/1 open], 3 studies, 1 extraction + 1
+  RoB adjudicated conflict, coherent PRISMA flow). Playwright E2E: happy path (sign-up→export),
+  adjudication, authz smoke — 4/4 green. README written. tsc + next build + 98 unit + 140
+  integration all green. Committed a1a7d23, ea04708.
+  - Gap found & fixed during E2E: there was **no screening-assignment UI** (RoB/extraction had
+    one, screening didn't), so a fresh project's citations never reached a reviewer's queue via
+    the UI. Added `AssignReviewersDialog` gated to `screening.configure`.
+- **Final code review**: ✅ Multi-agent review (10 domain reviewers × adversarial verify) over
+  all UI + seed against the real API contracts and R1 blinding. Result was clean for 81
+  parallel-built files: 1 confirmed low-severity finding (PRISMA export dropdown offered
+  project.edit-gated kinds to export.create-only roles → always-403 toast; fixed by filtering
+  kinds to the caller's capability) + 1 latent seed fragility (extraction adjudication used a
+  hardcoded finalValue; fixed to key the value to the conflict's field). Both fixed; verify loop
+  still green (tsc, next build, 98 unit + 140 integration, 5/5 E2E).
+
+**MVP COMPLETE.** The 17-step acceptance walk-through (sign-up → export) is achievable through
+the UI and demonstrated by the seed + E2E. Remaining items are all post-MVP backlog (docs/08).
+
+## Prior state (2026-07-05)
 
 - **M1 Plan**: ✅ docs 01–08 + 09. Adversarial multi-agent design review: 32 confirmed findings,
   all resolved in the schema and docs/09 (R1–R18 are binding policies).
@@ -28,7 +56,12 @@
   grid, new-project wizard with all spec fields, org members table), project sidebar layout,
   shared CitationCard / PageHeader / StatCard. **The 12 project workspace pages are NOT built.**
 
-## Remaining work (in order)
+## Remaining work
+
+**None for MVP** — all five items below are ✅ done (see 2026-07-06 state above). Next up is the
+post-MVP backlog in docs/08 (PRISMA diagram render, built-in RoB tool seeds, AI screening, etc.).
+
+### (historical, for reference)
 
 1. **UI wave (task #8)** — pages under `src/app/(app)/projects/[projectId]/`:
    dashboard (GET .../dashboard), protocol editor (+criteria/outcomes/PICO/versions/amendments,

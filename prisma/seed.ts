@@ -827,11 +827,25 @@ async function main() {
   }
 
   console.log("Adjudicating extraction conflict…");
+  // Final value + rationale keyed to the conflicting field, so this stays correct (and typed)
+  // if the disagreements above ever change — rather than writing one hardcoded number to
+  // whatever conflict happens to come back.
+  const extractionFinalValues: Record<string, { value: unknown; reason: string }> = {
+    sample_size: {
+      value: 190,
+      reason:
+        "The full text reports 190 randomized participants (CONSORT diagram); 180 was the per-protocol population.",
+    },
+  };
   const extractionConflicts = await extraction.listConflicts(adjCtx, projectId, { status: "OPEN" });
   for (const conflict of extractionConflicts) {
+    const resolution = extractionFinalValues[conflict.field.key];
+    if (!resolution) {
+      throw new Error(`Seed: no adjudicated value defined for extraction field "${conflict.field.key}"`);
+    }
     await extraction.adjudicateConflict(adjCtx, projectId, conflict.id, {
-      finalValue: 190,
-      reason: "The full text reports 190 randomized participants (CONSORT diagram); 180 was the per-protocol population.",
+      finalValue: resolution.value,
+      reason: resolution.reason,
     });
   }
 

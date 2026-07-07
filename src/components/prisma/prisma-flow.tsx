@@ -109,6 +109,12 @@ const EXPORT_KIND_LABELS: Record<string, string> = Object.fromEntries(
   EXPORT_KINDS.map((k) => [k.value, k.label]),
 );
 
+// Kinds the server gates on project.edit (OWNER/ADMIN). CITATIONS and PRISMA need only
+// export.create, so STATISTICIAN/LIBRARIAN can create those but not these — don't offer
+// options that would always 403. Mirrors exportCapability() in the exports service.
+const EDIT_GATED_KINDS = new Set(["SCREENING", "EXTRACTION", "ROB", "AUDIT", "FULL"]);
+const PROJECT_EDIT_ROLES = new Set(["OWNER", "ADMIN"]);
+
 function sortedBreakdown(breakdown: Record<string, number>): [string, number][] {
   return Object.entries(breakdown).sort((a, b) => b[1] - a[1]);
 }
@@ -159,6 +165,11 @@ export function PrismaFlow({ projectId }: { projectId: string }) {
   const [exportKind, setExportKind] = useState("PRISMA");
   const [exportFormat, setExportFormat] = useState("CSV");
   const [exporting, setExporting] = useState(false);
+  const [canEditProject, setCanEditProject] = useState(false);
+
+  const exportKinds = canEditProject
+    ? EXPORT_KINDS
+    : EXPORT_KINDS.filter((k) => !EDIT_GATED_KINDS.has(k.value));
 
   const loadReport = useCallback(() => {
     api<PrismaReport>(`/api/projects/${projectId}/prisma`)
@@ -191,6 +202,13 @@ export function PrismaFlow({ projectId }: { projectId: string }) {
     loadSnapshots();
     loadExports();
   }, [loadReport, loadSnapshots, loadExports]);
+
+  // Which export kinds to offer depends on project.edit (OWNER/ADMIN).
+  useEffect(() => {
+    api<{ myRoles: string[] }>(`/api/projects/${projectId}`)
+      .then((p) => setCanEditProject(p.myRoles.some((r) => PROJECT_EDIT_ROLES.has(r))))
+      .catch(() => setCanEditProject(false));
+  }, [projectId]);
 
   // Fetch snapshot detail when the view dialog opens.
   useEffect(() => {
@@ -505,7 +523,7 @@ export function PrismaFlow({ projectId }: { projectId: string }) {
                       if (kind === "FULL") setExportFormat("JSON");
                     }}
                   >
-                    {EXPORT_KINDS.map((k) => (
+                    {exportKinds.map((k) => (
                       <option key={k.value} value={k.value}>
                         {k.label}
                       </option>
