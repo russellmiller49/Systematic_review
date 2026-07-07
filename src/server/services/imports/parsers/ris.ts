@@ -1,5 +1,5 @@
 // RIS parser (TY..ER blocks). Pure, never throws — malformed blocks become error rows.
-import { normalizeDoi, parseAuthorName } from "@/server/services/citations/normalize";
+import { normalizeDoi, normalizePmid, parseAuthorName } from "@/server/services/citations/normalize";
 import {
   emptyFileResult,
   extractYear,
@@ -140,6 +140,9 @@ function buildRecord(
     pages,
     abstract: firstValue(tags, "AB", "N2"),
     doi: normalizeDoi(firstValue(tags, "DO")) ?? undefined,
+    // PubMed-sourced RIS carries the PMID as the accession number (AN, sometimes C2);
+    // normalizePmid rejects non-numeric accessions from other databases.
+    pmid: normalizePmid(firstValue(tags, "AN", "C2") ?? null) ?? undefined,
     url: firstValue(tags, "UR"),
     language: firstValue(tags, "LA"),
     rawChunk,

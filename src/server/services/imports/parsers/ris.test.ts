@@ -108,3 +108,18 @@ describe("parseRis", () => {
     expect(errors[0]!.message).toMatch(/empty/i);
   });
 });
+
+describe("parseRis PMID extraction", () => {
+  it("maps a numeric AN accession to pmid (PubMed-sourced RIS)", () => {
+    const { records, errors } = parseRis(
+      "TY  - JOUR\nTI  - Some trial\nAN  - 32000001\nER  - \n",
+    );
+    expect(errors).toHaveLength(0);
+    expect(records[0]?.pmid).toBe("32000001");
+  });
+
+  it("ignores non-numeric accession numbers (e.g. Embase)", () => {
+    const { records } = parseRis("TY  - JOUR\nTI  - Some trial\nAN  - L602341885\nER  - \n");
+    expect(records[0]?.pmid).toBeUndefined();
+  });
+});
