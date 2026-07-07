@@ -10,11 +10,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { PageHeader } from "@/components/layout/page-header";
 import { StageQueue } from "./stage-queue";
+import { AssignReviewersDialog } from "./assign-dialog";
 import { STAGE_LABELS, type ScreeningStageSummary } from "./types";
+
+// Roles holding `screening.configure` (permission matrix) — who may assign reviewers.
+const CONFIGURE_ROLES = new Set(["OWNER", "ADMIN"]);
 
 export function ScreeningWorkspace({ projectId }: { projectId: string }) {
   const [stages, setStages] = useState<ScreeningStageSummary[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [canConfigure, setCanConfigure] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,6 +38,12 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
     return () => {
       cancelled = true;
     };
+  }, [projectId]);
+
+  useEffect(() => {
+    api<{ myRoles: string[] }>(`/api/projects/${projectId}`)
+      .then((p) => setCanConfigure(p.myRoles.some((r) => CONFIGURE_ROLES.has(r))))
+      .catch(() => setCanConfigure(false));
   }, [projectId]);
 
   return (
@@ -64,8 +76,13 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
           </TabsList>
           {stages.map((stage) => (
             <TabsContent key={stage.id} value={stage.id} className="space-y-6">
-              <StageStrip projectId={projectId} stage={stage} />
-              <StageQueue key={stage.id} projectId={projectId} stage={stage} />
+              <StageStrip
+                projectId={projectId}
+                stage={stage}
+                canConfigure={canConfigure}
+                onAssigned={() => setReloadKey((k) => k + 1)}
+              />
+              <StageQueue key={`${stage.id}:${reloadKey}`} projectId={projectId} stage={stage} />
             </TabsContent>
           ))}
         </Tabs>
@@ -78,9 +95,13 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
 function StageStrip({
   projectId,
   stage,
+  canConfigure,
+  onAssigned,
 }: {
   projectId: string;
   stage: ScreeningStageSummary;
+  canConfigure: boolean;
+  onAssigned: () => void;
 }) {
   const p = stage.progress;
   return (
@@ -96,20 +117,25 @@ function StageStrip({
         </Badge>
         {stage.maybeGeneratesConflict && <Badge variant="maybe">Maybe raises conflicts</Badge>}
       </div>
-      <p className="text-xs text-muted-foreground">
-        Team: {p.decidedCitations} of {p.assignedCitations} citations decided ·{" "}
-        {p.results.included} included · {p.results.excluded} excluded ·{" "}
-        {p.openConflicts > 0 ? (
-          <Link
-            href={`/projects/${projectId}/conflicts`}
-            className="font-medium text-foreground underline-offset-2 hover:underline"
-          >
-            {p.openConflicts} open conflict{p.openConflicts === 1 ? "" : "s"}
-          </Link>
-        ) : (
-          "no open conflicts"
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <p className="text-xs text-muted-foreground">
+          Team: {p.decidedCitations} of {p.assignedCitations} citations decided ·{" "}
+          {p.results.included} included · {p.results.excluded} excluded ·{" "}
+          {p.openConflicts > 0 ? (
+            <Link
+              href={`/projects/${projectId}/conflicts`}
+              className="font-medium text-foreground underline-offset-2 hover:underline"
+            >
+              {p.openConflicts} open conflict{p.openConflicts === 1 ? "" : "s"}
+            </Link>
+          ) : (
+            "no open conflicts"
+          )}
+        </p>
+        {canConfigure && (
+          <AssignReviewersDialog projectId={projectId} stage={stage} onAssigned={onAssigned} />
         )}
-      </p>
+      </div>
     </div>
   );
 }
