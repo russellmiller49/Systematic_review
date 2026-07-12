@@ -29,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PrismaDiagram } from "./prisma-diagram";
 
 interface PrismaCountRow {
   key: string;
@@ -117,6 +118,14 @@ const PROJECT_EDIT_ROLES = new Set(["OWNER", "ADMIN"]);
 
 function sortedBreakdown(breakdown: Record<string, number>): [string, number][] {
   return Object.entries(breakdown).sort((a, b) => b[1] - a[1]);
+}
+
+function fileSlug(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug === "" ? "snapshot" : slug;
 }
 
 const MAX_INLINE_BREAKDOWN = 4;
@@ -338,6 +347,16 @@ export function PrismaFlow({ projectId }: { projectId: string }) {
         }
       />
 
+      {/* PRISMA 2020 flow diagram (rendered from the live counts) */}
+      <section className="space-y-3">
+        <h2 className="text-lg font-medium">Flow diagram</h2>
+        {report === null ? (
+          <Skeleton className="h-96" />
+        ) : (
+          <PrismaDiagram counts={report.counts} fileBase="prisma-2020-flow-diagram" />
+        )}
+      </section>
+
       {/* Live flow counts */}
       <section className="space-y-1">
         {report === null ? (
@@ -450,7 +469,7 @@ export function PrismaFlow({ projectId }: { projectId: string }) {
 
       {/* Snapshot detail dialog */}
       <Dialog open={detailId !== null} onOpenChange={(open) => !open && setDetailId(null)}>
-        <DialogContent className="max-h-[80vh] max-w-xl overflow-y-auto">
+        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
           {detail === null || detailCounts === null ? (
             <>
               <DialogHeader>
@@ -467,6 +486,10 @@ export function PrismaFlow({ projectId }: { projectId: string }) {
                   Frozen {new Date(detail.createdAt).toLocaleString()} by {detail.createdBy.name}
                 </DialogDescription>
               </DialogHeader>
+              <PrismaDiagram
+                counts={detail.counts}
+                fileBase={`prisma-diagram-${fileSlug(detail.label)}`}
+              />
               <Table>
                 <TableHeader>
                   <TableRow>
