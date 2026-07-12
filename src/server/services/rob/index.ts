@@ -19,7 +19,8 @@ import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { DEFAULT_ALLOWED_ANSWERS } from "./builtin";
 
-export { ensureBuiltinGenericTool, DEFAULT_ALLOWED_ANSWERS } from "./builtin";
+export { ensureBuiltinGenericTool, ensureBuiltinTool, DEFAULT_ALLOWED_ANSWERS } from "./builtin";
+export { ensureBuiltinStandardTools, STANDARD_TOOL_DEFS } from "./standard-tools";
 
 // ---------------------------------------------------------------------------
 // Schemas

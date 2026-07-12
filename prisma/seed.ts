@@ -25,6 +25,7 @@ import * as fulltext from "@/server/services/fulltext";
 import * as extraction from "@/server/services/extraction";
 import * as rob from "@/server/services/rob";
 import { ensureBuiltinGenericTool } from "@/server/services/rob/builtin";
+import { ensureBuiltinStandardTools } from "@/server/services/rob/standard-tools";
 import * as prismaReport from "@/server/services/prisma-report";
 
 const PASSWORD = "demo-password-123";
@@ -851,7 +852,10 @@ async function main() {
 
   // 11. Risk of bias -----------------------------------------------------------------------
   console.log("Cloning RoB tool + assessing…");
+  // Seed the shared built-in catalog: the generic tool (cloned below for the demo) plus the
+  // standard instruments (RoB 2, ROBINS-I, QUADAS-2, NOS, JBI, AMSTAR 2) for the Tools tab.
   const builtin = await ensureBuiltinGenericTool();
+  await ensureBuiltinStandardTools();
   const tool = await rob.cloneTool(ownerCtx, projectId, builtin.id);
   await rob.publishTool(ownerCtx, projectId, tool.id);
 
