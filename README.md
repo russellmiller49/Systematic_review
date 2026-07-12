@@ -26,10 +26,12 @@ PostgreSQL · Auth.js.
   inline serving, and full-text screening where exclusions require a reason.
 - **Extraction** — build versioned extraction templates with typed fields, extract in parallel,
   and adjudicate field-level conflicts. Adjudicated values are authoritative for export.
-- **Risk of bias** — a built-in generic domain tool (clone & customize, or build your own),
-  domain + overall judgments validated against each tool's scale, conflict adjudication, and a
-  traffic-light summary.
-- **PRISMA & exports** — live PRISMA 2020 counts with snapshots, plus CSV/JSON exports
+- **Risk of bias** — built-in tools for the standard instruments (RoB 2, ROBINS-I, QUADAS-2,
+  Newcastle-Ottawa, JBI RCT checklist, AMSTAR 2) plus a generic domain tool — clone & customize,
+  or build your own. Domain + overall judgments validated against each tool's scale, conflict
+  adjudication, and a traffic-light summary.
+- **PRISMA & exports** — live PRISMA 2020 counts rendered as the PRISMA 2020 flow diagram
+  (downloadable as SVG/PNG for manuscripts, also for frozen snapshots), plus CSV/JSON exports
   (citations, screening, extraction, RoB, PRISMA, audit) gated by capability.
 - **Audit trail** — every mutation is recorded with before/after values; sensitive
   (blinding-relevant) events are filtered by capability so a blinded reviewer never sees a

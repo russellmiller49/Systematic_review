@@ -4,7 +4,29 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.claude/skills/continue-build/SKILL.md`.
 
-## Current state (2026-07-06)
+## Current state (2026-07-12) — post-MVP backlog items 1–2
+
+- **PRISMA 2020 flow diagram (backlog #1)**: ✅ `src/components/prisma/diagram-layout.ts` is a
+  pure layout + SVG-string renderer (word wrap, XML-escaped user labels, unit-tested);
+  `PrismaDiagram` shows the exact downloadable artifact as an `<img>` data URI with SVG/PNG
+  (3× canvas) downloads. On the PRISMA page for live counts AND inside the snapshot detail
+  dialog (works from frozen counts). Fixed manuscript palette by design — it is a document
+  artifact, not a themed surface. Diagram omits the "other methods" arm (app only tracks
+  database imports) and adds a quantitative-synthesis line when the count is present.
+- **Built-in RoB tool catalog (backlog #2)**: ✅ `ensureBuiltinTool(def)` mechanism in
+  `src/server/services/rob/builtin.ts` (idempotent by tool name); six standard instruments in
+  `src/server/services/rob/standard-tools.ts`: RoB 2 (5 domains/22 SQs, NA on conditionals),
+  ROBINS-I (7/34), QUADAS-2 (4/11, applicability noted as not modeled), NOS cohort (3/8,
+  star-marked answer options), JBI RCT checklist (13 items grouped by JBI bias domains),
+  AMSTAR 2 (16 items, confidence scale). Each has its own judgment scale; answers are the
+  published formats (Y/PY/PN/N/NI codes, Yes/No/Unclear, star options, Partial yes /
+  No meta-analysis). `ensureBuiltinStandardTools()` called from `prisma/seed.ts`.
+- Verified: tsc, next build, **111 unit + 146 integration**, 5/5 E2E green; browser-checked the
+  diagram (live + snapshot dialog + PNG canvas path) and the RoB Tools tab (7 builtins with
+  correct scales/counts, clone flow intact) on the seeded demo.
+- New: `.claude/launch.json` (browser-pane dev server config).
+
+## Prior state (2026-07-06)
 
 - **M8 UI wave + seed + E2E + docs**: ✅ All 12 project workspace pages built (9 parallel agents,
   disjoint file groups) as client components over the REST API — dashboard, protocol (6 tabs +
@@ -58,8 +80,9 @@ the UI and demonstrated by the seed + E2E. Remaining items are all post-MVP back
 
 ## Remaining work
 
-**None for MVP** — all five items below are ✅ done (see 2026-07-06 state above). Next up is the
-post-MVP backlog in docs/08 (PRISMA diagram render, built-in RoB tool seeds, AI screening, etc.).
+**None for MVP**, and post-MVP backlog items 1–2 (PRISMA diagram, built-in RoB tool catalog)
+are ✅ done (2026-07-12 state above). Next up in docs/08: AI screening suggestions (#3),
+AI extraction (#4), meta-analysis (#5), … — plus the "Known follow-ups" below remain open.
 
 ### (historical, for reference)
 
@@ -125,10 +148,10 @@ post-MVP backlog in docs/08 (PRISMA diagram render, built-in RoB tool seeds, AI 
 
 - `docker compose up -d` — Postgres 16 (dev `srb_dev`, test `srb_test`, port **5442**)
 - `npm run dev` / `npm run build` / `npm run typecheck`
-- `npx prisma migrate dev` / `npm run db:seed` (seed not yet written)
-- `npm run test:unit` (96) / `npm run test:integration` (140) / `npm test` / `npm run e2e`
+- `npx prisma migrate dev` / `npm run db:seed` (demo dataset + built-in RoB tool catalog)
+- `npm run test:unit` (111) / `npm run test:integration` (146) / `npm test` / `npm run e2e` (5)
 - Env in `.env` (already created; see `.env.example`)
 
 ## Git
 
-- main @ 26bf96c (all green). No remote configured.
+- main, all green at every commit. No remote configured.

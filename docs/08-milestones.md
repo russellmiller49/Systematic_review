@@ -22,8 +22,11 @@ history → export. Each maps to at least one integration or E2E test.
 
 ## Post-MVP backlog (ordered)
 
-1. PRISMA 2020 diagram rendering (data already shaped)
-2. Built-in RoB 2 / ROBINS-I / QUADAS-2 / NOS / JBI / AMSTAR-2 tool seeds
+1. ~~PRISMA 2020 diagram rendering~~ ✅ 2026-07-12 — SVG diagram on the PRISMA page (live +
+   snapshots), downloadable as SVG/PNG (`src/components/prisma/diagram-layout.ts`)
+2. ~~Built-in RoB 2 / ROBINS-I / QUADAS-2 / NOS / JBI / AMSTAR-2 tool seeds~~ ✅ 2026-07-12 —
+   `ensureBuiltinStandardTools()` (`src/server/services/rob/standard-tools.ts`), seeded by
+   `npm run db:seed`
 3. AI screening suggestions (separate tables) + active-learning ranking
 4. AI extraction with source anchoring (anchor slot exists)
 5. Meta-analysis module (effect measures, forest/funnel, R export)
