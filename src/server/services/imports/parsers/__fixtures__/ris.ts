@@ -104,3 +104,18 @@ ER  -
 `;
 
 export const RIS_EMPTY = "";
+
+// AD + C1 affiliation capture and registry-id extraction from AD values and the abstract.
+export const RIS_AFFILIATIONS = `TY  - JOUR
+TI  - Endobronchial valve therapy durability at 24 months: the LIBERATE follow-up
+AU  - Criner, Gerard J.
+AU  - Dransfield, Mark T.
+PY  - 2019
+JO  - American Journal of Respiratory and Critical Care Medicine
+AD  - Temple University, Philadelphia, PA, USA. gerard.criner@tuhs.temple.edu
+AD  - Temple University, Philadelphia, PA, USA. gerard.criner@tuhs.temple.edu
+C1  - University of Alabama at Birmingham, Birmingham, AL, USA
+AB  - Durability of the treatment effect through 24 months
+      (ClinicalTrials.gov number, NCT01796392; also ISRCTN04761234).
+ER  -
+`;

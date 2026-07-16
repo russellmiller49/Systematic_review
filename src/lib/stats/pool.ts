@@ -8,10 +8,13 @@
 //   I² = max(0, (Q-df)/Q)·100 (0 when Q = 0), het p = upper-tail chi-square.
 // - Random-effects weights w* = 1/(v + tau²).
 // - k = 1: both models return the single study's y/se; heterogeneity is null.
+// - Prediction interval (Higgins/Thompson/Spiegelhalter 2009; matches metafor's
+//   predict() default): PI = ŷ_RE ± t_{0.975, k−2}·√(τ² + SE(ŷ_RE)²), k >= 3 only.
 // Summation is in input order so results are bit-comparable with the reference.
 
 import { chiSquareUpperTail } from "./chisq";
 import { pnorm, qnorm } from "./normal";
+import { qt } from "./studentt";
 import type { EffectEstimate, Heterogeneity } from "./types";
 
 const Z975 = qnorm(0.975);
@@ -30,6 +33,7 @@ export interface PooledStats {
 export interface DersimonianLairdResult {
   pooled: PooledStats;
   heterogeneity: Heterogeneity | null; // null when k < 2
+  predictionInterval: { low: number; high: number } | null; // analysis scale; null when k < 3
 }
 
 function summarize(y: number, se: number, weights: number[], sumW: number): PooledStats {
@@ -80,6 +84,7 @@ export function dersimonianLaird(estimates: EffectEstimate[]): DersimonianLairdR
     return {
       pooled: summarize(fixed.y, fixed.se, fixed.weights, fixed.sumW),
       heterogeneity: null,
+      predictionInterval: null,
     };
   }
 
@@ -97,8 +102,20 @@ export function dersimonianLaird(estimates: EffectEstimate[]): DersimonianLairdR
   const heterogeneity: Heterogeneity = { q, df, p: chiSquareUpperTail(q, df), i2, tau2 };
 
   const random = inverseVariance(estimates, tau2);
+
+  // Prediction interval for a new study (Higgins/Thompson/Spiegelhalter): needs k >= 3
+  // for the t quantile at df = k − 2. Uses the RANDOM-effects estimate and τ².
+  let predictionInterval: DersimonianLairdResult["predictionInterval"] = null;
+  if (k >= 3) {
+    const half = qt(0.975, k - 2) * Math.sqrt(tau2 + random.se * random.se);
+    if (Number.isFinite(half)) {
+      predictionInterval = { low: random.y - half, high: random.y + half };
+    }
+  }
+
   return {
     pooled: summarize(random.y, random.se, random.weights, random.sumW),
     heterogeneity,
+    predictionInterval,
   };
 }

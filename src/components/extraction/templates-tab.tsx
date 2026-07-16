@@ -14,6 +14,7 @@ import {
   Pencil,
   Plus,
   Rocket,
+  Sigma,
   Table2,
   Trash2,
 } from "lucide-react";
@@ -45,6 +46,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { FieldDialog } from "./field-dialog";
+import { ScaffoldOutcomeDialog } from "./scaffold-outcome-dialog";
 import { TemplateStatusBadge } from "./status-badges";
 import {
   FIELD_TYPE_LABELS,
@@ -90,6 +92,9 @@ export function TemplatesTab({
   const [publishBusy, setPublishBusy] = useState(false);
   const [versionBusy, setVersionBusy] = useState(false);
   const [reorderBusy, setReorderBusy] = useState(false);
+
+  // Outcome-field scaffolding (drafts only)
+  const [scaffoldOpen, setScaffoldOpen] = useState(false);
 
   const selected = templates?.find((t) => t.id === selectedId) ?? null;
 
@@ -350,9 +355,18 @@ export function TemplatesTab({
                         <Pencil /> Edit details
                       </Button>
                       {selected.status === "DRAFT" && (
-                        <Button size="sm" onClick={() => setPublishOpen(true)}>
-                          <Rocket /> Publish
-                        </Button>
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setScaffoldOpen(true)}
+                          >
+                            <Sigma /> Generate outcome fields
+                          </Button>
+                          <Button size="sm" onClick={() => setPublishOpen(true)}>
+                            <Rocket /> Publish
+                          </Button>
+                        </>
                       )}
                       {selected.status === "PUBLISHED" && (
                         <Button variant="outline" size="sm" onClick={newVersion} disabled={versionBusy}>
@@ -504,6 +518,17 @@ export function TemplatesTab({
           open={fieldDialogOpen}
           onOpenChange={setFieldDialogOpen}
           onSaved={onChanged}
+        />
+      )}
+
+      {/* Outcome-field scaffolding (fields + analysis outcome + mappings in one step) */}
+      {selected && (
+        <ScaffoldOutcomeDialog
+          projectId={projectId}
+          template={selected}
+          open={scaffoldOpen}
+          onOpenChange={setScaffoldOpen}
+          onScaffolded={onChanged}
         />
       )}
 

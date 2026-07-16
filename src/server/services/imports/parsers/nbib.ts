@@ -6,6 +6,7 @@ import {
   normalizePmid,
   parseAuthorName,
 } from "@/server/services/citations/normalize";
+import { extractRegistryIds } from "./registry-ids";
 import {
   emptyFileResult,
   extractYear,
@@ -86,6 +87,12 @@ export function parseNbib(content: string): ParseResult {
             .filter((a) => a.length > 0)
             .map(parseMedlineShortAuthor);
 
+    // AD = affiliations (record-level unique bag), SI = secondary source ids
+    // (e.g. "ClinicalTrials.gov/NCT01234567") — both feed cohort-overlap detection.
+    const affiliations = uniqueValues(tags, "AD");
+    const secondaryIds = uniqueValues(tags, "SI");
+    const abstract = joined(tags, "AB");
+
     records.push({
       title,
       authors,
@@ -94,10 +101,12 @@ export function parseNbib(content: string): ParseResult {
       volume: first(tags, "VI"),
       issue: first(tags, "IP"),
       pages: first(tags, "PG"),
-      abstract: joined(tags, "AB"),
+      abstract,
       doi: extractDoi(tags) ?? undefined,
       pmid: normalizePmid(first(tags, "PMID") ?? null) ?? undefined,
       language: first(tags, "LA"),
+      affiliations,
+      registryIds: extractRegistryIds(...secondaryIds, ...affiliations, title, abstract),
       rawChunk: chunk,
       rowNumber,
     });
@@ -122,6 +131,12 @@ function first(tags: Map<string, string[]>, tag: string): string | undefined {
 function joined(tags: Map<string, string[]>, tag: string): string | undefined {
   const values = (tags.get(tag) ?? []).map((v) => v.trim()).filter((v) => v.length > 0);
   return values.length > 0 ? values.join(" ") : undefined;
+}
+
+// All non-empty values of a repeatable tag, trimmed and deduplicated in source order.
+function uniqueValues(tags: Map<string, string[]>, tag: string): string[] {
+  const values = (tags.get(tag) ?? []).map((v) => v.trim()).filter((v) => v.length > 0);
+  return [...new Set(values)];
 }
 
 // DOI lives in LID or AID values carrying a "[doi]" marker: "10.1056/NEJMoa123 [doi]".

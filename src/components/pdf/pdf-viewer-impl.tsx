@@ -14,14 +14,15 @@
 // error boundary can fall back to the plain <iframe> viewer.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
+import { Anchor, ChevronLeft, ChevronRight, TextCursor, ZoomIn, ZoomOut } from "lucide-react";
 import { getDocument, GlobalWorkerOptions, TextLayer } from "pdfjs-dist";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from "pdfjs-dist";
+import { toast } from "sonner";
 import { matchQuote, normalizeWithMap, type NormalizedText } from "@/lib/quote-match";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton, Spinner } from "@/components/ui/misc";
-import type { EvidenceTarget } from "./pdf-evidence-viewer";
+import type { EvidenceSelection, EvidenceTarget } from "./pdf-evidence-viewer";
 
 // Webpack (next dev/build) resolves this to an emitted asset URL.
 GlobalWorkerOptions.workerSrc = new URL(
@@ -122,6 +123,20 @@ async function loadPageText(doc: PDFDocumentProxy, pageNumber: number): Promise<
   return { textContent, itemStarts, itemLens, rawLength: len, norm: normalizeWithMap(parts.join("")) };
 }
 
+// First normalized index whose source raw index is >= rawIdx (norm.map is
+// nondecreasing by construction). Used to turn raw selection offsets into
+// normalized-text offsets for anchors.
+function lowerBoundMap(map: number[], rawIdx: number): number {
+  let lo = 0;
+  let hi = map.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((map[mid] as number) < rawIdx) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 // Raw index -> (text item, offset in item.str). Indices landing on the "\n"
 // fillers (or empty items) resolve to null; callers scan in `dir` for the
 // nearest real character (match endpoints are non-whitespace, so this is only
@@ -154,6 +169,48 @@ function locateChar(
   for (let idx = rawIdx; idx >= 0 && idx < d.rawLength; idx += dir) {
     const hit = locateExact(d, idx);
     if (hit) return hit;
+  }
+  return null;
+}
+
+// Inverse of the highlight path: DOM Range endpoint -> raw page-text offset, via the
+// textDivs <-> text-item alignment (textDivs[i] renders the i-th str item; offsets in
+// its Text node are offsets into item.str). Returns null when the endpoint can't be
+// resolved to a text-layer span (selection started on the canvas, etc.).
+function rangePointToRaw(
+  data: PageTextData,
+  layer: TextLayer,
+  container: Node,
+  offset: number,
+): number | null {
+  let node: Node | null = container;
+  let charOffset = offset;
+  if (node.nodeType !== Node.TEXT_NODE) {
+    // Element container: the point sits before its offset-th child; past-the-end means
+    // the end of the last child (clamped below via itemLens).
+    const children = node.childNodes;
+    if (children.length === 0) return null;
+    if (offset < children.length) {
+      node = children[offset] ?? null;
+      charOffset = 0;
+    } else {
+      node = children[children.length - 1] ?? null;
+      charOffset = Number.MAX_SAFE_INTEGER;
+    }
+    if (node === null) return null;
+  }
+  const divs = layer.textDivs;
+  let el: HTMLElement | null =
+    node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
+  while (el) {
+    const idx = divs.indexOf(el); // pages hold a few hundred divs — fine per mouseup
+    if (idx >= 0) {
+      const start = data.itemStarts[idx];
+      const len = data.itemLens[idx];
+      if (start === undefined || len === undefined) return null;
+      return start + Math.min(charOffset, len);
+    }
+    el = el.parentElement;
   }
   return null;
 }
@@ -191,7 +248,15 @@ function MatchChip({ state }: { state: MatchState | null }) {
 
 // --- Viewer --------------------------------------------------------------------
 
-export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
+export function PdfViewerImpl({
+  target,
+  selectable = false,
+  onSelectEvidence,
+}: {
+  target: EvidenceTarget;
+  selectable?: boolean;
+  onSelectEvidence?: (selection: EvidenceSelection) => void;
+}) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [pageNum, setPageNum] = useState(1);
@@ -199,6 +264,11 @@ export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
   const [match, setMatch] = useState<MatchState | null>(null);
   const [fatal, setFatal] = useState<Error | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // A stored anchor's page beats the plain pageNumber as the navigation/matching hint
+  // (the anchor was located against the server's stored text for this exact file).
+  const hintPage = target.anchor?.page ?? target.page ?? null;
+  const anchored = target.anchor != null && target.anchor.matchQuality !== "page-only";
 
   // Surface async failures to the wrapping error boundary (-> iframe fallback).
   if (fatal) throw fatal;
@@ -227,7 +297,7 @@ export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
       if (cancelled) return;
       setDoc(pdf);
       setNumPages(pdf.numPages);
-      const hint = target.page ?? null;
+      const hint = hintPage;
       setPageNum(hint !== null && hint >= 1 && hint <= pdf.numPages ? hint : 1);
     })().catch((err: unknown) => {
       if (cancelled || (err instanceof DOMException && err.name === "AbortError")) return;
@@ -238,8 +308,9 @@ export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
       ac.abort();
       task?.destroy().catch(() => undefined);
     };
-    // Deps intentionally exclude target.page/quote: they only seed the initial
+    // Deps intentionally exclude the page hint/quote: they only seed the initial
     // page — a changed quote must not re-download the document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target.fileId]);
 
   // Per-document page-text cache shared by the matcher and the page renderer.
@@ -268,7 +339,7 @@ export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
     let cancelled = false;
     setMatch({ status: "searching" });
     const total = doc.numPages;
-    const rawHint = target.page ?? null;
+    const rawHint = hintPage;
     const hint = rawHint !== null && rawHint >= 1 && rawHint <= total ? rawHint : null;
     const order: number[] = [];
     if (hint !== null) {
@@ -300,7 +371,7 @@ export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
     return () => {
       cancelled = true;
     };
-  }, [doc, getPageText, target.quote, target.page]);
+  }, [doc, getPageText, target.quote, hintPage]);
 
   // Fresh page -> start at its top (the highlight scroll then refines within it).
   useEffect(() => {
@@ -360,6 +431,20 @@ export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
           <ZoomIn />
         </Button>
         <span className="grow" />
+        {selectable && onSelectEvidence && (
+          <Badge variant="secondary" className="gap-1">
+            <TextCursor className="h-3 w-3" /> Select text to attach evidence
+          </Badge>
+        )}
+        {anchored && (
+          <Badge
+            variant="secondary"
+            className="gap-1"
+            title="This evidence carries a stored anchor into the PDF's text"
+          >
+            <Anchor className="h-3 w-3" /> Anchored
+          </Badge>
+        )}
         <MatchChip state={match} />
       </div>
       <div ref={scrollRef} className="relative flex-1 overflow-auto">
@@ -367,12 +452,14 @@ export function PdfViewerImpl({ target }: { target: EvidenceTarget }) {
           <div className="flex min-h-full justify-center p-3">
             <PageView
               doc={doc}
+              fileId={target.fileId}
               pageNumber={pageNum}
               scale={scale}
               highlight={highlight}
               getPageText={getPageText}
               scrollRef={scrollRef}
               onFatal={onFatal}
+              onSelectEvidence={selectable ? onSelectEvidence : undefined}
             />
           </div>
         ) : (
@@ -394,24 +481,31 @@ interface HighlightRect {
 
 function PageView({
   doc,
+  fileId,
   pageNumber,
   scale,
   highlight,
   getPageText,
   scrollRef,
   onFatal,
+  onSelectEvidence,
 }: {
   doc: PDFDocumentProxy;
+  fileId: string;
   pageNumber: number;
   scale: number;
   highlight: { rawStart: number; rawEnd: number } | null;
   getPageText: (p: number) => Promise<PageTextData>;
   scrollRef: RefObject<HTMLDivElement | null>;
   onFatal: (err: Error) => void;
+  onSelectEvidence?: (selection: EvidenceSelection) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
+  // Live handles for the selection resolver (set once the page's text layer rendered).
+  const pageDataRef = useRef<PageTextData | null>(null);
+  const textLayerObjRef = useRef<TextLayer | null>(null);
   const [rects, setRects] = useState<HighlightRect[] | null>(null);
   const [rendering, setRendering] = useState(true);
 
@@ -421,6 +515,8 @@ function PageView({
     let textLayer: TextLayer | null = null;
     setRects(null);
     setRendering(true);
+    pageDataRef.current = null;
+    textLayerObjRef.current = null;
     (async () => {
       const data = await getPageText(pageNumber);
       const page = await doc.getPage(pageNumber);
@@ -449,6 +545,8 @@ function PageView({
       });
       await Promise.all([renderTask.promise, textLayer.render()]);
       if (cancelled) return;
+      pageDataRef.current = data;
+      textLayerObjRef.current = textLayer;
       setRendering(false);
       if (highlight && wrapperRef.current) {
         // Measure synchronously: getClientRects() forces layout, so the spans'
@@ -470,6 +568,55 @@ function PageView({
       textLayer?.cancel();
     };
   }, [doc, pageNumber, scale, highlight, getPageText, scrollRef, onFatal]);
+
+  // Selection mode: resolve the finished text-layer selection to normalized-text
+  // offsets (the anchor v2 contract) + the selected quote. Offsets index the SAME
+  // normalized page text the matcher uses; the server re-verifies against its stored
+  // copy on save, so a rendering mismatch can only downgrade quality, never corrupt.
+  function handleMouseUp() {
+    if (!onSelectEvidence) return;
+    const data = pageDataRef.current;
+    const layer = textLayerObjRef.current;
+    const layerEl = textLayerRef.current;
+    if (!data || !layer || !layerEl) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    if (!layerEl.contains(range.startContainer) || !layerEl.contains(range.endContainer)) return;
+    const rawStart = rangePointToRaw(data, layer, range.startContainer, range.startOffset);
+    const rawEnd = rangePointToRaw(data, layer, range.endContainer, range.endOffset);
+    if (rawStart === null || rawEnd === null || rawEnd <= rawStart) return;
+    // Raw -> normalized offsets, trimming whitespace the drag swept in at the edges.
+    let charStart = lowerBoundMap(data.norm.map, rawStart);
+    let charEnd = lowerBoundMap(data.norm.map, rawEnd);
+    const text = data.norm.text;
+    while (charStart < charEnd && text[charStart] === " ") charStart++;
+    while (charEnd > charStart && text[charEnd - 1] === " ") charEnd--;
+    if (charEnd <= charStart) return;
+    const quote = text.slice(charStart, charEnd);
+    if (quote.length > 8000) {
+      // sourceQuote schema cap — tell the user instead of silently dropping the drag.
+      toast.error("Selection is too long to attach as evidence (8,000 character limit)");
+      return;
+    }
+    onSelectEvidence({
+      quote,
+      page: pageNumber,
+      anchor: { v: 2, fileId, page: pageNumber, charStart, charEnd, matchQuality: "selection" },
+    });
+  }
+
+  // The drag often ENDS outside the page wrapper (dialog chrome, past the page edge) —
+  // a wrapper-scoped mouseup would silently drop those selections, so listen on the
+  // document; handleMouseUp validates the selection lives inside the text layer.
+  const handleMouseUpRef = useRef(handleMouseUp);
+  handleMouseUpRef.current = handleMouseUp;
+  useEffect(() => {
+    if (!onSelectEvidence) return;
+    const onUp = () => handleMouseUpRef.current();
+    document.addEventListener("mouseup", onUp);
+    return () => document.removeEventListener("mouseup", onUp);
+  }, [onSelectEvidence]);
 
   return (
     <div ref={wrapperRef} className="pdfev-page h-fit w-fit bg-white shadow-sm">

@@ -188,6 +188,7 @@ enum ExportKind {
   PRISMA
   AUDIT
   FULL
+  ANALYSIS // per-outcome study effects + pooled results (phase B)
 }
 
 enum ExportFormat {
@@ -300,6 +301,7 @@ model User {
   aiRobRuns               AiRobRun[]                 @relation("AiRobRunRequester")
   analysisOutcomes        AnalysisOutcome[]          @relation("AnalysisOutcomeCreator")
   analysisExclusions      AnalysisStudyExclusion[]   @relation("AnalysisExclusionCreator")
+  cohortDecisions         CohortCandidate[]          @relation("CohortDecider")
 }
 
 model Organization {
@@ -368,6 +370,7 @@ model Project {
   aiExtractionRuns    AiExtractionRun[]
   aiRobRuns           AiRobRun[]
   analysisOutcomes    AnalysisOutcome[]
+  cohortCandidates    CohortCandidate[]
 
   @@index([orgId])
 }
@@ -604,6 +607,7 @@ model Citation {
   pmid            String?
   url             String?
   language        String?
+  affiliations    Json? // string[] — record-level bag from AD/SI/C1 import tags (cohort detection)
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -611,19 +615,21 @@ model Citation {
   duplicateOf Citation?  @relation("DuplicateOf", fields: [duplicateOfId], references: [id])
   duplicates  Citation[] @relation("DuplicateOf")
 
-  sourceRecords      CitationSourceRecord[]
-  identifiers        CitationIdentifier[]
-  studyLinks         StudyReportLink[]
-  assignments        ScreeningAssignment[]
-  decisions          ScreeningDecision[]
-  conflicts          ScreeningConflict[]
-  stageResults       CitationStageResult[]
-  fullTextLinks      CitationFullTextLink[]
-  retrievalAttempts  FullTextRetrievalAttempt[]
-  extractionForms    ExtractionForm[]
-  aiSuggestions      ScreeningSuggestion[]
-  dedupCandidatesAsA DeduplicationCandidate[]   @relation("DedupCitationA")
-  dedupCandidatesAsB DeduplicationCandidate[]   @relation("DedupCitationB")
+  sourceRecords       CitationSourceRecord[]
+  identifiers         CitationIdentifier[]
+  studyLinks          StudyReportLink[]
+  assignments         ScreeningAssignment[]
+  decisions           ScreeningDecision[]
+  conflicts           ScreeningConflict[]
+  stageResults        CitationStageResult[]
+  fullTextLinks       CitationFullTextLink[]
+  retrievalAttempts   FullTextRetrievalAttempt[]
+  extractionForms     ExtractionForm[]
+  aiSuggestions       ScreeningSuggestion[]
+  dedupCandidatesAsA  DeduplicationCandidate[]   @relation("DedupCitationA")
+  dedupCandidatesAsB  DeduplicationCandidate[]   @relation("DedupCitationB")
+  cohortCandidatesAsA CohortCandidate[]          @relation("CohortCitationA")
+  cohortCandidatesAsB CohortCandidate[]          @relation("CohortCitationB")
 
   @@index([projectId, status])
   @@index([projectId, normalizedTitle])
@@ -702,6 +708,47 @@ model DeduplicationCandidate {
   @@unique([citationAId, citationBId])
   @@index([citationBId])
   @@index([projectId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Cohort-overlap detection (companion reports of the same underlying cohort)
+// ---------------------------------------------------------------------------
+
+enum CohortMethod {
+  REGISTRY_ID // tier 1: shared trial-registry identifier
+  COMPOSITE // tier 2: author/affiliation/title/year composite score
+}
+
+enum CohortCandidateStatus {
+  SUGGESTED
+  LINKED
+  REJECTED
+}
+
+// Pairs CITATIONS (not studies) — study membership is recomputed live at decision
+// time. citationAId < citationBId is service-enforced for pair identity.
+model CohortCandidate {
+  id          String                @id @default(cuid())
+  projectId   String
+  citationAId String
+  citationBId String
+  method      CohortMethod
+  score       Float
+  signals     Json // { registryIds?, authorOverlap?, affiliationSimilarity?, titleTokens?, yearDelta?, acronyms? }
+  status      CohortCandidateStatus @default(SUGGESTED)
+  decidedById String?
+  decidedAt   DateTime?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  project   Project  @relation(fields: [projectId], references: [id])
+  citationA Citation @relation("CohortCitationA", fields: [citationAId], references: [id])
+  citationB Citation @relation("CohortCitationB", fields: [citationBId], references: [id])
+  decidedBy User?    @relation("CohortDecider", fields: [decidedById], references: [id])
+
+  @@unique([projectId, citationAId, citationBId])
+  @@index([projectId, status])
+  @@index([citationBId])
 }
 
 // ---------------------------------------------------------------------------
@@ -880,6 +927,14 @@ model ScreeningAdjudication {
 // Full text
 // ---------------------------------------------------------------------------
 
+// Server-side text-layer extraction state for a stored PDF (anchor v2 substrate).
+enum TextLayerStatus {
+  PENDING // never extracted
+  EXTRACTED // FullTextPage rows exist for every page
+  NO_TEXT_LAYER // scanned/image-only PDF (< 50 chars/page) — page-level anchors only
+  FAILED // extraction errored; retryable
+}
+
 model FullTextFile {
   id           String   @id @default(cuid())
   projectId    String
@@ -891,14 +946,34 @@ model FullTextFile {
   uploadedById String
   createdAt    DateTime @default(now())
 
+  // Anchor v2 text layer: pages are extracted server-side (once per textVersion) so
+  // char offsets in stored anchors refer to OUR text, never a pdf.js version's output.
+  textStatus  TextLayerStatus @default(PENDING)
+  pageCount   Int?
+  textVersion Int             @default(0) // bumped on every (re-)extraction
+
   project          Project                @relation(fields: [projectId], references: [id])
   uploadedBy       User                   @relation("FileUploader", fields: [uploadedById], references: [id])
   links            CitationFullTextLink[]
   aiExtractionRuns AiExtractionRun[]
   aiRobRuns        AiRobRun[]
+  pages            FullTextPage[]
 
   @@index([projectId])
   @@index([sha256])
+}
+
+// One extracted text page of a FullTextFile (normalized upstream of storage is NOT
+// applied — this is the raw pdf.js text so quote matching can normalize consistently).
+model FullTextPage {
+  id     String @id @default(cuid())
+  fileId String
+  page   Int // 1-based
+  text   String
+
+  file FullTextFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, page])
 }
 
 model CitationFullTextLink {

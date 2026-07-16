@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CompanionReportsTab } from "@/components/cohort/companion-reports-tab";
 import { ConflictsTab } from "./conflicts-tab";
 import { ExtractTab } from "./extract-tab";
 import { MatrixTab } from "./matrix-tab";
@@ -65,6 +66,7 @@ export function ExtractionClient({ projectId }: { projectId: string }) {
           <TabsTrigger value="templates">Templates</TabsTrigger>
           <TabsTrigger value="extract">Extract</TabsTrigger>
           <TabsTrigger value="table">Table</TabsTrigger>
+          <TabsTrigger value="companions">Companions</TabsTrigger>
           <TabsTrigger value="conflicts">Conflicts</TabsTrigger>
         </TabsList>
         <TabsContent value="templates" forceMount className="data-[state=inactive]:hidden">
@@ -80,6 +82,9 @@ export function ExtractionClient({ projectId }: { projectId: string }) {
         </TabsContent>
         <TabsContent value="table" forceMount className="data-[state=inactive]:hidden">
           <MatrixTab projectId={projectId} templates={templates} />
+        </TabsContent>
+        <TabsContent value="companions" forceMount className="data-[state=inactive]:hidden">
+          <CompanionReportsTab projectId={projectId} canManage={hasCap(roles, "project.edit")} />
         </TabsContent>
         <TabsContent value="conflicts" forceMount className="data-[state=inactive]:hidden">
           <ConflictsTab projectId={projectId} roles={roles} />

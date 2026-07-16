@@ -289,6 +289,63 @@ describe("imports + citations", () => {
     });
   });
 
+  describe("cohort capture (affiliations + REGISTRY_ID identifiers)", () => {
+    // NBIB with AD affiliations, an SI registry id, and an EudraCT id in the abstract.
+    const NBIB_WITH_COHORT = `PMID- 40000001
+DP  - 2018 Nov 1
+TI  - Endobronchial valve trial with registry ids.
+AB  - A randomized trial (EudraCT 2016-001234-56).
+AD  - Temple University, Philadelphia, PA, USA.
+AD  - St. Joseph's Hospital, Phoenix, AZ, USA.
+SI  - ClinicalTrials.gov/NCT01796392
+FAU - Criner, Gerard J
+AU  - Criner GJ
+JT  - Am J Respir Crit Care Med
+`;
+
+    it("commit persists affiliations to the citation and REGISTRY_ID identifier rows", async () => {
+      const { owner, project, source } = await setupProject();
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "cohort.nbib",
+        sourceId: source.id,
+        content: NBIB_WITH_COHORT,
+      });
+      expect(batch.format).toBe("NBIB");
+      await imports.commitBatch(ctx(owner.id), project.id, batch.id);
+
+      const cite = await prisma.citation.findFirstOrThrow({
+        where: { projectId: project.id, pmid: "40000001" },
+        include: { identifiers: true },
+      });
+      expect(cite.affiliations).toEqual([
+        "Temple University, Philadelphia, PA, USA.",
+        "St. Joseph's Hospital, Phoenix, AZ, USA.",
+      ]);
+      const registryIds = cite.identifiers
+        .filter((i) => i.type === "REGISTRY_ID")
+        .map((i) => i.value)
+        .sort();
+      // NCT from SI + EudraCT from the abstract, canonical + sorted.
+      expect(registryIds).toEqual(["EUDRACT2016-001234-56", "NCT01796392"]);
+    });
+
+    it("CSV records (no cohort tags) leave affiliations null and create no REGISTRY_ID rows", async () => {
+      const { owner, project, source } = await setupProject();
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "handsearch.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+      await imports.commitBatch(ctx(owner.id), project.id, batch.id);
+      const cite = await prisma.citation.findFirstOrThrow({
+        where: { projectId: project.id, pmid: "34059074" },
+        include: { identifiers: true },
+      });
+      expect(cite.affiliations).toBeNull();
+      expect(cite.identifiers.some((i) => i.type === "REGISTRY_ID")).toBe(false);
+    });
+  });
+
   describe("import flow (CSV)", () => {
     it("imports CSV with PMID identifiers", async () => {
       const { owner, project, source } = await setupProject();

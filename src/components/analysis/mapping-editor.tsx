@@ -86,7 +86,7 @@ export function MappingEditor({
     [templates],
   );
 
-  const groups = resolveGroupLabels(outcome.groupLabels);
+  const groups = resolveGroupLabels(outcome.groupLabels, outcome.measure);
 
   function setTemplate(role: string, templateId: string) {
     setDraft((prev) => {
@@ -149,7 +149,9 @@ export function MappingEditor({
           <div>
             <CardTitle className="text-base">Field mappings</CardTitle>
             <CardDescription className="mt-1">
-              Each statistical role needs a NUMBER field from an extraction template.
+              {outcome.measure === "GENERIC_IV"
+                ? "Map the effect estimate plus EITHER a standard error OR both 95% CI bounds (the SE is derived from the CI when unmapped). Estimates must be on the pooling scale — log-transform ratio measures first."
+                : "Each statistical role needs a NUMBER field from an extraction template."}
             </CardDescription>
           </div>
           <Badge variant={outcome.mappingComplete ? "include" : "maybe"}>

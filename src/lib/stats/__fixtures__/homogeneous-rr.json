@@ -1,6 +1,7 @@
 {
   "name": "homogeneous-rr",
   "measure": "RR",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "h01",
@@ -95,6 +96,12 @@
       "p": 0.9561435983038808,
       "i2": 0.0,
       "tau2": 0.0
+    },
+    "predictionInterval": null,
+    "egger": null,
+    "displayMeta": {
+      "transform": "exp",
+      "harmonicN": null
     }
   }
 }

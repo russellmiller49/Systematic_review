@@ -72,3 +72,24 @@ just some free text
 `;
 
 export const NBIB_EMPTY = "";
+
+// AD (affiliations, repeated + continuation) and SI (secondary source id) capture, plus a
+// registry id buried in the abstract. AD values repeat across authors on purpose — the
+// parser keeps a record-level unique bag.
+export const NBIB_AFFILIATIONS = `PMID- 29787288
+DP  - 2018 Nov 1
+TI  - A Multicenter Randomized Controlled Trial of Zephyr Endobronchial Valve Treatment.
+AB  - Randomized trial of valve treatment versus standard care
+      (EudraCT 2016-001234-56).
+FAU - Criner, Gerard J
+AU  - Criner GJ
+AD  - Department of Thoracic Medicine and Surgery, Temple University,
+      Philadelphia, PA, USA.
+FAU - Sue, Richard
+AU  - Sue R
+AD  - Department of Thoracic Medicine and Surgery, Temple University,
+      Philadelphia, PA, USA.
+AD  - St. Joseph's Hospital and Medical Center, Phoenix, AZ, USA.
+SI  - ClinicalTrials.gov/NCT01796392
+JT  - American journal of respiratory and critical care medicine
+`;

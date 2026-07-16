@@ -61,12 +61,19 @@ export const AuditActions = {
   FULLTEXT_FILE_UPLOADED: "fulltext.file.uploaded",
   FULLTEXT_FILE_LINKED: "fulltext.file.linked",
   FULLTEXT_RETRIEVAL_RECORDED: "fulltext.retrieval.recorded",
+  FULLTEXT_TEXT_EXTRACTED: "fulltext.text.extracted",
 
   // studies
   STUDY_CREATED: "study.created",
   STUDY_UPDATED: "study.updated",
   STUDY_REPORT_LINKED: "study.report_linked",
   STUDY_REPORT_UNLINKED: "study.report_unlinked",
+  STUDY_MERGED: "study.merged",
+
+  // cohort-overlap detection
+  COHORT_RUN: "cohort.run",
+  COHORT_LINKED: "cohort.linked",
+  COHORT_REJECTED: "cohort.rejected",
 
   // extraction
   EXTRACTION_TEMPLATE_CREATED: "extraction.template.created",
@@ -80,6 +87,8 @@ export const AuditActions = {
   EXTRACTION_FORM_COMPLETED: "extraction.form.completed",
   EXTRACTION_VALUE_CREATED: "extraction.value.created",
   EXTRACTION_VALUE_UPDATED: "extraction.value.updated",
+  EXTRACTION_VALUE_REANCHORED: "extraction.value.reanchored",
+  EXTRACTION_REANCHOR_RUN: "extraction.reanchor.run",
   EXTRACTION_CONFLICT_OPENED: "extraction.conflict.opened",
   EXTRACTION_CONFLICT_ADJUDICATED: "extraction.conflict.adjudicated",
 

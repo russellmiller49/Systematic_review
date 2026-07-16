@@ -29,6 +29,9 @@ import {
   EXTRACTION_PROMPT_VERSION,
 } from "@/server/ai/prompts/extraction";
 import { fieldOptions, validateFieldValue } from "@/server/services/extraction/validation";
+import { ensureFullTextPages } from "@/server/services/fulltext-pages";
+import { matchQuote, normalizeForMatch, type PageText } from "@/lib/quote-match";
+import type { SourceAnchorV2 } from "@/types/source-anchor";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -48,6 +51,52 @@ export const listSuggestionsQuerySchema = z.object({
 
 function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 2000);
+}
+
+// Server-side text layer handle used to mint v2 anchors: pages already normalized
+// (normalizeForMatch) so matchQuote offsets index OUR stored text.
+interface SuggestionTextLayer {
+  pages: PageText[];
+  textVersion: number;
+}
+
+// Anchor for one suggestion row. v2 anchors (offsets/scores) are minted ONLY against an
+// EXTRACTED server text layer; without one we keep the legacy { fileId, page } shape so
+// nothing downstream (apply path copies anchors verbatim) changes behavior.
+function buildSuggestionAnchor(
+  fileId: string,
+  quote: string | null | undefined,
+  pageNumber: number | null | undefined,
+  layer: SuggestionTextLayer | null,
+): SourceAnchorV2 | { fileId: string; page: number | null } {
+  if (layer) {
+    if (quote) {
+      const m = matchQuote(layer.pages, quote, pageNumber ?? null);
+      if (m.quality === "exact" || m.quality === "fuzzy") {
+        return {
+          v: 2,
+          fileId,
+          page: m.page,
+          charStart: m.charStart,
+          charEnd: m.charEnd,
+          matchQuality: m.quality,
+          matchScore: m.score,
+          textVersion: layer.textVersion,
+        };
+      }
+      // page-only / none fall through to the page-level anchor below.
+    }
+    if (typeof pageNumber === "number" && pageNumber >= 1) {
+      return {
+        v: 2,
+        fileId,
+        page: pageNumber,
+        matchQuality: "page-only",
+        textVersion: layer.textVersion,
+      };
+    }
+  }
+  return { fileId, page: pageNumber ?? null };
 }
 
 // Study → PDF: primary report first, then other reports; per citation the oldest linked
@@ -202,6 +251,22 @@ export async function runExtractionSuggestion(
     throw invalidState(`AI extraction failed: ${message}`);
   }
 
+  // Anchor v2: make sure OUR text layer exists for the run's file, then locate each
+  // quoted suggestion in it. Extraction failures and image-only PDFs degrade to the
+  // legacy page-level anchor — anchoring must never fail an otherwise good run.
+  let textLayer: SuggestionTextLayer | null = null;
+  try {
+    const ensured = await ensureFullTextPages(ctx, projectId, file.id);
+    if (ensured.file.textStatus === "EXTRACTED") {
+      textLayer = {
+        pages: ensured.pages.map((p) => ({ page: p.page, text: normalizeForMatch(p.text) })),
+        textVersion: ensured.file.textVersion,
+      };
+    }
+  } catch {
+    textLayer = null;
+  }
+
   const byKey = new Map(parsed.map((item) => [item.key, item]));
   const updated = await prisma.$transaction(async (tx) => {
     const rows = template.fields.map((field) => {
@@ -213,7 +278,12 @@ export async function runExtractionSuggestion(
         fieldId: field.id,
         sourceQuote: item?.sourceQuote ?? null,
         pageNumber: item?.pageNumber ?? null,
-        sourceAnchor: { fileId: file.id, page: item?.pageNumber ?? null },
+        sourceAnchor: buildSuggestionAnchor(
+          file.id,
+          item?.sourceQuote,
+          item?.pageNumber,
+          textLayer,
+        ) as Prisma.InputJsonValue,
         confidence: item?.confidence ?? null,
         provider: run.provider,
         model: run.model,

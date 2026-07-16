@@ -1,6 +1,7 @@
 {
   "name": "binary-rr",
   "measure": "RR",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "b01",
@@ -320,6 +321,25 @@
       "p": 0.04813245124431534,
       "i2": 48.78789545808752,
       "tau2": 0.08542680067211086
+    },
+    "predictionInterval": {
+      "low": -1.1167988101752035,
+      "high": 0.4400998354237358,
+      "display": {
+        "low": 0.3273259517620331,
+        "high": 1.5528622414326945
+      }
+    },
+    "egger": {
+      "intercept": -0.8362048555392292,
+      "interceptSe": 1.0061699816444232,
+      "t": -0.8310771249332908,
+      "p": 0.4333593915656887,
+      "k": 9
+    },
+    "displayMeta": {
+      "transform": "exp",
+      "harmonicN": null
     }
   }
 }

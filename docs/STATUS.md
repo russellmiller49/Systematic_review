@@ -28,6 +28,55 @@
   role descriptions, hidden assignment controls for a Reviewer, and hidden PDF/retrieval admin
   actions for a plain Reviewer.
 
+## Current state (2026-07-16) — roadmap Wave 3 (deep anchoring + proportions + cohort detection) — DONE
+
+Wave 3 of the roadmap is built, reviewed, and committed. Three parallel-agent packages over
+a shared schema migration (`wave3_text_layer_cohorts`: `FullTextPage` + text-layer state on
+`FullTextFile`, `CohortCandidate` + enums, `Citation.affiliations`, `ExportKind.ANALYSIS`).
+
+- **3A Evidence anchoring phase 3** ✅ — server text layer (`src/server/services/
+  fulltext-pages/`, pdf.js legacy build via a webpackIgnore'd dynamic import — NOT
+  `serverExternalPackages`, which breaks the client viewer's worker-URL asset in the SSR
+  compilation; see next.config.ts), anchor v2 (`src/types/source-anchor.ts`, char offsets
+  into OUR stored text, v1 parsed as page-only), producers: AI ingest match-on-ingest,
+  manual saves with server re-verification (user selections keep their exact offsets when
+  they verify — repeated quotes are never snapped to the first occurrence), FormWorkspace
+  "Select in PDF" (document-level mouseup, 8k-limit feedback), and the audited re-anchor
+  backfill (`extraction/reanchor.ts`, coverage report, preserves current-version selection
+  anchors, bounds-checked page-only fallbacks). Browser-verified against the real dev
+  server: re-anchor over the seeded demo = 20/20 exact.
+- **3B Meta-analysis phase B** ✅ — single-arm PROPORTION (logit w/ 0.5|1 continuity;
+  Freeman–Tukey w/ Miller inverse incl. achievable-range clamp, per-study n for study
+  display, harmonic-mean n for the pooled display), GENERIC_IV (SE or CI→SE; pools
+  as-entered), prediction intervals (t, k−2, k≥3), Egger's test (SND-on-precision OLS,
+  k≥3, null when precisions are identical — the UI distinguishes that from k<3), funnel
+  plot (layout mirrors forest-plot pattern), `studentt.ts` qt via inverse incomplete beta —
+  ALL pinned against the extended independent scipy reference (13 fixtures + qt/Egger pin
+  files, TS↔Python agreed first run). "Generate outcome fields" scaffold
+  (`analysis/scaffold.ts`, analysis.manage + extraction.templates, DRAFT template, one tx;
+  draft-field delete/rename/retype now refuse while mapped). ANALYSIS export (export.create
+  AND analysis.view at create + download; content computed as the requester so the R1 blind
+  applies; CSV formula-injection neutralized in serializers).
+- **3C Cohort detection** ✅ — parsers capture NBIB AD/SI + RIS AD/C1 affiliations and
+  registry ids (`registry-ids.ts`: NCT/ISRCTN/ACTRN/ChiCTR/DRKS/EudraCT+EUCTR, optional
+  space/hyphen separators, 8-digit NCT strictly); commitBatch persists both; engine
+  (`cohort/engine.ts`): tier-1 shared registry id 0.98, tier-2 composite (.40 author/.20
+  affiliation/.25 title/.15 year, renormalized on missing signals, authorOverlap ≥ 0.2
+  gate, ≥ 0.55 emit; acronyms pass a document-frequency rarity filter + roman-numeral/RCT
+  stoplist); service: idempotent runs (decided pairs never resurrected; stale-SUGGESTED
+  deletion status-guarded against concurrent decisions and skipped entirely when the
+  2000-citation population cap was hit; 60s tx timeout), lazy raw-record backfill, link
+  cases 1/2/3 with the merge guard covering EVERY restricting Study relation (incl. AI
+  runs/suggestions + analysis exclusions → 422, never P2003), reject; "Companions" tab;
+  seeded NCT-sharing Criner companion pair + e2e.
+- **Review pass**: 8-dimension adversarial workflow over the whole Wave 3 diff (54 agents,
+  every finding double-verified): 23 confirmed findings — 0 critical/high, 6 medium, 17
+  low — ALL fixed (list in the commit message; notable: blinding + resolver invariants from
+  Wave 2 were checked for regression and held).
+- Verified: typecheck, production build, **445 unit / 221 integration / 8 E2E**; browser
+  checks on the reseeded demo (re-anchor coverage toast, funnel + Egger k<3 messaging,
+  mappings, Companions tab reachable; cohort link flow covered by e2e).
+
 ## Wave 2 review + hardening (2026-07-16, follow-up session)
 
 The three pending items below were completed:

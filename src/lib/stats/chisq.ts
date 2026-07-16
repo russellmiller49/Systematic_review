@@ -12,6 +12,7 @@ const FPMIN = 1e-300; // guard against division underflow in Lentz's method
 
 // Lanczos approximation (g = 7, 9 terms), ~15 significant digits for z >= 0.5.
 // All callers here use a = 0.5 (erfc) or a = df/2 >= 0.5, so no reflection needed.
+// (studentt.ts shares this for the incomplete beta, also with arguments >= 0.5.)
 const LANCZOS = [
   0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313,
   -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6,
@@ -19,7 +20,8 @@ const LANCZOS = [
 ];
 const HALF_LOG_TWO_PI = 0.9189385332046727; // 0.5 * ln(2*pi)
 
-function lgamma(z: number): number {
+/** Log-gamma (Lanczos). Valid for z >= 0.5 — sufficient for this library. */
+export function lgamma(z: number): number {
   // Valid for z >= 0.5 (sufficient for this library).
   let series = LANCZOS[0]!;
   for (let i = 1; i < LANCZOS.length; i++) {

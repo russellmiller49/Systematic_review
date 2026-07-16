@@ -12,10 +12,21 @@
 //     per-field "Edit" affordance and the server decides — its message is surfaced on refusal.
 //   - a field whose conflict was RESOLVED (adjudicated) is permanently locked.
 
-import { Fragment, useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Check, CircleAlert, ExternalLink, Lock, Pencil, Sparkles, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  Check,
+  CircleAlert,
+  ExternalLink,
+  Lock,
+  Pencil,
+  Sparkles,
+  TextCursor,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api, apiPost, apiPut, ApiError } from "@/lib/api";
+import type { SourceAnchorV2 } from "@/types/source-anchor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,12 +37,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { PdfEvidenceViewer } from "@/components/pdf/pdf-evidence-viewer";
+import { PdfEvidenceViewer, type EvidenceSelection } from "@/components/pdf/pdf-evidence-viewer";
 import { Alert, Progress, Skeleton, Spinner } from "@/components/ui/misc";
 import { FieldValueEditor } from "./field-value-editor";
 import { FormStatusBadge } from "./status-badges";
 import {
   formatFieldValue,
+  readSourceAnchor,
   type AiExtractionRunData,
   type ExtractionFormData,
   type ExtractionSuggestionData,
@@ -115,10 +127,20 @@ export function FormWorkspace({
     fieldLabel: string;
     quote: string | null;
     page: number | null;
+    anchor: SourceAnchorV2 | null;
+    // Non-null → the dialog is in selection mode, saving evidence into this field.
+    selectFieldId: string | null;
   } | null>(null);
 
   const isMine = meId !== null && form.extractorId === meId;
   const aiActive = isMine && ai !== null && ai.enabled;
+
+  // Anchors are file-scoped: ignore one that points at a different PDF than the
+  // study's current file (a re-linked PDF must not hijack the page hint).
+  const anchorFor = (raw: unknown): SourceAnchorV2 | null => {
+    const anchor = readSourceAnchor(raw);
+    return anchor !== null && pdf !== null && anchor.fileId === pdf.fileId ? anchor : null;
+  };
   const suggestionsUrl = `/api/projects/${projectId}/studies/${form.studyId}/extraction-suggestions?templateId=${form.templateId}`;
 
   useEffect(() => {
@@ -274,7 +296,24 @@ export function FormWorkspace({
     toast.success(`Applied ${applied} AI suggestion${applied === 1 ? "" : "s"}`);
   }
 
-  async function persistValue(field: TemplateField, committed: unknown) {
+  // In-flight autosaves per field + a live mirror of `values`: the evidence-selection
+  // save must not re-send a value snapshot taken while an autosave is still committing.
+  const pendingSaves = useRef<Record<string, Promise<void> | undefined>>({});
+  const valuesRef = useRef(values);
+  useEffect(() => {
+    valuesRef.current = values;
+  }, [values]);
+
+  function persistValue(field: TemplateField, committed: unknown): Promise<void> {
+    const run = persistValueInner(field, committed);
+    const tracked = run.finally(() => {
+      if (pendingSaves.current[field.id] === tracked) delete pendingSaves.current[field.id];
+    });
+    pendingSaves.current[field.id] = tracked;
+    return tracked;
+  }
+
+  async function persistValueInner(field: TemplateField, committed: unknown) {
     const next = committed === undefined ? null : committed;
     const current = values[field.id]?.value ?? null;
     if (JSON.stringify(next) === JSON.stringify(current)) return; // no change (e.g. blur)
@@ -302,6 +341,45 @@ export function FormWorkspace({
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Failed to save value";
       setSaveStates((p) => ({ ...p, [field.id]: { status: "error", message } }));
+    }
+  }
+
+  // A selection made in the PDF dialog: attach quote/page/anchor to the field's saved
+  // value WITHOUT changing the value itself (the upsert route clears on null value, so
+  // the current value is re-sent verbatim). The server re-verifies the anchor against
+  // its stored text layer and stores its own offsets.
+  async function saveEvidenceSelection(fieldId: string, selection: EvidenceSelection) {
+    setEvidence(null);
+    // A just-typed value may still be autosaving (opening the dialog blurs the editor);
+    // sending a stale snapshot would revert it server-side. Wait, then read fresh.
+    const pending = pendingSaves.current[fieldId];
+    if (pending) await pending.catch(() => undefined);
+    const savedRow = valuesRef.current[fieldId];
+    if (!savedRow) return; // affordance is disabled until a value exists
+    setSaveStates((p) => ({ ...p, [fieldId]: { status: "saving" } }));
+    try {
+      const saved = await apiPut<FormValue | null>(
+        `/api/projects/${projectId}/extraction-forms/${form.id}/values/${fieldId}`,
+        {
+          value: savedRow.value,
+          sourceQuote: selection.quote,
+          pageNumber: selection.page,
+          sourceAnchor: selection.anchor,
+        },
+      );
+      setValues((prev) => {
+        const nextMap = { ...prev };
+        if (saved === null) delete nextMap[fieldId];
+        else nextMap[fieldId] = saved;
+        return nextMap;
+      });
+      setSaveStates((p) => ({ ...p, [fieldId]: { status: "saved" } }));
+      toast.success(`Evidence attached (p. ${selection.page})`);
+      if (form.status === "COMPLETED") loadConflicts();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to attach evidence";
+      setSaveStates((p) => ({ ...p, [fieldId]: { status: "error", message } }));
+      toast.error(message);
     }
   }
 
@@ -483,6 +561,30 @@ export function FormWorkspace({
                           </Badge>
                         )}
                         <SaveIndicator state={saveStates[field.id]} />
+                        {editable && pdf && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-1.5 text-xs"
+                            disabled={savedRow === undefined}
+                            title={
+                              savedRow === undefined
+                                ? "Record a value first, then select its supporting text"
+                                : "Select the supporting text in the PDF to attach it as evidence"
+                            }
+                            onClick={() =>
+                              setEvidence({
+                                fieldLabel: field.label,
+                                quote: savedRow?.sourceQuote ?? null,
+                                page: savedRow?.pageNumber ?? null,
+                                anchor: anchorFor(savedRow?.sourceAnchor),
+                                selectFieldId: field.id,
+                              })
+                            }
+                          >
+                            <TextCursor className="h-3 w-3" /> Select in PDF
+                          </Button>
+                        )}
                         {showUnlockButton && (
                           <Button
                             variant="ghost"
@@ -600,6 +702,8 @@ export function FormWorkspace({
                                       fieldLabel: field.label,
                                       quote: suggestion.sourceQuote ?? null,
                                       page: suggestion.pageNumber ?? null,
+                                      anchor: anchorFor(suggestion.sourceAnchor),
+                                      selectFieldId: null,
                                     })
                                   }
                                 >
@@ -632,6 +736,8 @@ export function FormWorkspace({
                                 fieldLabel: field.label,
                                 quote: savedRow.sourceQuote ?? null,
                                 page: savedRow.pageNumber ?? null,
+                                anchor: anchorFor(savedRow.sourceAnchor),
+                                selectFieldId: null,
                               })
                             }
                           >
@@ -662,8 +768,9 @@ export function FormWorkspace({
               <DialogHeader>
                 <DialogTitle>{evidence.fieldLabel}</DialogTitle>
                 <DialogDescription>
-                  {pdf.filename}
-                  {evidence.page ? ` — page ${evidence.page}` : ""}
+                  {evidence.selectFieldId !== null
+                    ? `Highlight the supporting text in ${pdf.filename} — it is saved as this field's evidence. (Text selection needs the full viewer; it is unavailable in the plain fallback view.)`
+                    : `${pdf.filename}${evidence.page ? ` — page ${evidence.page}` : ""}`}
                 </DialogDescription>
               </DialogHeader>
               {evidence.quote && (
@@ -673,8 +780,19 @@ export function FormWorkspace({
                 </p>
               )}
               <PdfEvidenceViewer
-                target={{ fileId: pdf.fileId, page: evidence.page, quote: evidence.quote }}
+                target={{
+                  fileId: pdf.fileId,
+                  page: evidence.page,
+                  quote: evidence.quote,
+                  anchor: evidence.anchor,
+                }}
                 heightClass="h-[65vh]"
+                selectable={evidence.selectFieldId !== null}
+                onSelectEvidence={
+                  evidence.selectFieldId !== null
+                    ? (selection) => void saveEvidenceSelection(evidence.selectFieldId!, selection)
+                    : undefined
+                }
               />
             </>
           )}

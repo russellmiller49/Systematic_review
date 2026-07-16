@@ -1,0 +1,288 @@
+{
+  "name": "generic-iv-egger",
+  "measure": "GENERIC_IV",
+  "proportionTransform": null,
+  "studies": [
+    {
+      "id": "e01",
+      "label": "Egger 01",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.1,
+          "se": 0.08,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "e02",
+      "label": "Egger 02",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.15,
+          "se": 0.1,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "e03",
+      "label": "Egger 03",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.22,
+          "se": 0.14,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "e04",
+      "label": "Egger 04",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.35,
+          "se": 0.2,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "e05",
+      "label": "Egger 05",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.48,
+          "se": 0.28,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "e06",
+      "label": "Egger 06",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.6,
+          "se": 0.35,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "e07",
+      "label": "Egger 07",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.55,
+          "se": 0.4,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "e08",
+      "label": "Egger 08",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.75,
+          "se": 0.45,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    }
+  ],
+  "expected": {
+    "studies": [
+      {
+        "id": "e01",
+        "label": "Egger 01",
+        "y": 0.1,
+        "se": 0.08,
+        "ciLow": -0.05679711876320431,
+        "ciHigh": 0.2567971187632043,
+        "display": {
+          "estimate": 0.1,
+          "ciLow": -0.05679711876320431,
+          "ciHigh": 0.2567971187632043
+        },
+        "weightFixedPct": 42.88140574085759,
+        "weightRandomPct": 42.88140574085759
+      },
+      {
+        "id": "e02",
+        "label": "Egger 02",
+        "y": 0.15,
+        "se": 0.1,
+        "ciLow": -0.04599639845400541,
+        "ciHigh": 0.3459963984540054,
+        "display": {
+          "estimate": 0.15,
+          "ciLow": -0.04599639845400541,
+          "ciHigh": 0.3459963984540054
+        },
+        "weightFixedPct": 27.444099674148852,
+        "weightRandomPct": 27.444099674148852
+      },
+      {
+        "id": "e03",
+        "label": "Egger 03",
+        "y": 0.22,
+        "se": 0.14,
+        "ciLow": -0.05439495783560758,
+        "ciHigh": 0.4943949578356076,
+        "display": {
+          "estimate": 0.22,
+          "ciLow": -0.05439495783560758,
+          "ciHigh": 0.4943949578356076
+        },
+        "weightFixedPct": 14.00209167048411,
+        "weightRandomPct": 14.00209167048411
+      },
+      {
+        "id": "e04",
+        "label": "Egger 04",
+        "y": 0.35,
+        "se": 0.2,
+        "ciLow": -0.04199279690801083,
+        "ciHigh": 0.7419927969080108,
+        "display": {
+          "estimate": 0.35,
+          "ciLow": -0.04199279690801083,
+          "ciHigh": 0.7419927969080108
+        },
+        "weightFixedPct": 6.861024918537213,
+        "weightRandomPct": 6.861024918537213
+      },
+      {
+        "id": "e05",
+        "label": "Egger 05",
+        "y": 0.48,
+        "se": 0.28,
+        "ciLow": -0.06878991567121517,
+        "ciHigh": 1.028789915671215,
+        "display": {
+          "estimate": 0.48,
+          "ciLow": -0.06878991567121517,
+          "ciHigh": 1.028789915671215
+        },
+        "weightFixedPct": 3.5005229176210273,
+        "weightRandomPct": 3.5005229176210273
+      },
+      {
+        "id": "e06",
+        "label": "Egger 06",
+        "y": 0.6,
+        "se": 0.35,
+        "ciLow": -0.08598739458901894,
+        "ciHigh": 1.2859873945890188,
+        "display": {
+          "estimate": 0.6,
+          "ciLow": -0.08598739458901894,
+          "ciHigh": 1.2859873945890188
+        },
+        "weightFixedPct": 2.2403346672774584,
+        "weightRandomPct": 2.2403346672774584
+      },
+      {
+        "id": "e07",
+        "label": "Egger 07",
+        "y": 0.55,
+        "se": 0.4,
+        "ciLow": -0.23398559381602158,
+        "ciHigh": 1.3339855938160217,
+        "display": {
+          "estimate": 0.55,
+          "ciLow": -0.23398559381602158,
+          "ciHigh": 1.3339855938160217
+        },
+        "weightFixedPct": 1.7152562296343032,
+        "weightRandomPct": 1.7152562296343032
+      },
+      {
+        "id": "e08",
+        "label": "Egger 08",
+        "y": 0.75,
+        "se": 0.45,
+        "ciLow": -0.13198379304302432,
+        "ciHigh": 1.6319837930430243,
+        "display": {
+          "estimate": 0.75,
+          "ciLow": -0.13198379304302432,
+          "ciHigh": 1.6319837930430243
+        },
+        "weightFixedPct": 1.3552641814394497,
+        "weightRandomPct": 1.3552641814394497
+      }
+    ],
+    "excludedIds": [],
+    "fixed": {
+      "y": 0.18870865277405638,
+      "se": 0.05238711642584354,
+      "ciLow": 0.08603179132549636,
+      "ciHigh": 0.2913855142226164,
+      "display": {
+        "estimate": 0.18870865277405638,
+        "ciLow": 0.08603179132549636,
+        "ciHigh": 0.2913855142226164
+      },
+      "z": 3.6021958383829444,
+      "p": 0.00031554050052071646
+    },
+    "random": {
+      "y": 0.18870865277405638,
+      "se": 0.05238711642584354,
+      "ciLow": 0.08603179132549636,
+      "ciHigh": 0.2913855142226164,
+      "display": {
+        "estimate": 0.18870865277405638,
+        "ciLow": 0.08603179132549636,
+        "ciHigh": 0.2913855142226164
+      },
+      "z": 3.6021958383829444,
+      "p": 0.00031554050052071646
+    },
+    "heterogeneity": {
+      "q": 6.914526695224578,
+      "df": 7,
+      "p": 0.4378333125791999,
+      "i2": 0.0,
+      "tau2": 0.0
+    },
+    "predictionInterval": {
+      "low": 0.06052199674434802,
+      "high": 0.3168953088037647,
+      "display": {
+        "low": 0.06052199674434802,
+        "high": 0.3168953088037647
+      }
+    },
+    "egger": {
+      "intercept": 1.7373431403071242,
+      "interceptSe": 0.1015416738096286,
+      "t": 17.109656312779652,
+      "p": 2.551059128144487e-06,
+      "k": 8
+    },
+    "displayMeta": {
+      "transform": "identity",
+      "harmonicN": null
+    }
+  }
+}

@@ -1,6 +1,7 @@
 {
   "name": "single-study-rr",
   "measure": "RR",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "s01",
@@ -61,6 +62,12 @@
       "z": -1.5629379045780836,
       "p": 0.11806720100554645
     },
-    "heterogeneity": null
+    "heterogeneity": null,
+    "predictionInterval": null,
+    "egger": null,
+    "displayMeta": {
+      "transform": "exp",
+      "harmonicN": null
+    }
   }
 }

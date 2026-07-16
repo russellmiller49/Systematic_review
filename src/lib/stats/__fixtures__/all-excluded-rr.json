@@ -1,6 +1,7 @@
 {
   "name": "all-excluded-rr",
   "measure": "RR",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "x01",
@@ -51,6 +52,12 @@
     ],
     "fixed": null,
     "random": null,
-    "heterogeneity": null
+    "heterogeneity": null,
+    "predictionInterval": null,
+    "egger": null,
+    "displayMeta": {
+      "transform": "exp",
+      "harmonicN": null
+    }
   }
 }

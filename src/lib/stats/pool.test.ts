@@ -95,3 +95,41 @@ describe("dersimonianLaird", () => {
     expect(spread(dl.pooled.weightsPct)).toBeLessThan(spread(fixed.weightsPct));
   });
 });
+
+describe("prediction interval (Higgins/Thompson/Spiegelhalter)", () => {
+  it("is null below k = 3", () => {
+    expect(dersimonianLaird([{ y: 0.5, se: 0.2 }])!.predictionInterval).toBeNull();
+    expect(
+      dersimonianLaird([
+        { y: 0.5, se: 0.2 },
+        { y: 0.3, se: 0.25 },
+      ])!.predictionInterval,
+    ).toBeNull();
+  });
+
+  it("equals ŷ_RE ± t(0.975, k−2)·√(τ² + SE²) at k = 3 (qt(0.975, 1) = 12.7062...)", () => {
+    const dl = dersimonianLaird(THREE)!;
+    const pi = dl.predictionInterval!;
+    expect(pi).not.toBeNull();
+    // scipy: t.ppf(0.975, 1) = 12.706204736174694
+    const half = 12.706204736174694 * Math.sqrt(dl.heterogeneity!.tau2 + dl.pooled.se ** 2);
+    close(pi.low, dl.pooled.y - half, 1e-8);
+    close(pi.high, dl.pooled.y + half, 1e-8);
+    // Always wider than the pooled CI.
+    expect(pi.low).toBeLessThan(dl.pooled.ciLow);
+    expect(pi.high).toBeGreaterThan(dl.pooled.ciHigh);
+  });
+
+  it("stays estimable when τ² floors at 0", () => {
+    const homog: EffectEstimate[] = [
+      { y: 0.3, se: 0.1 },
+      { y: 0.31, se: 0.12 },
+      { y: 0.295, se: 0.11 },
+    ];
+    const dl = dersimonianLaird(homog)!;
+    expect(dl.heterogeneity!.tau2).toBe(0);
+    const pi = dl.predictionInterval!;
+    expect(pi).not.toBeNull();
+    close(pi.high - pi.low, 2 * 12.706204736174694 * dl.pooled.se, 1e-10);
+  });
+});

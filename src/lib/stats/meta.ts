@@ -6,24 +6,35 @@
 // (scripts/generate-stats-fixtures.py -> __fixtures__/, checked by fixtures.test.ts).
 //
 // Behavior (see types.ts for the binding contract):
-// - Routes binary data to binaryEffect and continuous data to continuousEffect;
-//   a kind/measure mismatch excludes the study with a reason. Never throws on
-//   bad study data.
-// - Analysis scale is natural log for RR/OR, identity otherwise; `display`
-//   blocks are back-transformed via exp() on the log scale.
+// - Routes binary data to binaryEffect, continuous to continuousEffect, single-arm
+//   proportions to proportionEffect (logit or Freeman–Tukey), and pre-computed
+//   estimates to genericEffect; a kind/measure mismatch excludes the study with a
+//   reason. Never throws on bad study data.
+// - Analysis scale: natural log for RR/OR; logit/double-arcsine for PROPORTION;
+//   identity otherwise. `display` blocks back-transform: exp() on the log scale,
+//   inverse logit, or Miller's inverse double-arcsine — per-study values with that
+//   study's own n, POOLED values (and the prediction interval) with the HARMONIC MEAN
+//   of the included studies' n.
 // - Included studies preserve input order; percentage weights sum to ~100.
+// - Random-effects prediction interval and Egger's regression test both require
+//   k >= 3 included studies, else null.
 
 import { binaryEffect } from "./effects/binary";
 import { continuousEffect } from "./effects/continuous";
+import { genericEffect } from "./effects/generic";
+import { ftInverse, harmonicMean, invLogit, proportionEffect } from "./effects/proportion";
+import { eggerTest } from "./egger";
 import { qnorm } from "./normal";
 import { dersimonianLaird, fixedEffect } from "./pool";
 import type {
   ComputeMetaOptions,
   DisplayEstimate,
+  DisplayMeta,
   EffectEstimate,
   ExcludedStudy,
   MetaResult,
   PooledEstimate,
+  PredictionInterval,
   StudyEffectInput,
   StudyEffectResult,
 } from "./types";
@@ -42,29 +53,38 @@ export function computeMeta(
   opts: ComputeMetaOptions,
 ): MetaResult {
   const { measure } = opts;
-  const scale = scaleFor(measure);
-  const toDisplay = (v: number): number => (scale === "log" ? Math.exp(v) : v);
-  const display = (y: number, ciLow: number, ciHigh: number): DisplayEstimate => ({
-    estimate: toDisplay(y),
-    ciLow: toDisplay(ciLow),
-    ciHigh: toDisplay(ciHigh),
-  });
+  const transform = opts.proportionTransform ?? "LOGIT";
+  const scale = scaleFor(measure, transform);
 
   // ---- per-study effects (input order preserved) ----
-  const included: { input: StudyEffectInput; estimate: EffectEstimate }[] = [];
+  // For FT proportions each study's display back-transform needs its own n.
+  const included: { input: StudyEffectInput; estimate: EffectEstimate; n: number | null }[] = [];
   const excluded: ExcludedStudy[] = [];
   for (const study of studies) {
     let result: { estimate: EffectEstimate } | { excludedReason: string };
+    let n: number | null = null;
     if (measure === "RR" || measure === "OR" || measure === "RD") {
       result =
         study.data.kind === "binary"
           ? binaryEffect(measure, study.data.counts)
           : { excludedReason: `measure ${measure} requires binary 2×2 counts` };
-    } else {
+    } else if (measure === "MD" || measure === "SMD") {
       result =
         study.data.kind === "continuous"
           ? continuousEffect(measure, study.data.stats)
           : { excludedReason: `measure ${measure} requires continuous summary statistics` };
+    } else if (measure === "PROPORTION") {
+      if (study.data.kind === "proportion") {
+        result = proportionEffect(transform, study.data.counts);
+        n = study.data.counts.n;
+      } else {
+        result = { excludedReason: "measure PROPORTION requires single-arm event counts" };
+      }
+    } else {
+      result =
+        study.data.kind === "generic"
+          ? genericEffect(study.data.stats)
+          : { excludedReason: "measure GENERIC_IV requires a pre-computed estimate" };
     }
     if ("excludedReason" in result) {
       excluded.push({ id: study.id, label: study.label, reason: result.excludedReason });
@@ -79,9 +99,30 @@ export function computeMeta(
         reason: "standard error too extreme to weight (inverse-variance weight overflows)",
       });
     } else {
-      included.push({ input: study, estimate: result.estimate });
+      included.push({ input: study, estimate: result.estimate, n });
     }
   }
+
+  // ---- display back-transforms ----
+  // FT pooled values (and the PI) use the harmonic mean of the included studies' n.
+  const ftPooledN =
+    scale === "ft" ? harmonicMean(included.map((s) => s.n).filter((n): n is number => n !== null)) : null;
+  const toDisplay = (v: number, ftN: number | null): number => {
+    if (scale === "log") return Math.exp(v);
+    if (scale === "logit") return invLogit(v);
+    if (scale === "ft") return ftN !== null ? ftInverse(v, ftN) : v;
+    return v;
+  };
+  const display = (y: number, ciLow: number, ciHigh: number, ftN: number | null): DisplayEstimate => ({
+    estimate: toDisplay(y, ftN),
+    ciLow: toDisplay(ciLow, ftN),
+    ciHigh: toDisplay(ciHigh, ftN),
+  });
+  const displayMeta: DisplayMeta = {
+    transform:
+      scale === "log" ? "exp" : scale === "logit" ? "invlogit" : scale === "ft" ? "ft" : "identity",
+    harmonicN: ftPooledN,
+  };
 
   // ---- pooling ----
   const estimates = included.map((s) => s.estimate);
@@ -96,7 +137,7 @@ export function computeMeta(
     se: p.se,
     ciLow: p.ciLow,
     ciHigh: p.ciHigh,
-    display: display(p.y, p.ciLow, p.ciHigh),
+    display: display(p.y, p.ciLow, p.ciHigh, ftPooledN),
     z: p.z,
     p: p.p,
   });
@@ -115,11 +156,23 @@ export function computeMeta(
       se,
       ciLow,
       ciHigh,
-      display: display(y, ciLow, ciHigh),
+      // Per-study FT back-transform uses that study's OWN n (Miller 1978).
+      display: display(y, ciLow, ciHigh, scale === "ft" ? s.n : null),
       weightFixedPct: fixed!.weightsPct[i]!,
       weightRandomPct: dl!.pooled.weightsPct[i]!,
     };
   });
+
+  const predictionInterval: PredictionInterval | null = dl?.predictionInterval
+    ? {
+        low: dl.predictionInterval.low,
+        high: dl.predictionInterval.high,
+        display: {
+          low: toDisplay(dl.predictionInterval.low, ftPooledN),
+          high: toDisplay(dl.predictionInterval.high, ftPooledN),
+        },
+      }
+    : null;
 
   return {
     measure,
@@ -130,5 +183,8 @@ export function computeMeta(
     fixed: fixed ? toPooled("FIXED", fixed) : null,
     random: dl ? toPooled("RANDOM", dl.pooled) : null,
     heterogeneity: dl ? dl.heterogeneity : null,
+    predictionInterval,
+    egger: eggerTest(estimates),
+    displayMeta,
   };
 }

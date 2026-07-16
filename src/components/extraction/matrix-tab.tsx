@@ -8,9 +8,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
-import { Download, ExternalLink, FileText, RefreshCw } from "lucide-react";
+import { Anchor, Download, ExternalLink, FileText, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, apiPost, ApiError } from "@/lib/api";
+import type { SourceAnchorV2 } from "@/types/source-anchor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +26,7 @@ import { PdfEvidenceViewer } from "@/components/pdf/pdf-evidence-viewer";
 import { EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select } from "@/components/ui/select";
-import { formatFieldValue, type Template } from "./types";
+import { formatFieldValue, hasCap, readSourceAnchor, type Template } from "./types";
 
 // --- Server payload types (mirror src/server/services/extraction/matrix.ts) ----
 
@@ -89,15 +90,19 @@ interface EvidenceTarget {
   fileId: string;
   page: number | null;
   quote: string | null;
+  anchor: SourceAnchorV2 | null;
   filename: string;
   studyLabel: string;
 }
 
-function anchorPage(anchor: unknown, fallback: number | null): number | null {
-  if (anchor && typeof anchor === "object" && typeof (anchor as { page?: unknown }).page === "number") {
-    return (anchor as { page: number }).page;
-  }
-  return fallback;
+// POST /extraction/reanchor coverage report (mirrors ReanchorReport server-side).
+interface ReanchorReport {
+  total: number;
+  exact: number;
+  fuzzy: number;
+  pageOnly: number;
+  noPdf: number;
+  noTextLayer: number;
 }
 
 export function MatrixTab({
@@ -119,6 +124,24 @@ export function MatrixTab({
   const [matrix, setMatrix] = useState<ExtractionMatrixResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [evidence, setEvidence] = useState<EvidenceTarget | null>(null);
+  // Re-anchor backfill is managerial (project.edit) — the tab itself isn't handed
+  // capability info, so gate on the project payload's roles like the page header does.
+  const [roles, setRoles] = useState<string[] | null>(null);
+  const [reanchoring, setReanchoring] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ myRoles: string[] }>(`/api/projects/${projectId}`)
+      .then((p) => {
+        if (!cancelled) setRoles(p.myRoles);
+      })
+      .catch(() => {
+        if (!cancelled) setRoles(null); // silent: the button simply stays hidden
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const load = useCallback(() => {
     if (!effectiveTemplateId) return;
@@ -147,6 +170,36 @@ export function MatrixTab({
       window.clearInterval(interval);
     };
   }, [load]);
+
+  // Backfill v2 anchors for every quoted value of this template, then surface the
+  // coverage report ({total, exact, fuzzy, pageOnly, noPdf, noTextLayer}) in a toast.
+  async function reanchor() {
+    if (!effectiveTemplateId) return;
+    setReanchoring(true);
+    try {
+      const report = await apiPost<ReanchorReport>(
+        `/api/projects/${projectId}/extraction/reanchor`,
+        { templateId: effectiveTemplateId },
+      );
+      if (report.total === 0) {
+        toast.info("No quoted evidence to re-anchor for this template.");
+      } else {
+        const parts = [
+          `${report.exact} exact`,
+          `${report.fuzzy} fuzzy`,
+          `${report.pageOnly} page-only`,
+        ];
+        if (report.noPdf > 0) parts.push(`${report.noPdf} without a PDF`);
+        if (report.noTextLayer > 0) parts.push(`${report.noTextLayer} without a text layer`);
+        toast.success(`Re-anchored ${report.total} quotes — ${parts.join(", ")}.`);
+      }
+      load(); // anchors changed → refresh the entries backing "Open in PDF"
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to re-anchor evidence");
+    } finally {
+      setReanchoring(false);
+    }
+  }
 
   function exportCsv() {
     if (!matrix) return;
@@ -208,6 +261,17 @@ export function MatrixTab({
           <p className="text-xs text-muted-foreground">
             Showing your own extraction only — adjudicators and admins see all extractors.
           </p>
+        )}
+        {hasCap(roles, "project.edit") && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void reanchor()}
+            disabled={reanchoring || !effectiveTemplateId}
+            title="Locate every recorded quote in its study's PDF and store the anchors"
+          >
+            {reanchoring ? <Spinner className="h-3.5 w-3.5" /> : <Anchor />} Re-anchor evidence
+          </Button>
         )}
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
           {loading ? <Spinner className="h-3.5 w-3.5" /> : <RefreshCw />} Refresh
@@ -300,7 +364,12 @@ export function MatrixTab({
                 </p>
               )}
               <PdfEvidenceViewer
-                target={{ fileId: evidence.fileId, page: evidence.page, quote: evidence.quote }}
+                target={{
+                  fileId: evidence.fileId,
+                  page: evidence.page,
+                  quote: evidence.quote,
+                  anchor: evidence.anchor,
+                }}
                 heightClass="h-[65vh]"
               />
             </>
@@ -378,7 +447,11 @@ function MatrixCellView({
           <p className="text-xs text-muted-foreground">No visible extractor entries.</p>
         )}
         {cell.entries.map((entry) => {
-          const page = anchorPage(entry.sourceAnchor, entry.pageNumber);
+          // Anchors are file-scoped: ignore one that points at a different PDF than the
+          // study's current file (re-linked PDFs must not hijack the page hint).
+          const parsed = readSourceAnchor(entry.sourceAnchor);
+          const anchor = parsed !== null && parsed.fileId === study.pdf?.fileId ? parsed : null;
+          const page = anchor?.page ?? entry.pageNumber;
           return (
             <div key={entry.formId} className="space-y-1 border-t border-border pt-2 text-xs">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -409,6 +482,7 @@ function MatrixCellView({
                       filename: study.pdf!.filename,
                       page,
                       quote: entry.sourceQuote,
+                      anchor,
                       studyLabel: study.label,
                     })
                   }

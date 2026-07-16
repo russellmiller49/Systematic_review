@@ -1,6 +1,7 @@
 {
   "name": "smd",
   "measure": "SMD",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "g01",
@@ -189,6 +190,25 @@
       "p": 0.6983002267761345,
       "i2": 0.0,
       "tau2": 0.0
+    },
+    "predictionInterval": {
+      "low": -0.11248067457381083,
+      "high": 0.7042367756569513,
+      "display": {
+        "low": -0.11248067457381083,
+        "high": 0.7042367756569513
+      }
+    },
+    "egger": {
+      "intercept": 1.6620888692561198,
+      "interceptSe": 0.7644306614296864,
+      "t": 2.1742833629247373,
+      "p": 0.11798037770363526,
+      "k": 5
+    },
+    "displayMeta": {
+      "transform": "identity",
+      "harmonicN": null
     }
   }
 }

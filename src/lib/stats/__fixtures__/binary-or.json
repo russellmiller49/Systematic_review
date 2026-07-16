@@ -1,6 +1,7 @@
 {
   "name": "binary-or",
   "measure": "OR",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "b01",
@@ -320,6 +321,25 @@
       "p": 0.03426588799020599,
       "i2": 51.878155814904225,
       "tau2": 0.1339513761401947
+    },
+    "predictionInterval": {
+      "low": -1.3827725263725394,
+      "high": 0.5548675900075043,
+      "display": {
+        "low": 0.25088201092354173,
+        "high": 1.741710349650888
+      }
+    },
+    "egger": {
+      "intercept": -0.9883900012132267,
+      "interceptSe": 1.0428855305278688,
+      "t": -0.9477454354102904,
+      "p": 0.37482038077795193,
+      "k": 9
+    },
+    "displayMeta": {
+      "transform": "exp",
+      "harmonicN": null
     }
   }
 }

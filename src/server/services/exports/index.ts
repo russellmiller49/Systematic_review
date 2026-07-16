@@ -1,5 +1,8 @@
-// Exports (R1 gating): CITATIONS / PRISMA need export.create; SCREENING / EXTRACTION / ROB /
-// AUDIT / FULL additionally require project.edit (they can contain blinded work products).
+// Exports (R1 gating): CITATIONS / PRISMA / ANALYSIS need export.create; SCREENING /
+// EXTRACTION / ROB / AUDIT / FULL additionally require project.edit (they can contain
+// blinded work products). ANALYSIS content is generated AS THE REQUESTER — the analysis
+// service applies the extraction blind to the requester's roles, so export.create is
+// sufficient gating for it.
 // MVP: content is generated on demand — the ExportJob row records the request (COMPLETED,
 // storageKey null) and download regenerates + streams after re-checking the same gating.
 
@@ -9,13 +12,23 @@ import { prisma } from "@/server/db";
 import { notFound, validationError } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { requirePermission, type Capability } from "@/server/permissions";
+import { computeOutcomeResults, listOutcomes } from "@/server/services/analysis";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { computePrismaCounts } from "@/server/services/prisma-report";
 import { toCsv, toJsonBody, type CsvRow } from "./serializers";
 
 export const createExportSchema = z.object({
-  kind: z.enum(["CITATIONS", "SCREENING", "EXTRACTION", "ROB", "PRISMA", "AUDIT", "FULL"]),
+  kind: z.enum([
+    "CITATIONS",
+    "SCREENING",
+    "EXTRACTION",
+    "ROB",
+    "PRISMA",
+    "AUDIT",
+    "FULL",
+    "ANALYSIS",
+  ]),
   format: z.enum(["CSV", "JSON"]),
 });
 
@@ -23,13 +36,21 @@ export type CreateExportInput = z.infer<typeof createExportSchema>;
 
 // R1: which capability unlocks each export kind.
 export function exportCapability(kind: ExportKind): Capability {
-  return kind === "CITATIONS" || kind === "PRISMA" ? "export.create" : "project.edit";
+  return kind === "CITATIONS" || kind === "PRISMA" || kind === "ANALYSIS"
+    ? "export.create"
+    : "project.edit";
 }
 
 const CSV_BOM = "\uFEFF";
 
 export async function createExport(ctx: Ctx, projectId: string, input: CreateExportInput) {
   await requirePermission(ctx, projectId, exportCapability(input.kind));
+  // ANALYSIS content is generated through the analysis service, which itself requires
+  // analysis.view — require it up front, or an export.create-only role (LIBRARIAN)
+  // could create a job whose download can never succeed.
+  if (input.kind === "ANALYSIS") {
+    await requirePermission(ctx, projectId, "analysis.view");
+  }
   if (input.kind === "FULL" && input.format === "CSV") {
     throw validationError("FULL export is only available as JSON");
   }
@@ -84,10 +105,13 @@ export async function downloadExport(
   if (!job) throw notFound("Export job");
   // R1: downloading re-checks the same gating as creation.
   await requirePermission(ctx, projectId, exportCapability(job.kind));
+  if (job.kind === "ANALYSIS") {
+    await requirePermission(ctx, projectId, "analysis.view"); // mirrors createExport
+  }
   if (job.kind === "FULL" && job.format === "CSV") {
     throw validationError("FULL export is only available as JSON");
   }
-  const body = await generateExportBody(projectId, job.kind, job.format);
+  const body = await generateExportBody(ctx, projectId, job.kind, job.format);
   const ext = job.format === "CSV" ? "csv" : "json";
   return {
     filename: `${job.kind.toLowerCase()}-${projectId}.${ext}`,
@@ -367,6 +391,103 @@ async function auditRows(projectId: string): Promise<CsvRow[]> {
   }));
 }
 
+// ANALYSIS: for every outcome, computeOutcomeResults AS THE REQUESTER — the analysis
+// service enforces analysis.view and applies the extraction blind to the requester's
+// roles (provisional data and dispute detail never leak into an export).
+interface AnalysisSections {
+  studies: CsvRow[]; // one row per (outcome, study)
+  pooled: CsvRow[]; // one row per (outcome, model)
+  outcomes: CsvRow[]; // one summary row per outcome (heterogeneity, PI, Egger)
+  json: unknown[]; // structured per-outcome payloads for the JSON body
+}
+
+async function analysisSections(ctx: Ctx, projectId: string): Promise<AnalysisSections> {
+  const outcomes = await listOutcomes(ctx, projectId);
+  const sections: AnalysisSections = { studies: [], pooled: [], outcomes: [], json: [] };
+  for (const outcome of outcomes) {
+    const results = await computeOutcomeResults(ctx, projectId, outcome.id);
+    const head = {
+      outcome: outcome.name,
+      measure: outcome.measure,
+      timepoint: outcome.timepoint,
+    };
+    for (const row of results.rows) {
+      const effect = row.effect;
+      sections.studies.push({
+        ...head,
+        study: row.label,
+        status: row.status,
+        reason: row.reason,
+        values: stringifyOrNull(
+          Object.fromEntries(Object.entries(row.values).map(([role, v]) => [role, v.value])),
+        ),
+        y: effect?.y ?? null,
+        se: effect?.se ?? null,
+        ciLow: effect?.ciLow ?? null,
+        ciHigh: effect?.ciHigh ?? null,
+        displayEstimate: effect?.display.estimate ?? null,
+        displayCiLow: effect?.display.ciLow ?? null,
+        displayCiHigh: effect?.display.ciHigh ?? null,
+        weightFixedPct: effect?.weightFixedPct ?? null,
+        weightRandomPct: effect?.weightRandomPct ?? null,
+      });
+    }
+    for (const model of ["fixed", "random"] as const) {
+      const est = results.pooled[model];
+      if (!est) continue;
+      sections.pooled.push({
+        ...head,
+        model: est.model,
+        y: est.y,
+        se: est.se,
+        ciLow: est.ciLow,
+        ciHigh: est.ciHigh,
+        displayEstimate: est.display.estimate,
+        displayCiLow: est.display.ciLow,
+        displayCiHigh: est.display.ciHigh,
+        z: est.z,
+        p: est.p,
+      });
+    }
+    const het = results.heterogeneity;
+    const pi = results.predictionInterval;
+    const egger = results.egger;
+    sections.outcomes.push({
+      ...head,
+      scale: results.scale,
+      proportionTransform: outcome.measure === "PROPORTION" ? outcome.proportionTransform : null,
+      includedStudies: results.rows.filter((r) => r.effect !== null).length,
+      heterogeneityQ: het?.q ?? null,
+      heterogeneityDf: het?.df ?? null,
+      heterogeneityP: het?.p ?? null,
+      i2: het?.i2 ?? null,
+      tau2: het?.tau2 ?? null,
+      predictionIntervalLow: pi?.low ?? null,
+      predictionIntervalHigh: pi?.high ?? null,
+      predictionIntervalDisplayLow: pi?.display.low ?? null,
+      predictionIntervalDisplayHigh: pi?.display.high ?? null,
+      eggerIntercept: egger?.intercept ?? null,
+      eggerInterceptSe: egger?.interceptSe ?? null,
+      eggerT: egger?.t ?? null,
+      eggerP: egger?.p ?? null,
+      eggerK: egger?.k ?? null,
+    });
+    sections.json.push({
+      outcome: results.outcome,
+      groupLabels: results.groupLabels,
+      scale: results.scale,
+      nullValue: results.nullValue,
+      displayMeta: results.displayMeta,
+      rows: results.rows,
+      pooled: results.pooled,
+      heterogeneity: results.heterogeneity,
+      predictionInterval: results.predictionInterval,
+      egger: results.egger,
+    });
+  }
+  return sections;
+}
+
 // Concatenate heterogeneous sections into one CSV with a leading recordType column.
 function sectionsToCsv(sections: Record<string, CsvRow[]>): string {
   const rows: CsvRow[] = [];
@@ -377,6 +498,7 @@ function sectionsToCsv(sections: Record<string, CsvRow[]>): string {
 }
 
 async function generateExportBody(
+  ctx: Ctx,
   projectId: string,
   kind: ExportKind,
   format: ExportFormat,
@@ -415,6 +537,16 @@ async function generateExportBody(
     case "PRISMA": {
       const rows = await prismaRows(projectId);
       return format === "CSV" ? toCsv(rows) : toJsonBody({ counts: rows });
+    }
+    case "ANALYSIS": {
+      const sections = await analysisSections(ctx, projectId);
+      return format === "CSV"
+        ? sectionsToCsv({
+            study_effect: sections.studies,
+            pooled: sections.pooled,
+            outcome_summary: sections.outcomes,
+          })
+        : toJsonBody({ outcomes: sections.json });
     }
     case "AUDIT": {
       const rows = await auditRows(projectId);

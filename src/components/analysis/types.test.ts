@@ -24,8 +24,15 @@ describe("roleLabel", () => {
     expect(roleLabel("G2_N", groups)).toBe("Control n");
   });
 
+  it("labels the GENERIC_IV effect roles", () => {
+    expect(roleLabel("EFFECT_ESTIMATE", groups)).toBe("Effect estimate");
+    expect(roleLabel("EFFECT_SE", groups)).toBe("Standard error");
+    expect(roleLabel("EFFECT_CI_LOW", groups)).toBe("95% CI lower");
+    expect(roleLabel("EFFECT_CI_UP", groups)).toBe("95% CI upper");
+  });
+
   it("falls back to the raw key for unknown roles", () => {
-    expect(roleLabel("EFFECT_ESTIMATE", groups)).toBe("EFFECT_ESTIMATE");
+    expect(roleLabel("STUDY_DESIGN", groups)).toBe("STUDY_DESIGN");
   });
 });
 
@@ -34,6 +41,12 @@ describe("resolveGroupLabels", () => {
     expect(resolveGroupLabels(null)).toEqual({ g1: "Group 1", g2: "Group 2" });
     expect(resolveGroupLabels({ g1: "Stent" })).toEqual({ g1: "Stent", g2: "Group 2" });
     expect(resolveGroupLabels({ g1: "", g2: "Sham" })).toEqual({ g1: "Group 1", g2: "Sham" });
+  });
+
+  it("defaults the single-arm cohort label for PROPORTION", () => {
+    expect(resolveGroupLabels(null, "PROPORTION").g1).toBe("Cohort");
+    expect(resolveGroupLabels({ g1: "LVRS arm" }, "PROPORTION").g1).toBe("LVRS arm");
+    expect(resolveGroupLabels(null, "RR").g1).toBe("Group 1");
   });
 });
 

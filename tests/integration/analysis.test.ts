@@ -7,7 +7,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/server/db";
 import { AppError } from "@/server/errors";
 import * as analysis from "@/server/services/analysis";
+import { scaffoldOutcomeFields } from "@/server/services/analysis/scaffold";
 import * as extraction from "@/server/services/extraction";
+import { createExport, downloadExport } from "@/server/services/exports";
 import { resetDb } from "../db-utils";
 import {
   addOrgMember,
@@ -757,5 +759,401 @@ describe("mapping guards + audit detail", () => {
     });
     const next = event!.newValue as { mappings: Record<string, { templateId: string; fieldKey: string }> };
     expect(next.mappings.G1_EVENTS).toEqual({ templateId: s.template.id, fieldKey: "e1" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B measures (PROPORTION / GENERIC_IV)
+// ---------------------------------------------------------------------------
+// Expected numbers below were hand-computed with an independent Python/scipy
+// session using the pinned formulas (logit/FT transforms, DL pooling, PI with
+// t.ppf(0.975, k-2), CI-derived SE = (up-low)/(2*1.959963984540054)).
+
+describe("phase B measures", () => {
+  it("pools a single-arm proportion (logit), then re-pools live under Freeman–Tukey", async () => {
+    const s = await setup();
+    const a = await s.makeStudy("PropA 2020"); // 12/80
+    const b = await s.makeStudy("PropB 2020"); // 0/45 — zero events (logit continuity)
+    const c = await s.makeStudy("PropC 2020"); // 30/60
+    await fillForm(s, a.id, s.extractor1.id, { e1: 12, n1: 80 });
+    await fillForm(s, b.id, s.extractor1.id, { e1: 0, n1: 45 });
+    await fillForm(s, c.id, s.extractor1.id, { e1: 30, n1: 60 });
+
+    const outcome = await analysis.createOutcome(ctx(s.statistician.id), s.project.id, {
+      name: "Complication rate",
+      measure: "PROPORTION",
+    });
+    expect(outcome.requiredRoles).toEqual(["G1_EVENTS", "G1_TOTAL"]);
+    expect(outcome.proportionTransform).toBe("LOGIT");
+    await analysis.replaceMappings(ctx(s.statistician.id), s.project.id, outcome.id, {
+      mappings: [
+        { role: "G1_EVENTS", templateId: s.template.id, fieldKey: "e1" },
+        { role: "G1_TOTAL", templateId: s.template.id, fieldKey: "n1" },
+      ],
+    });
+
+    // Logit: y = ln(e/(n-e)); continuity (e+0.5, n+1) only at the boundaries.
+    const logitRes = await analysis.computeOutcomeResults(ctx(s.owner.id), s.project.id, outcome.id);
+    expect(logitRes.scale).toBe("logit");
+    expect(logitRes.nullValue).toBeNull(); // no meaningful null line, single arm
+    expect(logitRes.groupLabels.g1).toBe("Cohort");
+    expect(logitRes.displayMeta).toEqual({ transform: "invlogit", harmonicN: null });
+    const byId = new Map(logitRes.rows.map((r) => [r.studyId, r]));
+    const rowA = byId.get(a.id)!;
+    expect(rowA.status).toBe("included");
+    expect(rowA.effect!.y).toBeCloseTo(-1.7346010553881064, 10); // ln(12/68)
+    expect(rowA.effect!.se).toBeCloseTo(0.3131121455425747, 10); // sqrt(1/12 + 1/68)
+    expect(rowA.effect!.display.estimate).toBeCloseTo(0.15, 10); // invlogit recovers e/n
+    const rowB = byId.get(b.id)!;
+    expect(rowB.effect!.y).toBeCloseTo(-4.51085950651685, 8); // ln(0.5/45.5)
+    expect(rowB.effect!.display.estimate).toBeCloseTo(0.010869565217391308, 8); // 0.5/46
+    expect(byId.get(c.id)!.effect!.display.estimate).toBeCloseTo(0.5, 10);
+    expect(logitRes.pooled.random!.y).toBeCloseTo(-1.5829108387569473, 8);
+    expect(logitRes.pooled.random!.display.estimate).toBeCloseTo(0.17038363122405822, 8);
+    expect(logitRes.pooled.fixed!.y).toBeCloseTo(-0.7754108625249442, 8);
+    expect(logitRes.heterogeneity!.tau2).toBeCloseTo(1.8094529077127375, 8);
+    // k = 3 -> prediction interval + Egger both present.
+    expect(logitRes.predictionInterval!.low).toBeCloseTo(-21.94468635130571, 6);
+    expect(logitRes.predictionInterval!.high).toBeCloseTo(18.778864673791812, 6);
+    expect(logitRes.egger).not.toBeNull();
+    expect(logitRes.egger!.k).toBe(3);
+
+    // Switching the transform is a live re-pool — no stored results anywhere.
+    const updated = await analysis.updateOutcome(ctx(s.statistician.id), s.project.id, outcome.id, {
+      proportionTransform: "FREEMAN_TUKEY",
+    });
+    expect(updated.proportionTransform).toBe("FREEMAN_TUKEY");
+    const ft = await analysis.computeOutcomeResults(ctx(s.owner.id), s.project.id, outcome.id);
+    expect(ft.scale).toBe("ft");
+    expect(ft.displayMeta.transform).toBe("ft");
+    expect(ft.displayMeta.harmonicN).toBeCloseTo(58.37837837837838, 8); // 3 / (1/80 + 1/45 + 1/60)
+    const ftById = new Map(ft.rows.map((r) => [r.studyId, r]));
+    // Per-study Miller back-transform uses that study's OWN n.
+    expect(ftById.get(a.id)!.effect!.y).toBeCloseTo(0.40364480269554726, 10);
+    expect(ftById.get(a.id)!.effect!.se).toBeCloseTo(0.05572782125753528, 10); // sqrt(1/(4n+2))
+    expect(ftById.get(a.id)!.effect!.display.estimate).toBeCloseTo(0.15, 6);
+    expect(ftById.get(b.id)!.effect!.display.estimate).toBeCloseTo(0, 6); // zero-event floor
+    // Pooled back-transform uses the harmonic mean of the included n's.
+    expect(ft.pooled.random!.y).toBeCloseTo(0.4223632326473661, 8);
+    expect(ft.pooled.random!.display.estimate).toBeCloseTo(0.16243122657920395, 8);
+    expect(ft.pooled.fixed!.display.estimate).toBeCloseTo(0.1816079006804565, 8);
+  });
+
+  it("computes generic inverse variance with CI-derived SEs and se-source completeness", async () => {
+    const s = await setup();
+    const template = await prisma.extractionTemplate.create({
+      data: {
+        projectId: s.project.id,
+        name: "Effect estimates",
+        status: "PUBLISHED",
+        createdById: s.owner.id,
+        fields: {
+          create: [
+            { key: "est", label: "Estimate", type: "NUMBER", order: 0 },
+            { key: "sev", label: "SE", type: "NUMBER", order: 1 },
+            { key: "cil", label: "CI low", type: "NUMBER", order: 2 },
+            { key: "ciu", label: "CI high", type: "NUMBER", order: 3 },
+          ],
+        },
+      },
+    });
+    const mk = async (label: string, values: Record<string, number>) => {
+      const study = await s.makeStudy(label);
+      await prisma.extractionAssignment.create({
+        data: { templateId: template.id, studyId: study.id, extractorId: s.extractor1.id },
+      });
+      await fillForm(s, study.id, s.extractor1.id, values, { templateId: template.id });
+      return study;
+    };
+    const g1 = await mk("Gen1 2020", { est: 0.25, cil: 0.02, ciu: 0.48 });
+    const g2 = await mk("Gen2 2020", { est: -0.1, cil: -0.45, ciu: 0.25 });
+    const g3 = await mk("Gen3 2020", { est: 0.4, cil: 0.11, ciu: 0.69 });
+    const bad = await mk("GenBad 2020", { est: 0.9, cil: 0.1, ciu: 0.6 }); // estimate outside CI
+    const partial = await mk("GenPartial 2020", { est: 0.2 }); // no se-source at all
+
+    const outcome = await analysis.createOutcome(ctx(s.statistician.id), s.project.id, {
+      name: "Adjusted hazard (log)",
+      measure: "GENERIC_IV",
+    });
+    // Estimate alone is not a complete mapping — it needs an SE or both CI bounds.
+    let mapped = await analysis.replaceMappings(ctx(s.statistician.id), s.project.id, outcome.id, {
+      mappings: [{ role: "EFFECT_ESTIMATE", templateId: template.id, fieldKey: "est" }],
+    });
+    expect(mapped.mappingComplete).toBe(false);
+    mapped = await analysis.replaceMappings(ctx(s.statistician.id), s.project.id, outcome.id, {
+      mappings: [
+        { role: "EFFECT_ESTIMATE", templateId: template.id, fieldKey: "est" },
+        { role: "EFFECT_CI_LOW", templateId: template.id, fieldKey: "cil" },
+        { role: "EFFECT_CI_UP", templateId: template.id, fieldKey: "ciu" },
+      ],
+    });
+    expect(mapped.mappingComplete).toBe(true); // CI pair substitutes for the SE
+
+    const results = await analysis.computeOutcomeResults(ctx(s.owner.id), s.project.id, outcome.id);
+    expect(results.scale).toBe("linear");
+    expect(results.nullValue).toBe(0);
+    const byId = new Map(results.rows.map((r) => [r.studyId, r]));
+    // se = (ciUp - ciLow) / (2 * 1.959963984540054); display is identity.
+    const row1 = byId.get(g1.id)!;
+    expect(row1.status).toBe("included");
+    expect(row1.effect!.se).toBeCloseTo(0.1173490950926704, 10);
+    expect(row1.effect!.display.estimate).toBe(row1.effect!.y);
+    expect(byId.get(g2.id)!.effect!.se).toBeCloseTo(0.17857470992362887, 10);
+    expect(byId.get(g3.id)!.effect!.se).toBeCloseTo(0.14796190250814964, 10);
+    // The engine (not the service) rejects an estimate outside its CI.
+    expect(byId.get(bad.id)!.status).toBe("not-pooled");
+    expect(byId.get(bad.id)!.reason).toMatch(/outside its confidence interval/);
+    // No SE and no CI pair -> incomplete, naming the mapped se-source roles.
+    expect(byId.get(partial.id)!.status).toBe("incomplete");
+    expect(byId.get(partial.id)!.reason).toMatch(/EFFECT_CI_LOW, EFFECT_CI_UP/);
+
+    expect(results.pooled.fixed!.y).toBeCloseTo(0.22244297241019076, 8);
+    expect(results.pooled.random!.y).toBeCloseTo(0.20277452289622538, 8);
+    expect(results.heterogeneity!.tau2).toBeCloseTo(0.0293442846499272, 8);
+    // k = 3 pooled studies -> PI present (identity display).
+    expect(results.predictionInterval!.low).toBeCloseTo(-2.5307259837791807, 6);
+    expect(results.predictionInterval!.high).toBeCloseTo(2.936275029571631, 6);
+    expect(results.predictionInterval!.display.low).toBe(results.predictionInterval!.low);
+    expect(results.egger!.k).toBe(3);
+  });
+
+  it("keeps the prediction interval null below k = 3", async () => {
+    const s = await setup();
+    const a = await s.makeStudy("Two-A 2020");
+    const b = await s.makeStudy("Two-B 2020");
+    await fillForm(s, a.id, s.extractor1.id, { e1: 30, n1: 60, e2: 15, n2: 60 });
+    await fillForm(s, b.id, s.extractor1.id, { e1: 18, n1: 47, e2: 6, n2: 50 });
+    const outcome = await binaryOutcome(s);
+    const results = await analysis.computeOutcomeResults(ctx(s.owner.id), s.project.id, outcome.id);
+    expect(results.rows.filter((r) => r.effect !== null)).toHaveLength(2);
+    expect(results.predictionInterval).toBeNull();
+    expect(results.egger).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Outcome-field scaffolding
+// ---------------------------------------------------------------------------
+
+describe("scaffoldOutcomeFields", () => {
+  it("creates fields + outcome + mappings atomically on a draft, with full audit", async () => {
+    const s = await setup();
+    const draft = await prisma.extractionTemplate.create({
+      data: {
+        projectId: s.project.id,
+        name: "Draft outcomes",
+        status: "DRAFT",
+        createdById: s.owner.id,
+        fields: { create: [{ key: "existing", label: "Existing", type: "NUMBER", order: 0 }] },
+      },
+    });
+
+    const row = await scaffoldOutcomeFields(ctx(s.statistician.id), s.project.id, {
+      templateId: draft.id,
+      measure: "PROPORTION",
+      name: "Pneumothorax rate",
+      keyPrefix: "ptx",
+      timepoint: "90 days",
+      proportionTransform: "FREEMAN_TUKEY",
+    });
+    expect(row.measure).toBe("PROPORTION");
+    expect(row.proportionTransform).toBe("FREEMAN_TUKEY");
+    expect(row.timepoint).toBe("90 days");
+    expect(row.mappingComplete).toBe(true);
+    expect(row.mappings).toEqual([
+      { role: "G1_EVENTS", templateId: draft.id, fieldKey: "ptx_g1_events" },
+      { role: "G1_TOTAL", templateId: draft.id, fieldKey: "ptx_g1_total" },
+    ]);
+
+    // Fields land on the draft, appended after existing ones, sectioned by outcome name.
+    const fields = await prisma.extractionField.findMany({
+      where: { templateId: draft.id },
+      orderBy: { order: "asc" },
+    });
+    expect(fields.map((f) => f.key)).toEqual(["existing", "ptx_g1_events", "ptx_g1_total"]);
+    expect(fields[1]).toMatchObject({
+      type: "NUMBER",
+      section: "Pneumothorax rate",
+      label: "Events",
+      order: 1,
+    });
+    expect(fields[2]).toMatchObject({ type: "NUMBER", label: "Sample size", order: 2 });
+
+    // Audit: one field event per created field + outcome-created + mappings-replaced.
+    const fieldEvents = await prisma.auditEvent.findMany({
+      where: {
+        projectId: s.project.id,
+        action: "extraction.field.created",
+        entityId: { in: fields.slice(1).map((f) => f.id) },
+      },
+    });
+    expect(fieldEvents).toHaveLength(2);
+    const outcomeEvents = await prisma.auditEvent.findMany({
+      where: { projectId: s.project.id, entityId: row.id },
+      select: { action: true, newValue: true },
+    });
+    expect(outcomeEvents.map((e) => e.action).sort()).toEqual([
+      "analysis.mappings.replaced",
+      "analysis.outcome.created",
+    ]);
+    const mappingEvent = outcomeEvents.find((e) => e.action === "analysis.mappings.replaced")!;
+    expect(
+      (mappingEvent.newValue as { mappings: Record<string, unknown> }).mappings.G1_EVENTS,
+    ).toEqual({ templateId: draft.id, fieldKey: "ptx_g1_events" });
+
+    // The scaffolded outcome computes like any other (no studies yet -> empty result).
+    const results = await analysis.computeOutcomeResults(ctx(s.owner.id), s.project.id, row.id);
+    expect(results.scale).toBe("ft");
+  });
+
+  it("rejects non-drafts, key collisions (no partial writes), R9, and missing permission", async () => {
+    const s = await setup();
+
+    // Published template: fields are frozen.
+    await expectAppError(
+      scaffoldOutcomeFields(ctx(s.statistician.id), s.project.id, {
+        templateId: s.template.id,
+        measure: "RR",
+        name: "Nope",
+        keyPrefix: "nope",
+      }),
+      "VALIDATION",
+    );
+
+    // Key collision -> VALIDATION and nothing written (single transaction).
+    const draft = await prisma.extractionTemplate.create({
+      data: {
+        projectId: s.project.id,
+        name: "Collision draft",
+        status: "DRAFT",
+        createdById: s.owner.id,
+        fields: { create: [{ key: "resp_g1_events", label: "Taken", type: "NUMBER", order: 0 }] },
+      },
+    });
+    const outcomesBefore = await prisma.analysisOutcome.count({ where: { projectId: s.project.id } });
+    await expectAppError(
+      scaffoldOutcomeFields(ctx(s.statistician.id), s.project.id, {
+        templateId: draft.id,
+        measure: "RR",
+        name: "Responders",
+        keyPrefix: "resp",
+      }),
+      "VALIDATION",
+    );
+    expect(await prisma.analysisOutcome.count({ where: { projectId: s.project.id } })).toBe(
+      outcomesBefore,
+    );
+    expect(await prisma.extractionField.count({ where: { templateId: draft.id } })).toBe(1);
+
+    // R9: a foreign project's draft is invisible from this project.
+    const foreign = await createProjectWithTeam();
+    const foreignDraft = await prisma.extractionTemplate.create({
+      data: {
+        projectId: foreign.project.id,
+        name: "Foreign draft",
+        status: "DRAFT",
+        createdById: foreign.owner.id,
+      },
+    });
+    await expectAppError(
+      scaffoldOutcomeFields(ctx(s.statistician.id), s.project.id, {
+        templateId: foreignDraft.id,
+        measure: "RR",
+        name: "Foreign",
+        keyPrefix: "foreign",
+      }),
+      "NOT_FOUND",
+    );
+
+    // Permissions: needs analysis.manage AND extraction.templates.
+    for (const user of [s.adjudicator, s.extractor1, s.reviewer]) {
+      await expectAppError(
+        scaffoldOutcomeFields(ctx(user.id), s.project.id, {
+          templateId: draft.id,
+          measure: "RR",
+          name: "Denied",
+          keyPrefix: "denied",
+        }),
+        "FORBIDDEN",
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ANALYSIS export
+// ---------------------------------------------------------------------------
+
+describe("ANALYSIS export", () => {
+  it("gates on export.create, applies requester blinding, and carries pooled numbers", async () => {
+    const s = await setup();
+    const a = await s.makeStudy("ExpA 2020");
+    const b = await s.makeStudy("ExpB 2020");
+    const hidden = await s.makeStudy("ExpHidden 2020");
+    // a + b: clean dual consensus; hidden: one completed form with the co-extraction
+    // still pending -> its SINGLE value is seeAll-only.
+    for (const e of [s.extractor1.id, s.extractor2.id]) {
+      await fillForm(s, a.id, e, { e1: 60, n1: 128, e2: 10, n2: 62 });
+      await fillForm(s, b.id, e, { e1: 18, n1: 47, e2: 6, n2: 50 });
+    }
+    await fillForm(s, hidden.id, s.extractor1.id, { e1: 30, n1: 60, e2: 15, n2: 60 });
+    const outcome = await binaryOutcome(s);
+
+    // Plain REVIEWER lacks export.create.
+    await expectAppError(
+      createExport(ctx(s.reviewer.id), s.project.id, { kind: "ANALYSIS", format: "JSON" }),
+      "FORBIDDEN",
+    );
+
+    // Statistician (blinded caller): JSON export with pooled numbers, no SINGLE leak.
+    const job = await createExport(ctx(s.statistician.id), s.project.id, {
+      kind: "ANALYSIS",
+      format: "JSON",
+    });
+    const file = await downloadExport(ctx(s.statistician.id), s.project.id, job.id);
+    expect(file.filename).toBe(`analysis-${s.project.id}.json`);
+    const body = JSON.parse(file.body) as {
+      outcomes: {
+        outcome: { name: string; measure: string };
+        rows: { label: string; status: string; values: Record<string, { value: number | null }> }[];
+        pooled: { random: { display: { estimate: number } } | null };
+        heterogeneity: { tau2: number } | null;
+      }[];
+    };
+    expect(body.outcomes).toHaveLength(1);
+    const exported = body.outcomes[0]!;
+    expect(exported.outcome).toMatchObject({ name: "Responders", measure: "RR" });
+    // Both consensus studies pool; the pooled RR sits between the study estimates.
+    expect(exported.rows.filter((r) => r.status === "included")).toHaveLength(2);
+    expect(exported.pooled.random!.display.estimate).toBeGreaterThan(2.5);
+    expect(exported.pooled.random!.display.estimate).toBeLessThan(3.5);
+    // Requester blinding: the lone pre-consensus extraction stays invisible.
+    const hiddenRow = exported.rows.find((r) => r.label === "ExpHidden 2020")!;
+    expect(hiddenRow.status).toBe("incomplete");
+    expect(hiddenRow.values.G1_EVENTS!.value).toBeNull();
+    expect(file.body).not.toContain('"SINGLE"');
+
+    // A seeAll requester (owner) exports the SINGLE value.
+    const ownerJob = await createExport(ctx(s.owner.id), s.project.id, {
+      kind: "ANALYSIS",
+      format: "JSON",
+    });
+    const ownerFile = await downloadExport(ctx(s.owner.id), s.project.id, ownerJob.id);
+    const ownerBody = JSON.parse(ownerFile.body) as typeof body;
+    const ownerHidden = ownerBody.outcomes[0]!.rows.find((r) => r.label === "ExpHidden 2020")!;
+    expect(ownerHidden.status).toBe("included");
+    expect(ownerHidden.values.G1_EVENTS!.value).toBe(30);
+
+    // CSV: sectioned rows with a leading recordType column.
+    const csvJob = await createExport(ctx(s.statistician.id), s.project.id, {
+      kind: "ANALYSIS",
+      format: "CSV",
+    });
+    const csvFile = await downloadExport(ctx(s.statistician.id), s.project.id, csvJob.id);
+    expect(csvFile.contentType).toContain("text/csv");
+    expect(csvFile.body).toContain("study_effect");
+    expect(csvFile.body).toContain("pooled");
+    expect(csvFile.body).toContain("outcome_summary");
+    expect(csvFile.body).toContain("Responders");
   });
 });

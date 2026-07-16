@@ -30,6 +30,8 @@ import type { Ctx } from "@/server/auth/session";
 import { can, requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
+import { matchQuote, normalizeForMatch } from "@/lib/quote-match";
+import { sourceAnchorV2Schema, type SourceAnchorV2 } from "@/types/source-anchor";
 import { validateFieldValue, valuesEqual, type FieldOption } from "./validation";
 
 // ---------------------------------------------------------------------------
@@ -107,6 +109,9 @@ export const upsertValueSchema = z.object({
   value: z.unknown(), // typed against the field in the service; null (or omitted) clears
   sourceQuote: z.string().trim().min(1).max(8000).nullable().optional(),
   pageNumber: z.number().int().min(1).nullable().optional(),
+  // Anchor v2 (src/types/source-anchor): where the quote lives in the study's PDF.
+  // fileId is R9-checked against the project in the service; null clears the anchor.
+  sourceAnchor: sourceAnchorV2Schema.nullable().optional(),
   notes: z.string().trim().max(8000).nullable().optional(),
   // Apply an AI suggestion (server-authoritative): when present, value/sourceQuote/
   // pageNumber/sourceAnchor are copied from the ExtractionSuggestion row — the client
@@ -429,6 +434,18 @@ export async function updateField(
     if (!field) throw notFound("Extraction field");
 
     const nextType = input.type ?? field.type;
+    // Analysis mappings require NUMBER fields; retyping a mapped draft field would
+    // silently starve its roles (same guard family as the rename/delete checks below).
+    if (nextType !== field.type) {
+      const mapped = await tx.analysisFieldMap.count({
+        where: { templateId: template.id, fieldKey: field.key },
+      });
+      if (mapped > 0) {
+        throw invalidState(
+          `Field "${field.key}" is mapped to ${mapped} analysis role(s) — remove the mappings before changing its type`,
+        );
+      }
+    }
     const nextOptions =
       input.options !== undefined ? input.options : (field.options as FieldOption[] | null);
     const options = normalizeOptions(nextType, nextOptions);
@@ -438,6 +455,16 @@ export async function updateField(
         where: { templateId_key: { templateId: template.id, key: input.key } },
       });
       if (dupe) throw conflict(`A field with key "${input.key}" already exists in this template`);
+      // Analysis mappings reference (templateId, fieldKey) with no FK (lineage survival);
+      // renaming a mapped key would orphan them (scaffolded outcomes map draft fields).
+      const mapped = await tx.analysisFieldMap.count({
+        where: { templateId: template.id, fieldKey: field.key },
+      });
+      if (mapped > 0) {
+        throw invalidState(
+          `Field "${field.key}" is mapped to ${mapped} analysis role(s) — remove the mappings before renaming its key`,
+        );
+      }
     }
 
     const updated = await tx.extractionField.update({
@@ -497,6 +524,16 @@ export async function deleteField(
       where: { id: fieldId, templateId: template.id },
     });
     if (!field) throw notFound("Extraction field");
+    // Analysis mappings reference (templateId, fieldKey) without an FK — refuse to
+    // delete a mapped field (would leave a mapping that resolves to nothing).
+    const mapped = await tx.analysisFieldMap.count({
+      where: { templateId: template.id, fieldKey: field.key },
+    });
+    if (mapped > 0) {
+      throw invalidState(
+        `Field "${field.key}" is mapped to ${mapped} analysis role(s) — remove the mappings before deleting it`,
+      );
+    }
     // Forms only ever attach to PUBLISHED templates, so a DRAFT field has no values.
     await tx.extractionField.delete({ where: { id: field.id } });
     await audit.record(tx, {
@@ -718,6 +755,102 @@ export async function listForms(
 // Values
 // ---------------------------------------------------------------------------
 
+// Manual-save anchor resolution (the appliedSuggestionId path copies the suggestion's
+// anchor verbatim instead). R9: the body-supplied fileId must belong to this project.
+// When the file has an EXTRACTED server text layer and a quote accompanies the anchor,
+// the SERVER's match result is authoritative — stored offsets must index OUR stored
+// page text, never the client's pdf.js output. A client "selection" keeps its
+// provenance label but takes the server's offsets/score.
+async function resolveManualAnchor(
+  tx: Tx,
+  projectId: string,
+  anchor: SourceAnchorV2,
+  quote: string | null | undefined,
+): Promise<SourceAnchorV2> {
+  const file = await tx.fullTextFile.findFirst({
+    where: { id: anchor.fileId, projectId },
+    select: { id: true, pageCount: true, textStatus: true, textVersion: true },
+  });
+  if (!file) throw notFound("File");
+  if (file.pageCount !== null && anchor.page > file.pageCount) {
+    throw validationError(
+      `Anchor page ${anchor.page} is beyond the document (${file.pageCount} pages)`,
+    );
+  }
+  const keepSelectionLabel = anchor.matchQuality === "selection";
+  if (file.textStatus !== "EXTRACTED") {
+    // No server text layer: client offsets index nothing we store — keep the page and
+    // the provenance label, drop the offsets (the viewer re-locates by quote anyway).
+    if (anchor.charStart === undefined) return anchor;
+    const { charStart: _cs, charEnd: _ce, ...pageLevel } = anchor;
+    return pageLevel;
+  }
+  const rows = await tx.fullTextPage.findMany({
+    where: { fileId: file.id },
+    orderBy: { page: "asc" },
+    select: { page: true, text: true },
+  });
+  const pages = rows.map((r) => ({ page: r.page, text: normalizeForMatch(r.text) }));
+  const anchorPageText = pages.find((p) => p.page === anchor.page)?.text;
+  const offsetsInBounds =
+    anchor.charStart !== undefined &&
+    anchor.charEnd !== undefined &&
+    anchorPageText !== undefined &&
+    anchor.charEnd <= anchorPageText.length;
+
+  if (!quote) {
+    // No quote to verify content against — keep offsets only when they are at least
+    // bounds-sane for our stored text, and stamp the version they were checked against.
+    if (!offsetsInBounds) {
+      const { charStart: _cs, charEnd: _ce, ...pageLevel } = anchor;
+      return { ...pageLevel, textVersion: file.textVersion };
+    }
+    return { ...anchor, textVersion: file.textVersion };
+  }
+
+  // A user selection that verifies against OUR text keeps its exact offsets — the
+  // quote may occur several times on the page ("12 months", "45%") and matchQuote
+  // would snap every occurrence to the first one, erasing the user's disambiguation.
+  if (keepSelectionLabel && offsetsInBounds) {
+    const selected = anchorPageText!.slice(anchor.charStart, anchor.charEnd);
+    if (selected.toLowerCase() === normalizeForMatch(quote).toLowerCase()) {
+      return {
+        v: 2,
+        fileId: file.id,
+        page: anchor.page,
+        charStart: anchor.charStart,
+        charEnd: anchor.charEnd,
+        matchQuality: "selection",
+        matchScore: 1,
+        textVersion: file.textVersion,
+      };
+    }
+  }
+
+  const m = matchQuote(pages, quote, anchor.page);
+  if (m.quality === "exact" || m.quality === "fuzzy") {
+    return {
+      v: 2,
+      fileId: file.id,
+      page: m.page,
+      charStart: m.charStart,
+      charEnd: m.charEnd,
+      matchQuality: keepSelectionLabel ? "selection" : m.quality,
+      matchScore: m.score,
+      textVersion: file.textVersion,
+    };
+  }
+  // Verification failed: client offsets can't be trusted against our text — keep the
+  // page (already bounds-checked) and the provenance label, drop the offsets.
+  return {
+    v: 2,
+    fileId: file.id,
+    page: anchor.page,
+    matchQuality: keepSelectionLabel ? "selection" : "page-only",
+    textVersion: file.textVersion,
+  };
+}
+
 export async function upsertValue(
   ctx: Ctx,
   projectId: string,
@@ -783,6 +916,22 @@ export async function upsertValue(
         ? null
         : input.value;
 
+    // Anchor v2 on manual saves: validate/verify the body's anchor before it can be
+    // stored (null clears it; the apply path below copies the suggestion's instead).
+    // Resolved only for real writes — a clear discards provenance with the row.
+    let manualAnchor: Prisma.InputJsonValue | typeof Prisma.JsonNull | undefined;
+    if (!appliedSuggestion && input.sourceAnchor !== undefined && rawValue !== null) {
+      manualAnchor =
+        input.sourceAnchor === null
+          ? Prisma.JsonNull
+          : ((await resolveManualAnchor(
+              tx,
+              projectId,
+              input.sourceAnchor,
+              input.sourceQuote,
+            )) as unknown as Prisma.InputJsonValue);
+    }
+
     // Provenance written alongside the value: on apply it comes from the suggestion row
     // (including the sourceAnchor slot); on manual edits only explicitly provided fields
     // change, matching the existing behavior.
@@ -799,6 +948,7 @@ export async function upsertValue(
       : {
           ...(input.sourceQuote !== undefined && { sourceQuote: input.sourceQuote }),
           ...(input.pageNumber !== undefined && { pageNumber: input.pageNumber }),
+          ...(manualAnchor !== undefined && { sourceAnchor: manualAnchor }),
           ...(input.notes !== undefined && { notes: input.notes }),
         };
     const aiAuditMetadata = appliedSuggestion
@@ -824,6 +974,7 @@ export async function upsertValue(
             value: existing.value,
             sourceQuote: existing.sourceQuote,
             pageNumber: existing.pageNumber,
+            sourceAnchor: existing.sourceAnchor,
           },
           newValue: { value: null },
           metadata: { cleared: true, formId: form.id, fieldKey: field.key },
@@ -848,11 +999,13 @@ export async function upsertValue(
             value: existing.value,
             sourceQuote: existing.sourceQuote,
             pageNumber: existing.pageNumber,
+            sourceAnchor: existing.sourceAnchor,
           },
           newValue: {
             value: result.value,
             sourceQuote: result.sourceQuote,
             pageNumber: result.pageNumber,
+            sourceAnchor: result.sourceAnchor,
           },
           metadata: { formId: form.id, fieldKey: field.key, ...aiAuditMetadata },
         });
@@ -878,6 +1031,7 @@ export async function upsertValue(
             value: result.value,
             sourceQuote: result.sourceQuote,
             pageNumber: result.pageNumber,
+            sourceAnchor: result.sourceAnchor,
           },
           metadata: { formId: form.id, fieldKey: field.key, ...aiAuditMetadata },
         });

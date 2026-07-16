@@ -1,6 +1,7 @@
 {
   "name": "binary-rd",
   "measure": "RD",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "b01",
@@ -334,6 +335,25 @@
       "p": 0.006614801121159588,
       "i2": 60.55995593452901,
       "tau2": 0.002594396929875589
+    },
+    "predictionInterval": {
+      "low": -0.17997457284002277,
+      "high": 0.07595202953108166,
+      "display": {
+        "low": -0.17997457284002277,
+        "high": 0.07595202953108166
+      }
+    },
+    "egger": {
+      "intercept": -1.9988343034730165,
+      "interceptSe": 1.2193840433496783,
+      "t": -1.6392163850054728,
+      "p": 0.1398000768450236,
+      "k": 10
+    },
+    "displayMeta": {
+      "transform": "identity",
+      "harmonicN": null
     }
   }
 }

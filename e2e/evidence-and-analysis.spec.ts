@@ -73,8 +73,9 @@ test("analysis page renders a live forest plot from extracted data", async ({ pa
   await expect(page.getByText(/Random effects \(DL\): 3\.00 \[1\.85, 4\.87\]/)).toBeVisible();
   await expect(page.getByText(/I²=0\.0%/)).toBeVisible();
 
-  // The forest plot itself renders as an inline SVG image.
-  const plot = page.locator('img[src^="data:image/svg+xml"]');
+  // The forest plot itself renders as an inline SVG image (the funnel plot is a
+  // second data-URI image on the page, so target the first).
+  const plot = page.locator('img[src^="data:image/svg+xml"]').first();
   await expect(plot).toBeVisible();
   await expectNoErrorOverlay(page);
 });

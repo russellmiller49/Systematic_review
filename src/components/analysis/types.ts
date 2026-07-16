@@ -7,9 +7,10 @@ import { ApiError } from "@/lib/api";
 
 // --- Outcomes ------------------------------------------------------------------
 
-export type EffectMeasure = "RR" | "OR" | "RD" | "MD" | "SMD";
+export type EffectMeasure = "RR" | "OR" | "RD" | "MD" | "SMD" | "PROPORTION" | "GENERIC_IV";
 export type EffectDirection = "HIGHER_IS_BETTER" | "LOWER_IS_BETTER";
 export type PoolingModel = "FIXED" | "RANDOM";
+export type ProportionTransform = "LOGIT" | "FREEMAN_TUKEY";
 
 export interface GroupLabels {
   g1?: string;
@@ -30,6 +31,7 @@ export interface AnalysisOutcomeRow {
   measure: EffectMeasure;
   direction: EffectDirection;
   model: PoolingModel;
+  proportionTransform: ProportionTransform; // meaningful for PROPORTION only
   groupLabels: GroupLabels | null;
   order: number;
   outcomeDefinitionId: string | null;
@@ -88,6 +90,31 @@ export interface Heterogeneity {
   tau2: number;
 }
 
+// Mirrors stats-lib PredictionInterval (random effects, k >= 3 only).
+export interface PredictionInterval {
+  low: number;
+  high: number;
+  display: { low: number; high: number };
+}
+
+// Mirrors stats-lib EggerResult (k >= 3 only).
+export interface EggerResult {
+  intercept: number;
+  interceptSe: number;
+  t: number;
+  p: number;
+  k: number;
+}
+
+// Analysis scale ("logit"/"ft" are PROPORTION's transformed scales) + how display
+// values relate to it (harmonicN parameterizes the FT inverse for pooled values).
+export type AnalysisScale = "log" | "linear" | "logit" | "ft";
+
+export interface DisplayMeta {
+  transform: "identity" | "exp" | "invlogit" | "ft";
+  harmonicN: number | null;
+}
+
 export type RowStatus =
   | "included"
   | "provisional"
@@ -115,12 +142,15 @@ export interface AnalysisResultRow {
 
 export interface AnalysisResults {
   outcome: AnalysisOutcomeRow;
-  groupLabels: { g1: string; g2: string };
+  groupLabels: { g1: string; g2: string }; // PROPORTION uses g1 only (the cohort)
   rows: AnalysisResultRow[];
   pooled: { fixed: PooledEstimate | null; random: PooledEstimate | null };
   heterogeneity: Heterogeneity | null;
-  scale: "log" | "linear";
-  nullValue: number;
+  predictionInterval: PredictionInterval | null;
+  egger: EggerResult | null;
+  scale: AnalysisScale;
+  nullValue: number | null; // null for PROPORTION — the forest plot omits the null line
+  displayMeta: DisplayMeta;
   // False when the caller may not see provisional/blinded data — the server then
   // ignores ?provisional=1 and the UI hides the "Include provisional" toggle.
   provisionalAllowed: boolean;
@@ -134,6 +164,8 @@ export const MEASURE_LABELS: Record<EffectMeasure, string> = {
   RD: "Risk difference",
   MD: "Mean difference",
   SMD: "Std. mean difference (Hedges g)",
+  PROPORTION: "Proportion (single arm)",
+  GENERIC_IV: "Generic inverse variance",
 };
 
 // Ordered options for the create dialog's measure select.
@@ -143,12 +175,25 @@ export const MEASURE_OPTIONS: { value: EffectMeasure; label: string }[] = [
   { value: "RD", label: "Risk difference" },
   { value: "MD", label: "Mean difference" },
   { value: "SMD", label: "Std. mean difference (Hedges g)" },
+  { value: "PROPORTION", label: "Proportion (single arm)" },
+  { value: "GENERIC_IV", label: "Generic inverse variance" },
 ];
+
+export const PROPORTION_TRANSFORM_LABELS: Record<ProportionTransform, string> = {
+  LOGIT: "Logit",
+  FREEMAN_TUKEY: "Freeman–Tukey (double arcsine)",
+};
 
 const BINARY_MEASURES: readonly EffectMeasure[] = ["RR", "OR", "RD"];
 
 export function isBinaryMeasure(measure: EffectMeasure): boolean {
   return BINARY_MEASURES.includes(measure);
+}
+
+const CONTINUOUS_MEASURES: readonly EffectMeasure[] = ["MD", "SMD"];
+
+export function isContinuousMeasure(measure: EffectMeasure): boolean {
+  return CONTINUOUS_MEASURES.includes(measure);
 }
 
 export const DIRECTION_LABELS: Record<EffectDirection, string> = {
@@ -202,11 +247,18 @@ export const SOURCE_BADGE: Record<ValueSource, { label: string; variant: Analysi
 
 // --- Small formatting helpers -----------------------------------------------------
 
-export function resolveGroupLabels(labels: GroupLabels | null | undefined): {
+/** PROPORTION is single-arm: its default G1 label is "Cohort" (mirrors the server). */
+export function resolveGroupLabels(
+  labels: GroupLabels | null | undefined,
+  measure?: EffectMeasure,
+): {
   g1: string;
   g2: string;
 } {
-  return { g1: labels?.g1 || "Group 1", g2: labels?.g2 || "Group 2" };
+  return {
+    g1: labels?.g1 || (measure === "PROPORTION" ? "Cohort" : "Group 1"),
+    g2: labels?.g2 || "Group 2",
+  };
 }
 
 const ROLE_SUFFIX_LABELS: Record<string, string> = {
@@ -217,8 +269,20 @@ const ROLE_SUFFIX_LABELS: Record<string, string> = {
   N: "n",
 };
 
-/** "G1_EVENTS" + {g1: "Stent"} → "Stent events"; unknown roles fall back to the raw key. */
+const EFFECT_ROLE_LABELS: Record<string, string> = {
+  EFFECT_ESTIMATE: "Effect estimate",
+  EFFECT_SE: "Standard error",
+  EFFECT_CI_LOW: "95% CI lower",
+  EFFECT_CI_UP: "95% CI upper",
+};
+
+/**
+ * "G1_EVENTS" + {g1: "Stent"} → "Stent events"; EFFECT_* roles get fixed labels;
+ * anything else falls back to the raw key.
+ */
 export function roleLabel(role: string, groups: { g1: string; g2: string }): string {
+  const effectLabel = EFFECT_ROLE_LABELS[role];
+  if (effectLabel) return effectLabel;
   const match = /^(G1|G2)_(.+)$/.exec(role);
   const group = match?.[1];
   const suffix = match?.[2];

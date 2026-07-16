@@ -1,0 +1,177 @@
+{
+  "name": "generic-iv-ci",
+  "measure": "GENERIC_IV",
+  "proportionTransform": null,
+  "studies": [
+    {
+      "id": "c01",
+      "label": "GenCI 01",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.25,
+          "se": null,
+          "ciLow": 0.02,
+          "ciUp": 0.48
+        }
+      }
+    },
+    {
+      "id": "c02",
+      "label": "GenCI 02",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": -0.1,
+          "se": null,
+          "ciLow": -0.45,
+          "ciUp": 0.25
+        }
+      }
+    },
+    {
+      "id": "c03",
+      "label": "GenCI 03",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.4,
+          "se": null,
+          "ciLow": 0.11,
+          "ciUp": 0.69
+        }
+      }
+    },
+    {
+      "id": "c04",
+      "label": "GenCI 04 (outside CI)",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.9,
+          "se": null,
+          "ciLow": 0.1,
+          "ciUp": 0.6
+        }
+      }
+    },
+    {
+      "id": "c05",
+      "label": "GenCI 05 (inverted CI)",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.2,
+          "se": null,
+          "ciLow": 0.5,
+          "ciUp": 0.1
+        }
+      }
+    }
+  ],
+  "expected": {
+    "studies": [
+      {
+        "id": "c01",
+        "label": "GenCI 01",
+        "y": 0.25,
+        "se": 0.1173490950926704,
+        "ciLow": 0.020000000000000018,
+        "ciHigh": 0.48,
+        "display": {
+          "estimate": 0.25,
+          "ciLow": 0.020000000000000018,
+          "ciHigh": 0.48
+        },
+        "weightFixedPct": 48.52367178974151,
+        "weightRandomPct": 39.2835258731186
+      },
+      {
+        "id": "c02",
+        "label": "GenCI 02",
+        "y": -0.1,
+        "se": 0.17857470992362887,
+        "ciLow": -0.44999999999999996,
+        "ciHigh": 0.24999999999999997,
+        "display": {
+          "estimate": -0.1,
+          "ciLow": -0.44999999999999996,
+          "ciHigh": 0.24999999999999997
+        },
+        "weightFixedPct": 20.954303981039395,
+        "weightRandomPct": 27.660037658819338
+      },
+      {
+        "id": "c03",
+        "label": "GenCI 03",
+        "y": 0.4,
+        "se": 0.14796190250814964,
+        "ciLow": 0.11000000000000004,
+        "ciHigh": 0.69,
+        "display": {
+          "estimate": 0.4,
+          "ciLow": 0.11000000000000004,
+          "ciHigh": 0.69
+        },
+        "weightFixedPct": 30.52202422921909,
+        "weightRandomPct": 33.05643646806205
+      }
+    ],
+    "excludedIds": [
+      "c04",
+      "c05"
+    ],
+    "fixed": {
+      "y": 0.22244297241019076,
+      "se": 0.08174412948319505,
+      "ciLow": 0.062227422675549676,
+      "ciHigh": 0.38265852214483187,
+      "display": {
+        "estimate": 0.22244297241019076,
+        "ciLow": 0.062227422675549676,
+        "ciHigh": 0.38265852214483187
+      },
+      "z": 2.7212103647873644,
+      "p": 0.0065043355346603325
+    },
+    "random": {
+      "y": 0.20277452289622538,
+      "se": 0.1301427270683924,
+      "ciLow": -0.052300535007649696,
+      "ciHigh": 0.45784958080010046,
+      "display": {
+        "estimate": 0.20277452289622538,
+        "ciLow": -0.052300535007649696,
+        "ciHigh": 0.45784958080010046
+      },
+      "z": 1.5580933907252739,
+      "p": 0.119211111222135
+    },
+    "heterogeneity": {
+      "q": 4.755552175986314,
+      "df": 2,
+      "p": 0.09275663088827478,
+      "i2": 57.94389534617619,
+      "tau2": 0.0293442846499272
+    },
+    "predictionInterval": {
+      "low": -2.5307259837791807,
+      "high": 2.936275029571631,
+      "display": {
+        "low": -2.5307259837791807,
+        "high": 2.936275029571631
+      }
+    },
+    "egger": {
+      "intercept": -4.272821054612281,
+      "interceptSe": 6.045039314900263,
+      "t": -0.70683097859766,
+      "p": 0.60829051744305,
+      "k": 3
+    },
+    "displayMeta": {
+      "transform": "identity",
+      "harmonicN": null
+    }
+  }
+}

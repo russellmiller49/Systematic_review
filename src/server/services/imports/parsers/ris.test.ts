@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseRis } from "./ris";
 import {
+  RIS_AFFILIATIONS,
   RIS_BOM_CRLF,
   RIS_EMPTY,
   RIS_MALFORMED,
@@ -106,6 +107,27 @@ describe("parseRis", () => {
     expect(records).toEqual([]);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message).toMatch(/empty/i);
+  });
+});
+
+describe("parseRis affiliations + registry ids", () => {
+  it("records without AD/C1 still carry empty affiliation/registry fields", () => {
+    for (const rec of parseRis(RIS_PUBMED_5).records) {
+      expect(rec.affiliations).toEqual([]);
+      expect(rec.registryIds).toEqual([]);
+    }
+  });
+
+  it("captures AD + C1 as a unique bag and registry ids from the abstract", () => {
+    const { records, errors } = parseRis(RIS_AFFILIATIONS);
+    expect(errors).toEqual([]);
+    expect(records).toHaveLength(1);
+    const rec = records[0]!;
+    expect(rec.affiliations).toEqual([
+      "Temple University, Philadelphia, PA, USA. gerard.criner@tuhs.temple.edu",
+      "University of Alabama at Birmingham, Birmingham, AL, USA",
+    ]);
+    expect(rec.registryIds).toEqual(["ISRCTN04761234", "NCT01796392"]);
   });
 });
 

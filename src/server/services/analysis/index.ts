@@ -3,8 +3,10 @@
 // resolve-values.ts and delegates all statistics to the pure stats library.
 //
 // Contract highlights:
-//   - Phase A measures only (RR/OR/RD binary 2x2; MD/SMD continuous); measure is
-//     immutable after creation.
+//   - Measures: RR/OR/RD (binary 2x2), MD/SMD (continuous), PROPORTION (single-arm
+//     e/n; logit or Freeman–Tukey transform, editable any time — results recompute
+//     live), GENERIC_IV (pre-computed estimate + SE, or SE derived from 95% CI
+//     bounds). Measure is immutable after creation.
 //   - R9: outcome loads are project-scoped; outcomeDefinitionId / templateId / studyId
 //     from request bodies must belong to the path project.
 //   - Mappings are replace-all: each role points at (templateId, fieldKey) where the
@@ -16,22 +18,24 @@
 import { z } from "zod";
 import { AnalysisRole, Prisma, type EffectMeasure } from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
-import { invalidState, notFound, validationError } from "@/server/errors";
+import { notFound, validationError } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { can, requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { computeMeta } from "@/lib/stats/meta";
-import {
-  nullValueFor,
-  scaleFor,
-  type AnalysisScale,
-  type EffectMeasureId,
-  type Heterogeneity,
-  type PooledEstimate,
-  type StudyData,
-  type StudyEffectInput,
-  type StudyEffectResult,
+import type {
+  AnalysisScale,
+  DisplayMeta,
+  EffectMeasureId,
+  EggerResult,
+  Heterogeneity,
+  PooledEstimate,
+  PredictionInterval,
+  ProportionTransformId,
+  StudyData,
+  StudyEffectInput,
+  StudyEffectResult,
 } from "@/lib/stats/types";
 import { fetchResolvedRoleValues, type NumericSource } from "./resolve-values";
 
@@ -39,7 +43,8 @@ import { fetchResolvedRoleValues, type NumericSource } from "./resolve-values";
 // Schemas
 // ---------------------------------------------------------------------------
 
-const PHASE_A_MEASURES = ["RR", "OR", "RD", "MD", "SMD"] as const;
+export const ALL_MEASURES = ["RR", "OR", "RD", "MD", "SMD", "PROPORTION", "GENERIC_IV"] as const;
+const PROPORTION_TRANSFORMS = ["LOGIT", "FREEMAN_TUKEY"] as const;
 
 const groupLabelsSchema = z.object({
   g1: z.string().trim().max(120).optional(),
@@ -48,15 +53,17 @@ const groupLabelsSchema = z.object({
 
 export const createOutcomeSchema = z.object({
   name: z.string().trim().min(1).max(300),
-  measure: z.enum(PHASE_A_MEASURES),
+  measure: z.enum(ALL_MEASURES),
   timepoint: z.string().trim().max(200).optional(),
   direction: z.enum(["HIGHER_IS_BETTER", "LOWER_IS_BETTER"]).optional(),
   model: z.enum(["FIXED", "RANDOM"]).optional(),
   groupLabels: groupLabelsSchema.optional(),
   outcomeDefinitionId: z.string().min(1).optional(),
+  proportionTransform: z.enum(PROPORTION_TRANSFORMS).optional(), // PROPORTION only (default LOGIT)
 });
 
 // Same as create minus measure (immutable); nullables clear the stored value.
+// proportionTransform is editable any time — results are recomputed live, never stored.
 export const updateOutcomeSchema = z.object({
   name: z.string().trim().min(1).max(300).optional(),
   timepoint: z.string().trim().max(200).nullable().optional(),
@@ -64,6 +71,7 @@ export const updateOutcomeSchema = z.object({
   model: z.enum(["FIXED", "RANDOM"]).optional(),
   groupLabels: groupLabelsSchema.nullable().optional(),
   outcomeDefinitionId: z.string().min(1).nullable().optional(),
+  proportionTransform: z.enum(PROPORTION_TRANSFORMS).optional(),
 });
 
 export const replaceMappingsSchema = z.object({
@@ -94,6 +102,14 @@ export const setExclusionSchema = z
 
 const BINARY_ROLES: AnalysisRole[] = ["G1_EVENTS", "G1_TOTAL", "G2_EVENTS", "G2_TOTAL"];
 const CONTINUOUS_ROLES: AnalysisRole[] = ["G1_MEAN", "G1_SD", "G1_N", "G2_MEAN", "G2_SD", "G2_N"];
+const PROPORTION_ROLES: AnalysisRole[] = ["G1_EVENTS", "G1_TOTAL"]; // single arm: G1 = the cohort
+// GENERIC_IV accepts all four EFFECT_* roles; completeness is se-source aware (see below).
+const GENERIC_ROLES: AnalysisRole[] = [
+  "EFFECT_ESTIMATE",
+  "EFFECT_SE",
+  "EFFECT_CI_LOW",
+  "EFFECT_CI_UP",
+];
 
 export function requiredRolesFor(measure: EffectMeasure): AnalysisRole[] {
   switch (measure) {
@@ -104,17 +120,28 @@ export function requiredRolesFor(measure: EffectMeasure): AnalysisRole[] {
     case "MD":
     case "SMD":
       return CONTINUOUS_ROLES;
+    case "PROPORTION":
+      return PROPORTION_ROLES;
+    case "GENERIC_IV":
+      return GENERIC_ROLES;
     default:
-      return []; // phase B measures — no phase-A role set
+      return [];
   }
 }
 
-// The API only creates phase-A outcomes; guard against forward-compat seed rows.
-function phaseAMeasure(measure: EffectMeasure): EffectMeasureId {
-  if (measure === "PROPORTION" || measure === "GENERIC_IV") {
-    throw invalidState(`Measure ${measure} is not supported yet`);
+// Measure-aware mapping completeness: GENERIC_IV needs the estimate plus EITHER a
+// standard error OR both 95% CI bounds; every other measure needs all its roles.
+export function isMappingComplete(
+  measure: EffectMeasure,
+  mapped: ReadonlySet<AnalysisRole>,
+): boolean {
+  if (measure === "GENERIC_IV") {
+    return (
+      mapped.has("EFFECT_ESTIMATE") &&
+      (mapped.has("EFFECT_SE") || (mapped.has("EFFECT_CI_LOW") && mapped.has("EFFECT_CI_UP")))
+    );
   }
-  return measure;
+  return requiredRolesFor(measure).every((role) => mapped.has(role));
 }
 
 // AnalysisOutcome.groupLabels is Json? — normalize to the typed shape (null if unusable).
@@ -134,6 +161,7 @@ export interface AnalysisOutcomeRow {
   measure: EffectMeasureId;
   direction: "HIGHER_IS_BETTER" | "LOWER_IS_BETTER";
   model: "FIXED" | "RANDOM";
+  proportionTransform: ProportionTransformId; // meaningful for PROPORTION only
   groupLabels: { g1?: string; g2?: string } | null;
   order: number;
   outcomeDefinitionId: string | null;
@@ -144,7 +172,8 @@ export interface AnalysisOutcomeRow {
 
 type OutcomeWithMappings = Prisma.AnalysisOutcomeGetPayload<{ include: { mappings: true } }>;
 
-function toRow(outcome: OutcomeWithMappings): AnalysisOutcomeRow {
+// Exported for scaffold.ts (same service family) — not part of the route surface.
+export function toRow(outcome: OutcomeWithMappings): AnalysisOutcomeRow {
   const requiredRoles = requiredRolesFor(outcome.measure);
   const mapped = new Set(outcome.mappings.map((m) => m.role));
   // Stable ordering: required-role order first, any stragglers after.
@@ -159,6 +188,7 @@ function toRow(outcome: OutcomeWithMappings): AnalysisOutcomeRow {
     measure: outcome.measure as EffectMeasureId,
     direction: outcome.direction,
     model: outcome.model,
+    proportionTransform: outcome.proportionTransform,
     groupLabels: parseGroupLabels(outcome.groupLabels),
     order: outcome.order,
     outcomeDefinitionId: outcome.outcomeDefinitionId,
@@ -166,7 +196,7 @@ function toRow(outcome: OutcomeWithMappings): AnalysisOutcomeRow {
       .sort((a, b) => roleIndex(a.role) - roleIndex(b.role))
       .map((m) => ({ role: m.role, templateId: m.templateId, fieldKey: m.fieldKey })),
     requiredRoles,
-    mappingComplete: requiredRoles.every((role) => mapped.has(role)),
+    mappingComplete: isMappingComplete(outcome.measure, mapped),
   };
 }
 
@@ -235,6 +265,9 @@ export async function createOutcome(
         timepoint: input.timepoint ?? null,
         ...(input.direction !== undefined ? { direction: input.direction } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.proportionTransform !== undefined
+          ? { proportionTransform: input.proportionTransform }
+          : {}),
         ...(input.groupLabels !== undefined
           ? { groupLabels: input.groupLabels as Prisma.InputJsonValue }
           : {}),
@@ -256,6 +289,7 @@ export async function createOutcome(
         timepoint: outcome.timepoint,
         direction: outcome.direction,
         model: outcome.model,
+        proportionTransform: outcome.proportionTransform,
         outcomeDefinitionId: outcome.outcomeDefinitionId,
       },
     });
@@ -282,6 +316,9 @@ export async function updateOutcome(
         ...(input.timepoint !== undefined ? { timepoint: input.timepoint } : {}),
         ...(input.direction !== undefined ? { direction: input.direction } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.proportionTransform !== undefined
+          ? { proportionTransform: input.proportionTransform }
+          : {}),
         ...(input.groupLabels !== undefined
           ? {
               groupLabels:
@@ -307,6 +344,7 @@ export async function updateOutcome(
         timepoint: outcome.timepoint,
         direction: outcome.direction,
         model: outcome.model,
+        proportionTransform: outcome.proportionTransform,
         groupLabels: outcome.groupLabels,
         outcomeDefinitionId: outcome.outcomeDefinitionId,
       },
@@ -315,6 +353,7 @@ export async function updateOutcome(
         timepoint: updated.timepoint,
         direction: updated.direction,
         model: updated.model,
+        proportionTransform: updated.proportionTransform,
         groupLabels: updated.groupLabels,
         outcomeDefinitionId: updated.outcomeDefinitionId,
       },
@@ -538,12 +577,15 @@ export interface AnalysisResultRow {
 
 export interface AnalysisResults {
   outcome: AnalysisOutcomeRow;
-  groupLabels: { g1: string; g2: string };
+  groupLabels: { g1: string; g2: string }; // PROPORTION uses g1 only (the cohort)
   rows: AnalysisResultRow[];
   pooled: { fixed: PooledEstimate | null; random: PooledEstimate | null };
   heterogeneity: Heterogeneity | null;
+  predictionInterval: PredictionInterval | null; // random effects, k >= 3
+  egger: EggerResult | null; // k >= 3
   scale: AnalysisScale;
-  nullValue: number;
+  nullValue: number | null; // null for PROPORTION (no meaningful null line)
+  displayMeta: DisplayMeta; // back-transform metadata (FT harmonic mean etc.)
   // False for callers under the extraction blind — the server then ignores
   // ?provisional=1 and withholds pre-consensus SINGLE values / dispute detail.
   provisionalAllowed: boolean;
@@ -562,10 +604,9 @@ export async function computeOutcomeResults(
   // open, and the existence of extraction disagreements.
   const seeAll = can(member.roles, "extraction.adjudicate") || can(member.roles, "project.edit");
   const outcome = await loadOutcome(prisma, projectId, outcomeId);
-  const measure = phaseAMeasure(outcome.measure);
+  const measure = outcome.measure as EffectMeasureId;
   const required = requiredRolesFor(outcome.measure);
   const includeProvisional = query.includeProvisional === true && seeAll;
-  const continuous = measure === "MD" || measure === "SMD";
 
   const [studies, exclusions] = await Promise.all([
     prisma.study.findMany({
@@ -590,6 +631,7 @@ export async function computeOutcomeResults(
   const rows: AnalysisResultRow[] = [];
   const candidateRows = new Map<string, AnalysisResultRow>();
   const inputs: StudyEffectInput[] = [];
+  const mappedRoles = new Set(outcome.mappings.map((m) => m.role));
 
   for (const study of studies) {
     const base = {
@@ -606,7 +648,7 @@ export async function computeOutcomeResults(
     const roleValues = resolved.get(study.id) ?? {};
     const values: AnalysisResultRow["values"] = {};
     const disputedRoles: AnalysisRole[] = [];
-    const missingRoles: AnalysisRole[] = [];
+    let missingRoles: AnalysisRole[] = [];
     let provisional = false;
     for (const role of required) {
       const r = roleValues[role] ?? { value: null, source: null, disputed: false };
@@ -614,6 +656,30 @@ export async function computeOutcomeResults(
       if (r.disputed) disputedRoles.push(role);
       else if (r.value === null) missingRoles.push(role);
       if (r.source === "PROVISIONAL") provisional = true;
+    }
+
+    // GENERIC_IV completeness is se-source aware: the estimate plus EITHER a standard
+    // error OR both CI bounds. A study missing its se-source lands "incomplete"; a
+    // present-but-invalid combination (e.g. estimate outside its CI) goes through to
+    // the stats engine, which rejects it with a reason ("not-pooled").
+    if (measure === "GENERIC_IV" && disputedRoles.length === 0) {
+      const val = (role: AnalysisRole) => values[role]?.value ?? null;
+      missingRoles = [];
+      if (val("EFFECT_ESTIMATE") === null) missingRoles.push("EFFECT_ESTIMATE");
+      const seOk = val("EFFECT_SE") !== null;
+      const ciOk = val("EFFECT_CI_LOW") !== null && val("EFFECT_CI_UP") !== null;
+      if (!seOk && !ciOk) {
+        // Name the mapped roles that could still complete the row.
+        const sources: AnalysisRole[] = [];
+        if (mappedRoles.has("EFFECT_SE")) sources.push("EFFECT_SE");
+        if (mappedRoles.has("EFFECT_CI_LOW") && val("EFFECT_CI_LOW") === null) {
+          sources.push("EFFECT_CI_LOW");
+        }
+        if (mappedRoles.has("EFFECT_CI_UP") && val("EFFECT_CI_UP") === null) {
+          sources.push("EFFECT_CI_UP");
+        }
+        missingRoles.push(...(sources.length > 0 ? sources : (["EFFECT_SE"] as AnalysisRole[])));
+      }
     }
 
     if (disputedRoles.length > 0) {
@@ -641,30 +707,48 @@ export async function computeOutcomeResults(
       continue;
     }
 
-    // All roles resolved to finite numbers — a pooling candidate. Statistical validity
-    // (events <= totals, sd > 0, ...) is the engine's job, not pre-validated here.
+    // All needed roles resolved to finite numbers — a pooling candidate. Statistical
+    // validity (events <= totals, sd > 0, CI ordering, ...) is the engine's job, not
+    // pre-validated here.
     const num = (role: AnalysisRole): number => values[role]!.value!;
-    const data: StudyData = continuous
-      ? {
-          kind: "continuous",
-          stats: {
-            m1: num("G1_MEAN"),
-            sd1: num("G1_SD"),
-            n1: num("G1_N"),
-            m2: num("G2_MEAN"),
-            sd2: num("G2_SD"),
-            n2: num("G2_N"),
-          },
-        }
-      : {
-          kind: "binary",
-          counts: {
-            e1: num("G1_EVENTS"),
-            n1: num("G1_TOTAL"),
-            e2: num("G2_EVENTS"),
-            n2: num("G2_TOTAL"),
-          },
-        };
+    const numOrNull = (role: AnalysisRole): number | null => values[role]?.value ?? null;
+    let data: StudyData;
+    if (measure === "MD" || measure === "SMD") {
+      data = {
+        kind: "continuous",
+        stats: {
+          m1: num("G1_MEAN"),
+          sd1: num("G1_SD"),
+          n1: num("G1_N"),
+          m2: num("G2_MEAN"),
+          sd2: num("G2_SD"),
+          n2: num("G2_N"),
+        },
+      };
+    } else if (measure === "PROPORTION") {
+      data = { kind: "proportion", counts: { e: num("G1_EVENTS"), n: num("G1_TOTAL") } };
+    } else if (measure === "GENERIC_IV") {
+      // The engine prefers a present SE and otherwise derives it from the CI bounds.
+      data = {
+        kind: "generic",
+        stats: {
+          y: num("EFFECT_ESTIMATE"),
+          se: numOrNull("EFFECT_SE"),
+          ciLow: numOrNull("EFFECT_CI_LOW"),
+          ciUp: numOrNull("EFFECT_CI_UP"),
+        },
+      };
+    } else {
+      data = {
+        kind: "binary",
+        counts: {
+          e1: num("G1_EVENTS"),
+          n1: num("G1_TOTAL"),
+          e2: num("G2_EVENTS"),
+          n2: num("G2_TOTAL"),
+        },
+      };
+    }
     inputs.push({ id: study.id, label: study.label, data });
     const row: AnalysisResultRow = {
       ...base,
@@ -677,7 +761,10 @@ export async function computeOutcomeResults(
     candidateRows.set(study.id, row);
   }
 
-  const meta = computeMeta(inputs, { measure });
+  const meta = computeMeta(inputs, {
+    measure,
+    proportionTransform: outcome.proportionTransform,
+  });
   const effectById = new Map(meta.studies.map((s) => [s.id, s]));
   const rejectedById = new Map(meta.excluded.map((s) => [s.id, s]));
   for (const [studyId, row] of candidateRows) {
@@ -693,12 +780,19 @@ export async function computeOutcomeResults(
   const labels = parseGroupLabels(outcome.groupLabels);
   return {
     outcome: toRow(outcome),
-    groupLabels: { g1: labels?.g1 ?? "Group 1", g2: labels?.g2 ?? "Group 2" },
+    // PROPORTION has one group — g1 labels the cohort, g2 is unused by its UI.
+    groupLabels: {
+      g1: labels?.g1 ?? (measure === "PROPORTION" ? "Cohort" : "Group 1"),
+      g2: labels?.g2 ?? "Group 2",
+    },
     rows,
     pooled: { fixed: meta.fixed, random: meta.random },
     heterogeneity: meta.heterogeneity,
-    scale: scaleFor(measure),
-    nullValue: nullValueFor(measure),
+    predictionInterval: meta.predictionInterval,
+    egger: meta.egger,
+    scale: meta.scale,
+    nullValue: meta.nullValue,
+    displayMeta: meta.displayMeta,
     provisionalAllowed: seeAll,
   };
 }

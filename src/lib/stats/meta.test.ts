@@ -27,6 +27,18 @@ const continuous = (id: string): StudyEffectInput => ({
 
 const BIN3 = [binary("a", 12, 100, 24, 98), binary("b", 5, 60, 10, 62), binary("c", 30, 250, 22, 245)];
 
+const proportion = (id: string, e: number, n: number): StudyEffectInput => ({
+  id,
+  label: `Study ${id}`,
+  data: { kind: "proportion", counts: { e, n } },
+});
+
+const generic = (id: string, y: number, se: number): StudyEffectInput => ({
+  id,
+  label: `Study ${id}`,
+  data: { kind: "generic", stats: { y, se, ciLow: null, ciUp: null } },
+});
+
 describe("routing and exclusions", () => {
   it("excludes continuous studies from binary measures (and vice versa) with a reason", () => {
     const rr = computeMeta([...BIN3, continuous("x")], { measure: "RR" });
@@ -50,6 +62,16 @@ describe("routing and exclusions", () => {
     expect(result.excluded.map((s) => s.id)).toEqual(["z1"]);
   });
 
+  it("excludes wrong-kind data for the phase B measures with a reason", () => {
+    const prop = computeMeta([proportion("p", 3, 30), ...BIN3], { measure: "PROPORTION" });
+    expect(prop.studies.map((s) => s.id)).toEqual(["p"]);
+    expect(prop.excluded[0]!.reason).toMatch(/single-arm event counts/);
+
+    const gen = computeMeta([generic("g", 0.2, 0.1), continuous("x")], { measure: "GENERIC_IV" });
+    expect(gen.studies.map((s) => s.id)).toEqual(["g"]);
+    expect(gen.excluded[0]!.reason).toMatch(/pre-computed estimate/);
+  });
+
   it("never throws on garbage data and reports it as excluded", () => {
     const junk: StudyEffectInput[] = [
       binary("g1", NaN, -2, 5.5, 0),
@@ -59,13 +81,15 @@ describe("routing and exclusions", () => {
         data: { kind: "continuous", stats: { m1: NaN, sd1: -1, n1: 0, m2: 1, sd2: 1, n2: 1 } },
       },
     ];
-    for (const measure of ["RR", "OR", "RD", "MD", "SMD"] as const) {
+    for (const measure of ["RR", "OR", "RD", "MD", "SMD", "PROPORTION", "GENERIC_IV"] as const) {
       const result = computeMeta(junk, { measure });
       expect(result.studies).toEqual([]);
       expect(result.excluded).toHaveLength(2);
       expect(result.fixed).toBeNull();
       expect(result.random).toBeNull();
       expect(result.heterogeneity).toBeNull();
+      expect(result.predictionInterval).toBeNull();
+      expect(result.egger).toBeNull();
     }
   });
 });
@@ -80,6 +104,39 @@ describe("result shape", () => {
     const md = computeMeta([continuous("x"), continuous("y")], { measure: "MD" });
     expect(md.scale).toBe("linear");
     expect(md.nullValue).toBe(0);
+
+    // PROPORTION: transformed scale (defaulting to logit), no meaningful null value.
+    const propDefault = computeMeta([proportion("p", 3, 30)], { measure: "PROPORTION" });
+    expect(propDefault.scale).toBe("logit");
+    expect(propDefault.nullValue).toBeNull();
+    expect(propDefault.displayMeta).toEqual({ transform: "invlogit", harmonicN: null });
+    const propFt = computeMeta([proportion("p", 3, 30)], {
+      measure: "PROPORTION",
+      proportionTransform: "FREEMAN_TUKEY",
+    });
+    expect(propFt.scale).toBe("ft");
+    expect(propFt.displayMeta.transform).toBe("ft");
+    close(propFt.displayMeta.harmonicN!, 30, 1e-12);
+
+    const gen = computeMeta([generic("g", 0.2, 0.1)], { measure: "GENERIC_IV" });
+    expect(gen.scale).toBe("linear");
+    expect(gen.nullValue).toBe(0);
+    expect(gen.displayMeta).toEqual({ transform: "identity", harmonicN: null });
+  });
+
+  it("prediction interval and Egger appear together at k >= 3 and are null below", () => {
+    const two = computeMeta(BIN3.slice(0, 2), { measure: "RR" });
+    expect(two.predictionInterval).toBeNull();
+    expect(two.egger).toBeNull();
+
+    const three = computeMeta(BIN3, { measure: "RR" });
+    expect(three.predictionInterval).not.toBeNull();
+    expect(three.egger).not.toBeNull();
+    expect(three.egger!.k).toBe(3);
+    // PI display back-transforms like the pooled estimate (exp on the log scale).
+    close(three.predictionInterval!.display.low, Math.exp(three.predictionInterval!.low), 1e-12);
+    expect(three.predictionInterval!.low).toBeLessThan(three.random!.ciLow);
+    expect(three.predictionInterval!.high).toBeGreaterThan(three.random!.ciHigh);
   });
 
   it("back-transforms display via exp() on the log scale", () => {

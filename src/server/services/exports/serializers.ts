@@ -8,7 +8,11 @@ function formatValue(value: CsvValue): string {
   if (value === null || value === undefined) return "";
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "boolean") return value ? "true" : "false";
-  return String(value);
+  if (typeof value === "number") return String(value);
+  // Spreadsheet formula-injection guard (user-controlled strings only — titles, names,
+  // quotes): a leading = + - @ or tab makes Excel/Sheets evaluate the cell. Prefix with
+  // a single quote, the standard neutralization; numbers above stay unprefixed.
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
 }
 
 function escapeField(field: string): string {

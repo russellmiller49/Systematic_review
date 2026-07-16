@@ -26,11 +26,13 @@ import { Select } from "@/components/ui/select";
 import {
   apiErrorMessages,
   MEASURE_OPTIONS,
+  PROPORTION_TRANSFORM_LABELS,
   type AnalysisOutcomeRow,
   type EffectDirection,
   type EffectMeasure,
   type GroupLabels,
   type PoolingModel,
+  type ProportionTransform,
   type ProtocolOutcomeOption,
 } from "./types";
 
@@ -55,6 +57,7 @@ export function OutcomeDialog({
 }) {
   const [name, setName] = useState("");
   const [measure, setMeasure] = useState<EffectMeasure>("RR");
+  const [transform, setTransform] = useState<ProportionTransform>("LOGIT");
   const [timepoint, setTimepoint] = useState("");
   const [direction, setDirection] = useState<EffectDirection>("LOWER_IS_BETTER");
   const [model, setModel] = useState<PoolingModel>("RANDOM");
@@ -75,6 +78,7 @@ export function OutcomeDialog({
       const o = state.outcome;
       setName(o.name);
       setMeasure(o.measure);
+      setTransform(o.proportionTransform ?? "LOGIT");
       setTimepoint(o.timepoint ?? "");
       setDirection(o.direction);
       setModel(o.model);
@@ -84,6 +88,7 @@ export function OutcomeDialog({
     } else {
       setName("");
       setMeasure("RR");
+      setTransform("LOGIT");
       setTimepoint("");
       setDirection("LOWER_IS_BETTER");
       setModel("RANDOM");
@@ -110,9 +115,10 @@ export function OutcomeDialog({
     if (!state) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
+    const proportion = measure === "PROPORTION";
     const labels: GroupLabels = {};
     if (g1.trim()) labels.g1 = g1.trim();
-    if (g2.trim()) labels.g2 = g2.trim();
+    if (g2.trim() && !proportion) labels.g2 = g2.trim(); // single arm: g1 (cohort) only
     const hasLabels = labels.g1 !== undefined || labels.g2 !== undefined;
     setBusy(true);
     setErrors([]);
@@ -126,6 +132,7 @@ export function OutcomeDialog({
             timepoint: timepoint.trim() || null,
             direction,
             model,
+            ...(proportion ? { proportionTransform: transform } : {}),
             groupLabels: hasLabels ? labels : null,
             outcomeDefinitionId: anchorId || null,
           },
@@ -138,6 +145,7 @@ export function OutcomeDialog({
           ...(timepoint.trim() ? { timepoint: timepoint.trim() } : {}),
           direction,
           model,
+          ...(proportion ? { proportionTransform: transform } : {}),
           ...(hasLabels ? { groupLabels: labels } : {}),
           ...(anchorId ? { outcomeDefinitionId: anchorId } : {}),
         });
@@ -218,6 +226,11 @@ export function OutcomeDialog({
                   </option>
                 ))}
               </Select>
+              {measure === "GENERIC_IV" && (
+                <p className="text-xs text-muted-foreground">
+                  Enter estimates on the pooling scale (log-transform ratio measures first).
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="ao-timepoint">Timepoint (optional)</Label>
@@ -229,6 +242,25 @@ export function OutcomeDialog({
               />
             </div>
           </div>
+          {measure === "PROPORTION" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ao-transform">Proportion transform</Label>
+              <Select
+                id="ao-transform"
+                value={transform}
+                onChange={(e) => setTransform(e.target.value as ProportionTransform)}
+              >
+                {(Object.keys(PROPORTION_TRANSFORM_LABELS) as ProportionTransform[]).map((t) => (
+                  <option key={t} value={t}>
+                    {PROPORTION_TRANSFORM_LABELS[t]}
+                  </option>
+                ))}
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Changing the transform re-pools live — nothing is stored server-side.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="ao-direction">Direction</Label>
@@ -253,26 +285,39 @@ export function OutcomeDialog({
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          {measure === "PROPORTION" ? (
+            // Single-arm: only the cohort (g1) needs a label.
             <div className="space-y-1.5">
-              <Label htmlFor="ao-g1">Group 1 label</Label>
+              <Label htmlFor="ao-g1">Cohort label</Label>
               <Input
                 id="ao-g1"
                 value={g1}
                 onChange={(e) => setG1(e.target.value)}
-                placeholder="e.g. Intervention"
+                placeholder="e.g. Treated patients"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ao-g2">Group 2 label</Label>
-              <Input
-                id="ao-g2"
-                value={g2}
-                onChange={(e) => setG2(e.target.value)}
-                placeholder="e.g. Control"
-              />
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="ao-g1">Group 1 label</Label>
+                <Input
+                  id="ao-g1"
+                  value={g1}
+                  onChange={(e) => setG1(e.target.value)}
+                  placeholder="e.g. Intervention"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ao-g2">Group 2 label</Label>
+                <Input
+                  id="ao-g2"
+                  value={g2}
+                  onChange={(e) => setG2(e.target.value)}
+                  placeholder="e.g. Control"
+                />
+              </div>
             </div>
-          </div>
+          )}
           {protocolOutcomes.length > 0 && (
             <div className="space-y-1.5">
               <Label htmlFor="ao-anchor">Protocol outcome (optional)</Label>

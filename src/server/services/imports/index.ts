@@ -476,6 +476,12 @@ export async function commitBatch(ctx: Ctx, projectId: string, batchId: string) 
             pmid,
             url: record.url ?? null,
             language: record.language ?? null,
+            // NBIB/RIS records carry an affiliation bag (possibly empty); BibTeX/CSV
+            // records lack the field entirely and the column stays null.
+            affiliations:
+              record.affiliations !== undefined
+                ? (record.affiliations as unknown as Prisma.InputJsonValue)
+                : undefined,
           },
         });
 
@@ -483,6 +489,9 @@ export async function commitBatch(ctx: Ctx, projectId: string, batchId: string) 
         if (doi) identifiers.push({ citationId: citation.id, type: "DOI", value: doi });
         if (pmid) identifiers.push({ citationId: citation.id, type: "PMID", value: pmid });
         if (record.url) identifiers.push({ citationId: citation.id, type: "URL", value: record.url });
+        for (const registryId of record.registryIds ?? []) {
+          identifiers.push({ citationId: citation.id, type: "REGISTRY_ID", value: registryId });
+        }
         if (identifiers.length > 0) {
           await tx.citationIdentifier.createMany({ data: identifiers, skipDuplicates: true });
         }

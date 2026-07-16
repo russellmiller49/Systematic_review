@@ -3,6 +3,7 @@
 // src/server/services/studies) — only the fields the UI consumes are modeled.
 
 import type { CitationCardData } from "@/components/citations/citation-card";
+import type { SourceAnchorV2 } from "@/types/source-anchor";
 
 export type FieldType =
   | "TEXT"
@@ -83,7 +84,30 @@ export interface FormValue {
   value: unknown;
   sourceQuote?: string | null;
   pageNumber?: number | null;
+  sourceAnchor?: unknown; // Json — read through readSourceAnchor()
   notes?: string | null;
+}
+
+// Client-side reader for stored sourceAnchor Json (v2 or legacy v1 {fileId, page}).
+// Deliberately a lightweight mirror of parseSourceAnchor (src/types/source-anchor):
+// importing that module at runtime would pull zod into the client bundle. Only the
+// fields the UI consumes are surfaced.
+export function readSourceAnchor(value: unknown): SourceAnchorV2 | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const a = value as Record<string, unknown>;
+  if (typeof a.fileId !== "string" || a.fileId === "") return null;
+  if (typeof a.page !== "number" || !Number.isInteger(a.page) || a.page < 1) return null;
+  if (a.v === undefined) {
+    return { v: 2, fileId: a.fileId, page: a.page, matchQuality: "page-only" };
+  }
+  const quality = a.matchQuality;
+  if (
+    a.v !== 2 ||
+    (quality !== "exact" && quality !== "fuzzy" && quality !== "page-only" && quality !== "selection")
+  ) {
+    return null;
+  }
+  return { v: 2, fileId: a.fileId, page: a.page, matchQuality: quality };
 }
 
 export interface ExtractionFormData {
@@ -156,6 +180,7 @@ export interface ExtractionSuggestionData {
   value: unknown; // null when notFound / invalid-and-unstorable
   sourceQuote?: string | null;
   pageNumber?: number | null;
+  sourceAnchor?: unknown; // Json — read through readSourceAnchor()
   confidence?: number | null;
   notFound: boolean;
   invalidReason?: string | null;

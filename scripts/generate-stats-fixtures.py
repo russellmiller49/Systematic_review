@@ -4,8 +4,9 @@
 Generates golden fixtures for src/lib/stats (validated by fixtures.test.ts).
 This script implements the SAME pinned policies as the TypeScript library but
 shares no code with it; distribution functions come from scipy (norm.ppf/sf,
-chi2.sf). Datasets are synthetic and embedded below — nothing is taken from
-remembered published analyses.
+chi2.sf, t.ppf/sf) and Egger's regression from scipy.stats.linregress. Datasets
+are synthetic and embedded below — nothing is taken from remembered published
+analyses.
 
 Pinned policies (must match src/lib/stats exactly):
 - Binary: integers, 0 <= e <= n, n >= 1 else excluded. Double-zero/double-full
@@ -13,20 +14,37 @@ Pinned policies (must match src/lib/stats exactly):
   add 0.5 to all four cells (all measures, incl. RD).
 - Continuous: finite, integer n1,n2 >= 2, sd >= 0 else excluded. MD excluded on
   zero variance; SMD (Hedges g) excluded on zero pooled SD.
+- Proportion (single arm; integers, 0 <= e <= n, n >= 1 else excluded):
+  LOGIT: continuity only when e = 0 or e = n: e' = e + 0.5, n' = n + 1;
+  y = ln(e'/(n'-e')), v = 1/e' + 1/(n'-e'); display p = 1/(1+exp(-y)).
+  FREEMAN_TUKEY: y = 0.5*(asin(sqrt(e/(n+1))) + asin(sqrt((e+1)/(n+1)))),
+  v = 1/(4n+2); display via Miller (1978) inverse with the study's own n
+  (pooled values with the HARMONIC MEAN of included n's), y clamped to
+  [0, pi/2] then to the achievable range [pft(0,n), pft(1,n)], sqrt argument
+  clamped to [0,1], p clamped to [0,1].
+- Generic IV: y finite; se (finite, > 0) wins when present, else BOTH ci bounds
+  required with ciUp > ciLow and ciLow <= y <= ciUp; se = (ciUp - ciLow) /
+  (2 * 1.959963984540054). Pools as entered (identity display, null value 0).
 - Pooling: inverse-variance fixed effect; DerSimonian-Laird random effects
   (tau2 = max(0, (Q - df) / C), C = Sw - Sw2/Sw). k == 1: both models return
   the single study, heterogeneity is null. CI = y +/- qnorm(0.975) * se,
   p = 2 * pnorm(-|z|), het p = upper-tail chi-square of Q at df.
+- Prediction interval (k >= 3 else null; Higgins/Thompson/Spiegelhalter):
+  PI = y_RE +/- t.ppf(0.975, k-2) * sqrt(tau2 + se_RE^2).
+- Egger (k >= 3 else null): OLS of z_i = y_i/se_i on 1/se_i via
+  scipy.stats.linregress; t = intercept/intercept_stderr, two-sided Student-t
+  p at df = k-2.
 
 Run: python3 scripts/generate-stats-fixtures.py
-Writes: src/lib/stats/__fixtures__/*.json
+Writes: src/lib/stats/__fixtures__/*.json (pins-*.json carry scalar pin grids)
 """
 
 import json
 import math
 import os
 
-from scipy.stats import chi2, norm
+from scipy.stats import chi2, linregress, norm
+from scipy.stats import t as tdist
 
 OUT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "src", "lib", "stats", "__fixtures__"
@@ -97,46 +115,183 @@ def continuous_effect(measure, s):
     return (g, math.sqrt(v))
 
 
+def proportion_effect(transform, c):
+    e, n = c["e"], c["n"]
+    if not (_is_count(e) and _is_count(n)):
+        return None
+    if n < 1 or e < 0 or e > n:
+        return None
+    if transform == "LOGIT":
+        if e == 0 or e == n:
+            ea, na = e + 0.5, n + 1
+        else:
+            ea, na = float(e), float(n)
+        y = math.log(ea / (na - ea))
+        v = 1 / ea + 1 / (na - ea)
+        return (y, math.sqrt(v))
+    # FREEMAN_TUKEY
+    y = 0.5 * (math.asin(math.sqrt(e / (n + 1))) + math.asin(math.sqrt((e + 1) / (n + 1))))
+    v = 1 / (4 * n + 2)
+    return (y, math.sqrt(v))
+
+
+GENERIC_Z975 = 1.959963984540054  # pinned constant shared with the TS policy
+
+
+def generic_effect(s):
+    y, se, ci_low, ci_up = s["y"], s["se"], s["ciLow"], s["ciUp"]
+    if not (isinstance(y, (int, float)) and math.isfinite(y)):
+        return None
+    if se is not None:
+        if not (isinstance(se, (int, float)) and math.isfinite(se) and se > 0):
+            return None
+        return (float(y), float(se))
+    if ci_low is None or ci_up is None:
+        return None
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (ci_low, ci_up)):
+        return None
+    if not ci_up > ci_low:
+        return None
+    if y < ci_low or y > ci_up:
+        return None
+    derived = (ci_up - ci_low) / (2 * GENERIC_Z975)
+    if not (math.isfinite(derived) and derived > 0):
+        return None
+    return (float(y), derived)
+
+
+# ---------------------------------------------------------------------------
+# Display transforms
+# ---------------------------------------------------------------------------
+
+
+def inv_logit(y):
+    return 1 / (1 + math.exp(-y))
+
+
+def ft_inverse(y, n):
+    """Miller (1978) inverse double-arcsine, metafor-style achievable-range bounds."""
+    yc = min(max(y, 0.0), math.pi / 2)
+    lower = 0.5 * math.asin(math.sqrt(1 / (n + 1)))
+    upper = 0.5 * (math.asin(math.sqrt(n / (n + 1))) + math.pi / 2)
+    if yc < lower:
+        return 0.0
+    if yc > upper:
+        return 1.0
+    s = math.sin(2 * yc)
+    if s == 0:
+        return 0.0 if yc < math.pi / 4 else 1.0
+    inner = s + (s - 1 / s) / n
+    arg = min(max(1 - inner * inner, 0.0), 1.0)
+    sign = 1.0 if math.cos(2 * yc) > 0 else (-1.0 if math.cos(2 * yc) < 0 else 0.0)
+    p = 0.5 * (1 - sign * math.sqrt(arg))
+    return min(max(p, 0.0), 1.0)
+
+
+def harmonic_mean(ns):
+    if not ns:
+        return None
+    return len(ns) / sum(1 / n for n in ns)
+
+
 # ---------------------------------------------------------------------------
 # Pooling + full meta computation
 # ---------------------------------------------------------------------------
 
 
-def _pooled(y, se, log_scale):
-    z = y / se
-    p = float(2 * norm.sf(abs(z)))
-    lo, hi = y - Z975 * se, y + Z975 * se
-    tx = math.exp if log_scale else (lambda v: v)
+def _scale_for(measure, transform):
+    if measure in ("RR", "OR"):
+        return "log"
+    if measure == "PROPORTION":
+        return "ft" if transform == "FREEMAN_TUKEY" else "logit"
+    return "linear"
+
+
+def _study_effect(measure, transform, s):
+    """Return ((y, se), n_for_ft) or (None, None)."""
+    data = s["data"]
+    if measure in ("RR", "OR", "RD"):
+        eff = binary_effect(measure, data["counts"]) if data["kind"] == "binary" else None
+        return eff, None
+    if measure in ("MD", "SMD"):
+        eff = (
+            continuous_effect(measure, data["stats"]) if data["kind"] == "continuous" else None
+        )
+        return eff, None
+    if measure == "PROPORTION":
+        if data["kind"] != "proportion":
+            return None, None
+        eff = proportion_effect(transform, data["counts"])
+        return eff, (data["counts"]["n"] if eff is not None else None)
+    # GENERIC_IV
+    eff = generic_effect(data["stats"]) if data["kind"] == "generic" else None
+    return eff, None
+
+
+def egger_test(ys, ses):
+    k = len(ys)
+    if k < 3:
+        return None
+    prec = [1 / se for se in ses]
+    z = [y / se for y, se in zip(ys, ses)]
+    res = linregress(prec, z)
+    if not (math.isfinite(res.intercept) and math.isfinite(res.intercept_stderr)):
+        return None
+    if res.intercept_stderr <= 0:
+        return None
+    tval = res.intercept / res.intercept_stderr
+    p = 2 * float(tdist.sf(abs(tval), k - 2))
     return {
-        "y": y,
-        "se": se,
-        "ciLow": lo,
-        "ciHigh": hi,
-        "display": {"estimate": tx(y), "ciLow": tx(lo), "ciHigh": tx(hi)},
-        "z": z,
+        "intercept": float(res.intercept),
+        "interceptSe": float(res.intercept_stderr),
+        "t": float(tval),
         "p": p,
+        "k": k,
     }
 
 
-def compute_meta(measure, studies):
-    log_scale = measure in ("RR", "OR")
-    tx = math.exp if log_scale else (lambda v: v)
-    included = []  # (id, label, y, se)
+def compute_meta(measure, studies, transform="LOGIT"):
+    scale = _scale_for(measure, transform)
+
+    included = []  # (id, label, y, se, n_for_ft)
     excluded_ids = []
     for s in studies:
-        data = s["data"]
-        if measure in ("RR", "OR", "RD"):
-            eff = binary_effect(measure, data["counts"]) if data["kind"] == "binary" else None
-        else:
-            eff = (
-                continuous_effect(measure, data["stats"])
-                if data["kind"] == "continuous"
-                else None
-            )
+        eff, n_ft = _study_effect(measure, transform, s)
         if eff is None:
             excluded_ids.append(s["id"])
         else:
-            included.append((s["id"], s["label"], eff[0], eff[1]))
+            included.append((s["id"], s["label"], eff[0], eff[1], n_ft))
+
+    harmonic_n = None
+    if scale == "ft":
+        harmonic_n = harmonic_mean([n for (_, _, _, _, n) in included if n is not None])
+
+    def tx(v, ft_n):
+        if scale == "log":
+            return math.exp(v)
+        if scale == "logit":
+            return inv_logit(v)
+        if scale == "ft":
+            return ft_inverse(v, ft_n) if ft_n is not None else v
+        return v
+
+    def pooled_block(y, se):
+        z = y / se
+        p = float(2 * norm.sf(abs(z)))
+        lo, hi = y - Z975 * se, y + Z975 * se
+        return {
+            "y": y,
+            "se": se,
+            "ciLow": lo,
+            "ciHigh": hi,
+            "display": {
+                "estimate": tx(y, harmonic_n),
+                "ciLow": tx(lo, harmonic_n),
+                "ciHigh": tx(hi, harmonic_n),
+            },
+            "z": z,
+            "p": p,
+        }
 
     out = {
         "studies": [],
@@ -144,13 +299,20 @@ def compute_meta(measure, studies):
         "fixed": None,
         "random": None,
         "heterogeneity": None,
+        "predictionInterval": None,
+        "egger": None,
+        "displayMeta": {
+            "transform": {"log": "exp", "logit": "invlogit", "ft": "ft"}.get(scale, "identity"),
+            "harmonicN": harmonic_n,
+        },
     }
     k = len(included)
     if k == 0:
         return out
 
-    ys = [y for (_, _, y, _) in included]
-    vs = [se * se for (_, _, _, se) in included]
+    ys = [y for (_, _, y, _, _) in included]
+    ses = [se for (_, _, _, se, _) in included]
+    vs = [se * se for se in ses]
     w = [1 / v for v in vs]
     sw = sum(w)
     yf = sum(wi * yi for wi, yi in zip(w, ys)) / sw
@@ -176,11 +338,24 @@ def compute_meta(measure, studies):
     yr = sum(wi * yi for wi, yi in zip(wr, ys)) / swr
     ser = math.sqrt(1 / swr)
 
-    out["fixed"] = _pooled(yf, sef, log_scale)
-    out["random"] = _pooled(yr, ser, log_scale)
+    out["fixed"] = pooled_block(yf, sef)
+    out["random"] = pooled_block(yr, ser)
 
-    for i, (sid, label, y, se) in enumerate(included):
+    # Prediction interval: Higgins/Thompson/Spiegelhalter, k >= 3 required.
+    if k >= 3:
+        half = float(tdist.ppf(0.975, k - 2)) * math.sqrt(tau2 + ser * ser)
+        lo, hi = yr - half, yr + half
+        out["predictionInterval"] = {
+            "low": lo,
+            "high": hi,
+            "display": {"low": tx(lo, harmonic_n), "high": tx(hi, harmonic_n)},
+        }
+
+    out["egger"] = egger_test(ys, ses)
+
+    for i, (sid, label, y, se, n_ft) in enumerate(included):
         lo, hi = y - Z975 * se, y + Z975 * se
+        study_n = n_ft if scale == "ft" else None
         out["studies"].append(
             {
                 "id": sid,
@@ -189,7 +364,11 @@ def compute_meta(measure, studies):
                 "se": se,
                 "ciLow": lo,
                 "ciHigh": hi,
-                "display": {"estimate": tx(y), "ciLow": tx(lo), "ciHigh": tx(hi)},
+                "display": {
+                    "estimate": tx(y, study_n),
+                    "ciLow": tx(lo, study_n),
+                    "ciHigh": tx(hi, study_n),
+                },
                 "weightFixedPct": w[i] / sw * 100.0,
                 "weightRandomPct": wr[i] / swr * 100.0,
             }
@@ -218,6 +397,22 @@ def cstudy(sid, label, m1, sd1, n1, m2, sd2, n2):
             "kind": "continuous",
             "stats": {"m1": m1, "sd1": sd1, "n1": n1, "m2": m2, "sd2": sd2, "n2": n2},
         },
+    }
+
+
+def pstudy(sid, label, e, n):
+    return {
+        "id": sid,
+        "label": label,
+        "data": {"kind": "proportion", "counts": {"e": e, "n": n}},
+    }
+
+
+def gstudy(sid, label, y, se=None, ci_low=None, ci_up=None):
+    return {
+        "id": sid,
+        "label": label,
+        "data": {"kind": "generic", "stats": {"y": y, "se": se, "ciLow": ci_low, "ciUp": ci_up}},
     }
 
 
@@ -272,30 +467,105 @@ ALL_EXCLUDED_SET = [
     bstudy("x03", "Excl 03 (events > total)", 40, 30, 5, 28),
 ]
 
-FIXTURES = [
-    ("binary-rr", "RR", BINARY_SET),
-    ("binary-or", "OR", BINARY_SET),
-    ("binary-rd", "RD", BINARY_SET),
-    ("md", "MD", MD_SET),
-    ("smd", "SMD", SMD_SET),
-    ("homogeneous-rr", "RR", HOMOGENEOUS_SET),
-    ("single-study-rr", "RR", SINGLE_SET),
-    ("all-excluded-rr", "RR", ALL_EXCLUDED_SET),
+# (g) single-arm proportion set: p02 has zero events (logit continuity), p04 is
+# full-event (logit continuity), p06 has a non-integer count (excluded).
+PROPORTION_SET = [
+    pstudy("p01", "Prop 01", 12, 80),
+    pstudy("p02", "Prop 02 (zero events)", 0, 45),
+    pstudy("p03", "Prop 03", 30, 60),
+    pstudy("p04", "Prop 04 (all events)", 25, 25),
+    pstudy("p05", "Prop 05", 5, 120),
+    pstudy("p06", "Prop 06 (invalid)", 7.5, 30),
 ]
+
+# (h) generic IV from estimate + SE.
+GENERIC_SE_SET = [
+    gstudy("v01", "Gen 01", 0.25, se=0.12),
+    gstudy("v02", "Gen 02", -0.10, se=0.20),
+    gstudy("v03", "Gen 03", 0.40, se=0.15),
+    gstudy("v04", "Gen 04", 0.05, se=0.30),
+]
+
+# (i) generic IV with CI-derived SEs; c04's estimate sits outside its CI (excluded),
+# c05 has an inverted CI (excluded).
+GENERIC_CI_SET = [
+    gstudy("c01", "GenCI 01", 0.25, ci_low=0.02, ci_up=0.48),
+    gstudy("c02", "GenCI 02", -0.10, ci_low=-0.45, ci_up=0.25),
+    gstudy("c03", "GenCI 03", 0.40, ci_low=0.11, ci_up=0.69),
+    gstudy("c04", "GenCI 04 (outside CI)", 0.90, ci_low=0.10, ci_up=0.60),
+    gstudy("c05", "GenCI 05 (inverted CI)", 0.20, ci_low=0.50, ci_up=0.10),
+]
+
+# (j) classic small-study asymmetry (bigger effects with bigger SEs) — the Egger
+# reference set, also used for pins-egger.json.
+EGGER_ASYMMETRIC_SET = [
+    gstudy("e01", "Egger 01", 0.10, se=0.08),
+    gstudy("e02", "Egger 02", 0.15, se=0.10),
+    gstudy("e03", "Egger 03", 0.22, se=0.14),
+    gstudy("e04", "Egger 04", 0.35, se=0.20),
+    gstudy("e05", "Egger 05", 0.48, se=0.28),
+    gstudy("e06", "Egger 06", 0.60, se=0.35),
+    gstudy("e07", "Egger 07", 0.55, se=0.40),
+    gstudy("e08", "Egger 08", 0.75, se=0.45),
+]
+
+FIXTURES = [
+    ("binary-rr", "RR", None, BINARY_SET),
+    ("binary-or", "OR", None, BINARY_SET),
+    ("binary-rd", "RD", None, BINARY_SET),
+    ("md", "MD", None, MD_SET),
+    ("smd", "SMD", None, SMD_SET),
+    ("homogeneous-rr", "RR", None, HOMOGENEOUS_SET),
+    ("single-study-rr", "RR", None, SINGLE_SET),
+    ("all-excluded-rr", "RR", None, ALL_EXCLUDED_SET),
+    ("proportion-logit", "PROPORTION", "LOGIT", PROPORTION_SET),
+    ("proportion-ft", "PROPORTION", "FREEMAN_TUKEY", PROPORTION_SET),
+    ("generic-iv-se", "GENERIC_IV", None, GENERIC_SE_SET),
+    ("generic-iv-ci", "GENERIC_IV", None, GENERIC_CI_SET),
+    ("generic-iv-egger", "GENERIC_IV", None, EGGER_ASYMMETRIC_SET),
+]
+
+
+# ---------------------------------------------------------------------------
+# Scalar pin grids (pins-*.json — separate shape from the meta fixtures)
+# ---------------------------------------------------------------------------
+
+
+def qt_pins():
+    """scipy.stats.t.ppf over the pinned df x p grid (asserted at 1e-8)."""
+    pins = []
+    for df in (1, 2, 3, 5, 10, 30, 100):
+        for p in (0.6, 0.9, 0.975, 0.995):
+            pins.append({"p": p, "df": df, "value": float(tdist.ppf(p, df))})
+    return {"kind": "qt", "pins": pins}
+
+
+def egger_pins():
+    ys = [s["data"]["stats"]["y"] for s in EGGER_ASYMMETRIC_SET]
+    ses = [s["data"]["stats"]["se"] for s in EGGER_ASYMMETRIC_SET]
+    return {"kind": "egger", "ys": ys, "ses": ses, "expected": egger_test(ys, ses)}
 
 
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
-    for name, measure, studies in FIXTURES:
+    for name, measure, transform, studies in FIXTURES:
         fixture = {
             "name": name,
             "measure": measure,
+            "proportionTransform": transform,
             "studies": studies,
-            "expected": compute_meta(measure, studies),
+            "expected": compute_meta(measure, studies, transform or "LOGIT"),
         }
         path = os.path.join(OUT_DIR, f"{name}.json")
         with open(path, "w") as f:
             json.dump(fixture, f, indent=2)
+            f.write("\n")
+        print(f"wrote {os.path.relpath(path)}")
+
+    for name, payload in (("pins-qt", qt_pins()), ("pins-egger", egger_pins())):
+        path = os.path.join(OUT_DIR, f"{name}.json")
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
             f.write("\n")
         print(f"wrote {os.path.relpath(path)}")
 

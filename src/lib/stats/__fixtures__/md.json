@@ -1,6 +1,7 @@
 {
   "name": "md",
   "measure": "MD",
+  "proportionTransform": null,
   "studies": [
     {
       "id": "m01",
@@ -189,6 +190,25 @@
       "p": 0.004430982358523598,
       "i2": 73.56965025392627,
       "tau2": 1.2743128674574764
+    },
+    "predictionInterval": {
+      "low": -5.5234205483318854,
+      "high": 2.582500505161911,
+      "display": {
+        "low": -5.5234205483318854,
+        "high": 2.582500505161911
+      }
+    },
+    "egger": {
+      "intercept": 12.246312230713881,
+      "interceptSe": 10.433597006298362,
+      "t": 1.1737382825233957,
+      "p": 0.3252016021553988,
+      "k": 5
+    },
+    "displayMeta": {
+      "transform": "identity",
+      "harmonicN": null
     }
   }
 }

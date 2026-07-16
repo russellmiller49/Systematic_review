@@ -21,6 +21,11 @@ export interface ParsedRecord {
   pmid?: string;
   url?: string;
   language?: string;
+  // Cohort-overlap capture (NBIB/RIS populate these, possibly empty; BibTeX/CSV records
+  // simply lack them). affiliations is a record-level unique bag — author-scoped grouping
+  // is already lost in the source tags, and that's accepted.
+  affiliations?: string[];
+  registryIds?: string[]; // canonical uppercase forms (see registry-ids.ts)
   rawChunk: string;
   rowNumber: number;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseNbib } from "./nbib";
-import { NBIB_3, NBIB_EMPTY, NBIB_MALFORMED } from "./__fixtures__/nbib";
+import { NBIB_3, NBIB_AFFILIATIONS, NBIB_EMPTY, NBIB_MALFORMED } from "./__fixtures__/nbib";
 
 describe("parseNbib", () => {
   it("parses the 3-record MEDLINE export", () => {
@@ -74,5 +74,26 @@ describe("parseNbib", () => {
     expect(records).toEqual([]);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message).toMatch(/empty/i);
+  });
+
+  it("records without AD/SI still carry empty affiliation/registry fields", () => {
+    for (const rec of parseNbib(NBIB_3).records) {
+      expect(rec.affiliations).toEqual([]);
+      expect(rec.registryIds).toEqual([]);
+    }
+  });
+
+  it("captures AD as a record-level unique bag and registry ids from SI + abstract", () => {
+    const { records, errors } = parseNbib(NBIB_AFFILIATIONS);
+    expect(errors).toEqual([]);
+    expect(records).toHaveLength(1);
+    const rec = records[0]!;
+    // Two authors share one affiliation — the duplicate collapses; continuation lines join.
+    expect(rec.affiliations).toEqual([
+      "Department of Thoracic Medicine and Surgery, Temple University, Philadelphia, PA, USA.",
+      "St. Joseph's Hospital and Medical Center, Phoenix, AZ, USA.",
+    ]);
+    // NCT from the SI tag, EudraCT from the abstract — canonical uppercase, sorted.
+    expect(rec.registryIds).toEqual(["EUDRACT2016-001234-56", "NCT01796392"]);
   });
 });

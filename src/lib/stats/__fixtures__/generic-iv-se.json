@@ -1,0 +1,176 @@
+{
+  "name": "generic-iv-se",
+  "measure": "GENERIC_IV",
+  "proportionTransform": null,
+  "studies": [
+    {
+      "id": "v01",
+      "label": "Gen 01",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.25,
+          "se": 0.12,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "v02",
+      "label": "Gen 02",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": -0.1,
+          "se": 0.2,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "v03",
+      "label": "Gen 03",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.4,
+          "se": 0.15,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    },
+    {
+      "id": "v04",
+      "label": "Gen 04",
+      "data": {
+        "kind": "generic",
+        "stats": {
+          "y": 0.05,
+          "se": 0.3,
+          "ciLow": null,
+          "ciUp": null
+        }
+      }
+    }
+  ],
+  "expected": {
+    "studies": [
+      {
+        "id": "v01",
+        "label": "Gen 01",
+        "y": 0.25,
+        "se": 0.12,
+        "ciLow": 0.014804321855193536,
+        "ciHigh": 0.48519567814480646,
+        "display": {
+          "estimate": 0.25,
+          "ciLow": 0.014804321855193536,
+          "ciHigh": 0.48519567814480646
+        },
+        "weightFixedPct": 46.2962962962963,
+        "weightRandomPct": 38.844321110384016
+      },
+      {
+        "id": "v02",
+        "label": "Gen 02",
+        "y": -0.1,
+        "se": 0.2,
+        "ciLow": -0.4919927969080108,
+        "ciHigh": 0.29199279690801083,
+        "display": {
+          "estimate": -0.1,
+          "ciLow": -0.4919927969080108,
+          "ciHigh": 0.29199279690801083
+        },
+        "weightFixedPct": 16.666666666666664,
+        "weightRandomPct": 20.386995269270546
+      },
+      {
+        "id": "v03",
+        "label": "Gen 03",
+        "y": 0.4,
+        "se": 0.15,
+        "ciLow": 0.10600540231899191,
+        "ciHigh": 0.6939945976810081,
+        "display": {
+          "estimate": 0.4,
+          "ciLow": 0.10600540231899191,
+          "ciHigh": 0.6939945976810081
+        },
+        "weightFixedPct": 29.629629629629626,
+        "weightRandomPct": 30.194789085467022
+      },
+      {
+        "id": "v04",
+        "label": "Gen 04",
+        "y": 0.05,
+        "se": 0.3,
+        "ciLow": -0.5379891953620162,
+        "ciHigh": 0.6379891953620163,
+        "display": {
+          "estimate": 0.05,
+          "ciLow": -0.5379891953620162,
+          "ciHigh": 0.6379891953620163
+        },
+        "weightFixedPct": 7.4074074074074066,
+        "weightRandomPct": 10.573894534878416
+      }
+    ],
+    "excludedIds": [],
+    "fixed": {
+      "y": 0.2212962962962963,
+      "se": 0.08164965809277261,
+      "ciLow": 0.06126590708445262,
+      "ciHigh": 0.38132668550814,
+      "display": {
+        "estimate": 0.2212962962962963,
+        "ciLow": 0.06126590708445262,
+        "ciHigh": 0.38132668550814
+      },
+      "z": 2.7103150394684237,
+      "p": 0.006721932759168455
+    },
+    "random": {
+      "y": 0.2027899111159968,
+      "se": 0.10480354474190301,
+      "ciLow": -0.002621262030265248,
+      "ciHigh": 0.4082010842622589,
+      "display": {
+        "estimate": 0.2027899111159968,
+        "ciLow": -0.002621262030265248,
+        "ciHigh": 0.4082010842622589
+      },
+      "z": 1.934952788242061,
+      "p": 0.05299608946215423
+    },
+    "heterogeneity": {
+      "q": 4.3833590534979425,
+      "df": 3,
+      "p": 0.22293335860059418,
+      "i2": 31.559336951738302,
+      "tau2": 0.01387641898864809
+    },
+    "predictionInterval": {
+      "low": -0.4756144352378883,
+      "high": 0.8811942574698819,
+      "display": {
+        "low": -0.4756144352378883,
+        "high": 0.8811942574698819
+      }
+    },
+    "egger": {
+      "intercept": -2.0166666666666657,
+      "interceptSe": 1.9708025015206365,
+      "t": -1.023271822067732,
+      "p": 0.41379608490570546,
+      "k": 4
+    },
+    "displayMeta": {
+      "transform": "identity",
+      "harmonicN": null
+    }
+  }
+}

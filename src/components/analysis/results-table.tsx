@@ -34,13 +34,18 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ForestPlot } from "./forest-plot";
 import type { ForestPlotInput, ForestPlotRow } from "./forest-plot-layout";
+import { FunnelPlot } from "./funnel-plot";
+import type { FunnelPlotInput } from "./funnel-plot-layout";
 import {
   fmtCi,
+  fmtEstimate,
   fmtP,
   fmtValue,
   isBinaryMeasure,
+  isContinuousMeasure,
   MEASURE_LABELS,
   MODEL_LABELS,
+  resolveGroupLabels,
   ROW_STATUS_META,
   roleLabel,
   slugify,
@@ -56,13 +61,53 @@ function isPooled(row: AnalysisResultRow): boolean {
   return row.status === "included" || row.status === "provisional";
 }
 
+const SCALE_LABELS: Record<string, string> = {
+  log: "log",
+  linear: "linear",
+  logit: "logit",
+  ft: "double-arcsine",
+};
+
+// Per-measure data columns for the forest plot (headers + one cell per pooled row).
+function plotDataColumns(
+  results: AnalysisResults,
+): { headers: string[]; cols: (row: AnalysisResultRow) => string[] } {
+  const measure = results.outcome.measure;
+  const { g1, g2 } = results.groupLabels;
+  const v = (row: AnalysisResultRow, role: string) => fmtValue(row.values[role]?.value ?? null);
+  if (isBinaryMeasure(measure)) {
+    return {
+      headers: [g1, g2],
+      cols: (row) => [
+        `${v(row, "G1_EVENTS")}/${v(row, "G1_TOTAL")}`,
+        `${v(row, "G2_EVENTS")}/${v(row, "G2_TOTAL")}`,
+      ],
+    };
+  }
+  if (isContinuousMeasure(measure)) {
+    return {
+      headers: [g1, g2],
+      cols: (row) => [
+        `${v(row, "G1_MEAN")} (${v(row, "G1_SD")}), ${v(row, "G1_N")}`,
+        `${v(row, "G2_MEAN")} (${v(row, "G2_SD")}), ${v(row, "G2_N")}`,
+      ],
+    };
+  }
+  if (measure === "PROPORTION") {
+    // Single arm: one events/total column labeled with the cohort (g1) label.
+    return { headers: [g1], cols: (row) => [`${v(row, "G1_EVENTS")}/${v(row, "G1_TOTAL")}`] };
+  }
+  // GENERIC_IV: the SE actually used for pooling (possibly CI-derived, so read the effect).
+  return { headers: ["SE"], cols: (row) => [row.effect ? fmtEstimate(row.effect.se) : "—"] };
+}
+
 // Assemble the forest-plot input (pinned contract in ./forest-plot-layout) from the
 // results payload: pooled rows become plot rows, everything else lands in `excluded`.
 function buildPlotInput(results: AnalysisResults, model: PoolingModel): ForestPlotInput {
   const outcome = results.outcome;
   const { g1, g2 } = results.groupLabels;
-  const binary = isBinaryMeasure(outcome.measure);
-  const v = (row: AnalysisResultRow, role: string) => fmtValue(row.values[role]?.value ?? null);
+  const proportion = outcome.measure === "PROPORTION";
+  const { headers, cols } = plotDataColumns(results);
 
   const rows: ForestPlotRow[] = [];
   for (const row of results.rows) {
@@ -73,15 +118,7 @@ function buildPlotInput(results: AnalysisResults, model: PoolingModel): ForestPl
       ciLow: row.effect.display.ciLow,
       ciHigh: row.effect.display.ciHigh,
       weightPct: model === "FIXED" ? row.effect.weightFixedPct : row.effect.weightRandomPct,
-      dataCols: binary
-        ? [
-            `${v(row, "G1_EVENTS")}/${v(row, "G1_TOTAL")}`,
-            `${v(row, "G2_EVENTS")}/${v(row, "G2_TOTAL")}`,
-          ]
-        : [
-            `${v(row, "G1_MEAN")} (${v(row, "G1_SD")}), ${v(row, "G1_N")}`,
-            `${v(row, "G2_MEAN")} (${v(row, "G2_SD")}), ${v(row, "G2_N")}`,
-          ],
+      dataCols: cols(row),
       provisional: row.status === "provisional",
     });
   }
@@ -98,15 +135,19 @@ function buildPlotInput(results: AnalysisResults, model: PoolingModel): ForestPl
   return {
     title: outcome.timepoint ? `${outcome.name} (${outcome.timepoint})` : outcome.name,
     measureLabel: `${MEASURE_LABELS[outcome.measure]} (${outcome.measure})`,
-    scale: results.scale,
-    nullValue: results.nullValue,
+    // Proportion scales ("logit"/"ft") plot their display proportions on a linear axis;
+    // log stays log-positioned. The forest plot renders DISPLAY values either way.
+    scale: results.scale === "log" ? "log" : "linear",
+    nullValue: results.nullValue, // null for PROPORTION -> the null line is omitted
     // The null-line side that favours g1 depends on the outcome direction: when lower
     // is better (e.g. mortality), effects below the null favour the intervention (g1).
-    favours:
-      outcome.direction === "HIGHER_IS_BETTER"
+    // A single-arm proportion has no comparator, so no favours labels.
+    favours: proportion
+      ? undefined
+      : outcome.direction === "HIGHER_IS_BETTER"
         ? { left: `Favours ${g2}`, right: `Favours ${g1}` }
         : { left: `Favours ${g1}`, right: `Favours ${g2}` },
-    columnHeaders: [g1, g2],
+    columnHeaders: headers,
     rows,
     pooled: pooledEst
       ? {
@@ -118,6 +159,24 @@ function buildPlotInput(results: AnalysisResults, model: PoolingModel): ForestPl
       : null,
     heterogeneity: results.heterogeneity,
     excluded,
+  };
+}
+
+// Funnel input: per-study effects on the ANALYSIS scale, the chosen model's pooled
+// estimate, and the Egger result (all straight from the results payload).
+function buildFunnelInput(results: AnalysisResults, model: PoolingModel): FunnelPlotInput {
+  const outcome = results.outcome;
+  const pooledEst = model === "FIXED" ? results.pooled.fixed : results.pooled.random;
+  return {
+    title: `${outcome.timepoint ? `${outcome.name} (${outcome.timepoint})` : outcome.name} — funnel`,
+    measureLabel: `${MEASURE_LABELS[outcome.measure]} (${outcome.measure})`,
+    scale: results.scale,
+    harmonicN: results.displayMeta?.harmonicN ?? null,
+    points: results.rows
+      .filter((row) => row.effect !== null)
+      .map((row) => ({ label: row.label, y: row.effect!.y, se: row.effect!.se })),
+    pooledY: pooledEst?.y ?? null,
+    egger: results.egger,
   };
 }
 
@@ -244,9 +303,13 @@ export function ResultsSection({
     () => (results ? buildPlotInput(results, model) : null),
     [results, model],
   );
+  const funnelInput = useMemo(
+    () => (results ? buildFunnelInput(results, model) : null),
+    [results, model],
+  );
 
   const requiredRoles = results?.outcome.requiredRoles ?? outcome.requiredRoles;
-  const groups = results?.groupLabels ?? { g1: "Group 1", g2: "Group 2" };
+  const groups = results?.groupLabels ?? resolveGroupLabels(outcome.groupLabels, outcome.measure);
 
   return (
     <div className="space-y-6">
@@ -437,6 +500,12 @@ export function ResultsSection({
                   </p>
                 );
               })}
+              {results.predictionInterval && (
+                <p className="tabular-nums text-muted-foreground">
+                  95% PI: {fmtEstimate(results.predictionInterval.display.low)} to{" "}
+                  {fmtEstimate(results.predictionInterval.display.high)}
+                </p>
+              )}
               {results.heterogeneity && (
                 <p className="text-xs tabular-nums text-muted-foreground">
                   Heterogeneity: Q={results.heterogeneity.q.toFixed(2)}, df=
@@ -454,7 +523,7 @@ export function ResultsSection({
           <CardTitle className="text-base">Forest plot</CardTitle>
           <CardDescription>
             {model === "FIXED" ? "Fixed-effect" : "Random-effects"} weights on the{" "}
-            {results?.scale === "log" ? "log" : "linear"} scale.
+            {SCALE_LABELS[results?.scale ?? "linear"]} scale.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -467,6 +536,38 @@ export function ResultsSection({
             </p>
           ) : (
             <ForestPlot input={plotInput} filenameBase={slugify(outcome.name)} />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Funnel plot</CardTitle>
+          <CardDescription>
+            Small-study effects diagnostics on the analysis scale —{" "}
+            {results?.egger ? (
+              <span className="tabular-nums">
+                Egger&apos;s test: intercept {results.egger.intercept.toFixed(2)} (p ={" "}
+                {fmtP(results.egger.p)}){results.egger.k < 10 ? " — k < 10, low power" : ""}
+              </span>
+            ) : (funnelInput?.points.length ?? 0) < 3 ? (
+              "Egger's test requires at least 3 pooled studies"
+            ) : (
+              // Degenerate k >= 3 fit: identical precisions make the intercept unidentifiable.
+              "Egger's test not estimable (studies have identical precision)"
+            )}
+            .
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {funnelInput === null ? (
+            <Skeleton className="h-48" />
+          ) : funnelInput.points.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nothing pooled yet — the funnel appears alongside the forest plot.
+            </p>
+          ) : (
+            <FunnelPlot input={funnelInput} filenameBase={`${slugify(outcome.name)}-funnel`} />
           )}
         </CardContent>
       </Card>

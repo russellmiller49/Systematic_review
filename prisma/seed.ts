@@ -166,6 +166,10 @@ interface CiteSpec {
   abstract: string;
   volume?: string;
   pages?: string;
+  // Cohort-overlap demo: a trial-registry id (rendered into the abstract, where the
+  // parser scans for it) and record-level affiliations (rendered as AD tags).
+  nct?: string;
+  affiliations?: string[];
 }
 
 // PubMed-sourced records (exported as RIS; PMID rides in the AN tag).
@@ -174,6 +178,11 @@ const PUBMED: CiteSpec[] = [
     key: "criner",
     pmid: "32000001",
     doi: "10.1056/nejmoa1900101",
+    nct: "NCT01796392",
+    affiliations: [
+      "Department of Thoracic Medicine and Surgery, Temple University, Philadelphia, PA, USA",
+      "St. Joseph's Hospital and Medical Center, Phoenix, AZ, USA",
+    ],
     title:
       "Endobronchial valves for severe emphysema with little or no collateral ventilation: a randomized controlled trial",
     authors: ["Criner, Gerard J.", "Sue, Richard", "Wright, Shannon"],
@@ -183,6 +192,27 @@ const PUBMED: CiteSpec[] = [
     pages: "1151-1164",
     abstract:
       "Background: Bronchoscopic lung volume reduction with one-way endobronchial valves may benefit patients with severe heterogeneous emphysema. Methods: We randomized 190 patients with severe emphysema and absent collateral ventilation to Zephyr valve placement or standard of care. Results: At 12 months, FEV1 improved by 0.106 L versus controls (p<0.001); pneumothorax occurred in 26.6% of the treatment group. Conclusions: Valve therapy produced clinically meaningful improvements in lung function, dyspnea, and quality of life.",
+  },
+  {
+    // Companion report of the Criner (LIBERATE) cohort: a 24-month follow-up sharing the
+    // trial-registry id and lead authors, so cohort detection tier-1 matches it to `criner`.
+    // FT-included but deliberately NOT study-linked below → linking it is Case 1 (add the
+    // report into the existing Criner study). No DOI, so dedup does not merge it.
+    key: "criner_followup",
+    pmid: "32000012",
+    nct: "NCT01796392",
+    affiliations: [
+      "Department of Thoracic Medicine and Surgery, Temple University, Philadelphia, PA, USA",
+    ],
+    title:
+      "Zephyr endobronchial valve treatment in heterogeneous emphysema: 24-month durability follow-up of the LIBERATE cohort",
+    authors: ["Criner, Gerard J.", "Sue, Richard", "Dransfield, Mark T."],
+    year: 2019,
+    journal: "American Journal of Respiratory and Critical Care Medicine",
+    volume: "200",
+    pages: "1354-1362",
+    abstract:
+      "Rationale: Whether endobronchial valve benefits persist long term is uncertain. Methods: We followed the LIBERATE cohort of patients with severe emphysema and absent collateral ventilation for 24 months after Zephyr valve placement or standard of care. Results: FEV1 and quality-of-life gains were durable at 24 months with no new safety signals. Conclusions: Valve therapy benefits persist through two years in this cohort.",
   },
   {
     key: "slebos",
@@ -416,8 +446,13 @@ const EMBASE: CiteSpec[] = [
 
 function toRis(specs: CiteSpec[]): string {
   return specs
-    .map((r) =>
-      [
+    .map((r) => {
+      // The trial-registry id rides in the abstract (where the parser scans for it),
+      // affiliations become AD tags — both feed cohort-overlap detection.
+      const abstract = r.nct
+        ? `${r.abstract} Registered at ClinicalTrials.gov, ${r.nct}.`
+        : r.abstract;
+      return [
         "TY  - JOUR",
         `TI  - ${r.title}`,
         ...r.authors.map((a) => `AU  - ${a}`),
@@ -425,12 +460,13 @@ function toRis(specs: CiteSpec[]): string {
         `JO  - ${r.journal}`,
         ...(r.volume ? [`VL  - ${r.volume}`] : []),
         ...(r.pages ? [`SP  - ${r.pages}`] : []),
-        `AB  - ${r.abstract}`,
+        `AB  - ${abstract}`,
+        ...(r.affiliations ?? []).map((a) => `AD  - ${a}`),
         ...(r.doi ? [`DO  - ${r.doi}`] : []),
         ...(r.pmid ? [`AN  - ${r.pmid}`] : []),
         "ER  - ",
-      ].join("\n"),
-    )
+      ].join("\n");
+    })
     .join("\n");
 }
 
@@ -725,6 +761,7 @@ async function main() {
   // Per active citation: [reviewer1 decision, reviewer2 decision].
   const taPlan: { key: string; r1: Dec; r2: Dec }[] = [
     { key: "criner", r1: "INCLUDE", r2: "INCLUDE" }, // consensus INCLUDE → FT
+    { key: "criner_followup", r1: "INCLUDE", r2: "INCLUDE" }, // consensus INCLUDE → FT (companion report)
     { key: "slebos", r1: "INCLUDE", r2: "INCLUDE" }, // consensus INCLUDE → FT
     { key: "deslee", r1: "INCLUDE", r2: "INCLUDE" }, // consensus INCLUDE → FT (excluded later at FT)
     { key: "davey_believer", r1: "INCLUDE", r2: "EXCLUDE" }, // CONFLICT → adjudicate INCLUDE → FT
@@ -834,6 +871,20 @@ async function main() {
       notes: "Zephyr valve RCT with 12-month FEV1 outcome — eligible for meta-analysis.",
     });
   }
+
+  // Companion report: mark it full-text INCLUDE directly, WITHOUT the screening-consensus
+  // path that would auto-create a study for it (autoCreateForCitation). This leaves the
+  // report full-text-included but not yet study-linked, so the cohort-detection demo can
+  // link it into the existing Criner study (Case 1). Direct orchestration write, like the
+  // other read/write helpers in this seed.
+  await prisma.citationStageResult.create({
+    data: {
+      stageId: ftStage.id,
+      citationId: cid("criner_followup"),
+      outcome: "INCLUDE",
+      resolvedVia: "SINGLE_REVIEWER",
+    },
+  });
 
   // 10. Extraction -------------------------------------------------------------------------
   console.log("Building extraction template + extracting…");

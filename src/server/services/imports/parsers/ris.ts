@@ -1,5 +1,6 @@
 // RIS parser (TY..ER blocks). Pure, never throws — malformed blocks become error rows.
 import { normalizeDoi, normalizePmid, parseAuthorName } from "@/server/services/citations/normalize";
+import { extractRegistryIds } from "./registry-ids";
 import {
   emptyFileResult,
   extractYear,
@@ -130,6 +131,11 @@ function buildRecord(
   const ep = firstValue(tags, "EP");
   const pages = sp && ep ? (sp.includes("-") ? sp : `${sp}-${ep}`) : (sp ?? ep);
 
+  // AD (address/affiliation) and C1 (custom 1 — Embase/WoS affiliation exports) form the
+  // record-level affiliation bag; registry ids are scanned from those plus title + abstract.
+  const affiliations = uniqueValues(tags, "AD", "C1");
+  const abstract = firstValue(tags, "AB", "N2");
+
   const record: ParsedRecord = {
     title,
     authors,
@@ -138,15 +144,26 @@ function buildRecord(
     volume: firstValue(tags, "VL"),
     issue: firstValue(tags, "IS"),
     pages,
-    abstract: firstValue(tags, "AB", "N2"),
+    abstract,
     doi: normalizeDoi(firstValue(tags, "DO")) ?? undefined,
     // PubMed-sourced RIS carries the PMID as the accession number (AN, sometimes C2);
     // normalizePmid rejects non-numeric accessions from other databases.
     pmid: normalizePmid(firstValue(tags, "AN", "C2") ?? null) ?? undefined,
     url: firstValue(tags, "UR"),
     language: firstValue(tags, "LA"),
+    affiliations,
+    registryIds: extractRegistryIds(...affiliations, title, abstract),
     rawChunk,
     rowNumber,
   };
   return { record };
+}
+
+// All non-empty values across the given repeatable tags, trimmed, deduplicated in order.
+function uniqueValues(tags: Map<string, string[]>, ...keys: string[]): string[] {
+  const values = keys
+    .flatMap((key) => tags.get(key) ?? [])
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+  return [...new Set(values)];
 }
