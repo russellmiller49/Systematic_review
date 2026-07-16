@@ -3,8 +3,11 @@ import {
   extractionJsonSchemaFor,
   parseExtractionResult,
   parseScreeningResult,
+  parseRobResult,
+  robJsonSchemaFor,
   SCREENING_JSON_SCHEMA,
   type PromptField,
+  type RobPromptDomain,
 } from "./schemas";
 
 describe("parseScreeningResult", () => {
@@ -161,5 +164,178 @@ describe("parseExtractionResult", () => {
   it("throws when the envelope is malformed", () => {
     expect(() => parseExtractionResult({ items: [] })).toThrow();
     expect(() => parseExtractionResult(null)).toThrow();
+  });
+});
+
+const ROB_DOMAINS: RobPromptDomain[] = [
+  {
+    id: "d1",
+    name: "Randomization",
+    guidance: null,
+    questions: [
+      { id: "q1", text: "1.1", guidance: null, allowedAnswers: ["Y", "PY", "PN", "N", "NI"] },
+      { id: "q2", text: "1.2", guidance: null, allowedAnswers: ["Y", "N", "NA"] },
+    ],
+  },
+  { id: "d2", name: "Missing data", guidance: null, questions: [] },
+];
+
+describe("robJsonSchemaFor", () => {
+  it("pins domain ids, scale values, question ids, and the answer union", () => {
+    const schema = robJsonSchemaFor(["low", "high"], ROB_DOMAINS) as {
+      additionalProperties: boolean;
+      required: string[];
+      properties: {
+        domains: {
+          items: {
+            additionalProperties: boolean;
+            required: string[];
+            properties: {
+              domainId: { enum: string[] };
+              judgment: { anyOf: [{ enum: string[] }, { type: string }] };
+              answers: {
+                items: {
+                  properties: { questionId: { enum: string[] }; answer: { enum: string[] } };
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["domains"]);
+    const items = schema.properties.domains.items;
+    expect(items.additionalProperties).toBe(false);
+    expect(items.properties.domainId.enum).toEqual(["d1", "d2"]);
+    expect(items.properties.judgment.anyOf[0].enum).toEqual(["low", "high"]);
+    expect(items.properties.answers.items.properties.questionId.enum).toEqual(["q1", "q2"]);
+    // Union of allowed answers across the tool, not per-question oneOf branches.
+    expect(items.properties.answers.items.properties.answer.enum).toEqual([
+      "Y",
+      "PY",
+      "PN",
+      "N",
+      "NI",
+      "NA",
+    ]);
+    // OpenAI strict mode requires every property listed in required.
+    expect(items.required.sort()).toEqual(
+      ["answers", "assessable", "confidence", "domainId", "judgment", "quotes", "rationale"].sort(),
+    );
+  });
+
+  it("falls back to plain strings when a tool has no questions (empty enums are illegal)", () => {
+    const schema = robJsonSchemaFor(["low"], [ROB_DOMAINS[1]!]) as {
+      properties: {
+        domains: {
+          items: {
+            properties: {
+              answers: { items: { properties: { questionId: Record<string, unknown> } } };
+            };
+          };
+        };
+      };
+    };
+    const questionId = schema.properties.domains.items.properties.answers.items.properties.questionId;
+    expect(questionId).toEqual({ type: "string" });
+  });
+});
+
+describe("parseRobResult", () => {
+  it("normalizes a valid domain — clamps confidence, rounds pages, trims quotes", () => {
+    const parsed = parseRobResult({
+      domains: [
+        {
+          domainId: "d1",
+          assessable: true,
+          judgment: " low ",
+          rationale: "  Central randomization was used.  ",
+          confidence: 1.4,
+          quotes: [{ text: "  computer-generated sequence  ", page: 3.6 }],
+          answers: [
+            { questionId: "q1", answer: "Y", quote: " random sequence ", page: 0 },
+            { questionId: "q1", answer: "N", quote: null, page: null },
+          ],
+        },
+      ],
+    });
+    expect(parsed).toEqual([
+      {
+        domainId: "d1",
+        assessable: true,
+        judgment: "low",
+        rationale: "Central randomization was used.",
+        confidence: 1,
+        quotes: [{ text: "computer-generated sequence", page: 4 }],
+        // duplicate questionId — first entry wins
+        answers: [{ questionId: "q1", answer: "Y", quote: "random sequence", page: 1 }],
+      },
+    ]);
+  });
+
+  it("caps quotes at three per domain and drops empty-text quotes", () => {
+    const parsed = parseRobResult({
+      domains: [
+        {
+          domainId: "d1",
+          assessable: true,
+          judgment: "low",
+          rationale: "x",
+          confidence: null,
+          quotes: [
+            { text: "  ", page: 1 },
+            { text: "a", page: 1 },
+            { text: "b", page: 2 },
+            { text: "c", page: 3 },
+            { text: "d", page: 4 },
+          ],
+          answers: [],
+        },
+      ],
+    });
+    expect(parsed[0]!.quotes.map((q) => q.text)).toEqual(["a", "b", "c"]);
+  });
+
+  it("dedupes domains (first wins) and treats blank judgments as null", () => {
+    const parsed = parseRobResult({
+      domains: [
+        { domainId: "d2", assessable: false, judgment: "  ", rationale: null, confidence: null },
+        { domainId: "d2", assessable: true, judgment: "low", rationale: "x", confidence: 0.5 },
+      ],
+    });
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      domainId: "d2",
+      assessable: false,
+      judgment: null,
+      rationale: "",
+      quotes: [],
+      answers: [],
+    });
+  });
+
+  it("truncates very long rationales and quotes", () => {
+    const parsed = parseRobResult({
+      domains: [
+        {
+          domainId: "d1",
+          assessable: true,
+          judgment: "low",
+          rationale: "a".repeat(9000),
+          confidence: null,
+          quotes: [{ text: "b".repeat(3000), page: 1 }],
+          answers: [{ questionId: "q1", answer: "Y", quote: "c".repeat(900), page: 1 }],
+        },
+      ],
+    });
+    expect(parsed[0]!.rationale).toHaveLength(4000);
+    expect(parsed[0]!.quotes[0]!.text).toHaveLength(1500);
+    expect(parsed[0]!.answers[0]!.quote).toHaveLength(500);
+  });
+
+  it("throws when the envelope is malformed", () => {
+    expect(() => parseRobResult({ items: [] })).toThrow();
+    expect(() => parseRobResult(null)).toThrow();
   });
 });

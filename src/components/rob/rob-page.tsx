@@ -12,6 +12,7 @@ import { ToolsTab } from "./tools-tab";
 import {
   hasCap,
   type MemberRow,
+  type ProjectAiStatus,
   type RobAssessment,
   type RobAssignment,
   type RobConflict,
@@ -25,11 +26,13 @@ interface MePayload {
 
 interface ProjectPayload {
   myRoles: string[];
+  ai: ProjectAiStatus;
 }
 
 export function RobPage({ projectId }: { projectId: string }) {
   const [meId, setMeId] = useState<string | null>(null);
   const [roles, setRoles] = useState<string[] | null>(null);
+  const [ai, setAi] = useState<ProjectAiStatus | null>(null);
   const [tools, setTools] = useState<RobTool[] | null>(null);
   const [builtins, setBuiltins] = useState<RobTool[] | null>(null);
   const [studies, setStudies] = useState<StudyRow[] | null>(null);
@@ -86,7 +89,10 @@ export function RobPage({ projectId }: { projectId: string }) {
       .then((me) => setMeId(me.user.id))
       .catch(() => toast.error("Failed to load your session"));
     api<ProjectPayload>(`/api/projects/${projectId}`)
-      .then((p) => setRoles(p.myRoles))
+      .then((p) => {
+        setRoles(p.myRoles);
+        setAi(p.ai ?? null);
+      })
       .catch(() => setRoles([]));
     api<StudyRow[]>(`/api/projects/${projectId}/studies`)
       .then(setStudies)
@@ -156,6 +162,7 @@ export function RobPage({ projectId }: { projectId: string }) {
             myAssignments={myAssignments}
             canAssess={canAssess}
             canEditProject={canEditProject}
+            ai={ai}
             reloadAssessments={loadAssessments}
             refreshAll={refreshAssessData}
           />

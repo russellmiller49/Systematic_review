@@ -18,6 +18,7 @@ import { can, requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { DEFAULT_ALLOWED_ANSWERS } from "./builtin";
+import { answerNote, buildSupportText } from "@/server/services/ai-rob/format";
 
 export { ensureBuiltinGenericTool, ensureBuiltinTool, DEFAULT_ALLOWED_ANSWERS } from "./builtin";
 export { ensureBuiltinStandardTools, STANDARD_TOOL_DEFS } from "./standard-tools";
@@ -101,6 +102,10 @@ export const putResponseSchema = z.object({
 
 export const updateAssessmentSchema = z.object({
   overallJudgment: z.string().min(1),
+});
+
+export const applySuggestionSchema = z.object({
+  domainId: z.string().min(1),
 });
 
 export const adjudicateConflictSchema = z.object({
@@ -892,6 +897,145 @@ export async function updateAssessment(
       metadata: { overall: true },
     });
     return updated;
+  });
+}
+
+// Apply an AI RoB suggestion (RobSuggestion) into the caller's OWN assessment — judgment +
+// valid signaling answers in one atomic transaction. Server-authoritative: everything is
+// copied from the suggestion row (the client sends only the domainId), judgment and answers
+// are re-validated against the tool, and the assessor stays the author. Mirrors extraction's
+// applied-suggestion branch in upsertValue.
+export async function applySuggestion(
+  ctx: Ctx,
+  projectId: string,
+  assessmentId: string,
+  input: z.infer<typeof applySuggestionSchema>,
+) {
+  await requirePermission(ctx, projectId, "rob.assess");
+  return prisma.$transaction(async (tx) => {
+    const assessment = await loadAssessment(tx, projectId, assessmentId);
+    assertMineAndInProgress(ctx, assessment);
+
+    const domain = await tx.riskOfBiasDomain.findFirst({
+      where: { id: input.domainId, toolId: assessment.toolId },
+      include: { questions: true },
+    });
+    if (!domain) throw notFound("Domain");
+
+    const suggestion = await tx.robSuggestion.findUnique({
+      where: {
+        toolId_studyId_domainId: {
+          toolId: assessment.toolId,
+          studyId: assessment.studyId,
+          domainId: domain.id,
+        },
+      },
+    });
+    if (
+      !suggestion ||
+      suggestion.notFound ||
+      suggestion.invalidReason !== null ||
+      suggestion.suggestedJudgment === null
+    ) {
+      throw notFound("Applyable AI suggestion");
+    }
+
+    // Validation intact even against a tampered suggestion row.
+    assertJudgmentInScale(assessment.tool, suggestion.suggestedJudgment);
+    await assertNotAdjudicated(tx, assessment.toolId, assessment.studyId, domain.id);
+
+    // Signaling answers: authoritative re-check per question; invalid entries are counted
+    // as skipped, never errors. No response-level audit (existing deliberate stance).
+    const questionsById = new Map(domain.questions.map((q) => [q.id, q]));
+    const answers = Array.isArray(suggestion.signalingAnswers)
+      ? (suggestion.signalingAnswers as unknown as {
+          questionId: string;
+          answer: string;
+          quote: string | null;
+          page: number | null;
+          invalidReason?: string;
+        }[])
+      : [];
+    let responsesApplied = 0;
+    let responsesSkipped = 0;
+    for (const answer of answers) {
+      const question = questionsById.get(answer.questionId);
+      const allowed =
+        question && Array.isArray(question.allowedAnswers)
+          ? (question.allowedAnswers as string[])
+          : [];
+      if (!question || answer.invalidReason || !allowed.includes(answer.answer)) {
+        responsesSkipped += 1;
+        continue;
+      }
+      await tx.riskOfBiasSignalingResponse.upsert({
+        where: {
+          assessmentId_questionId: { assessmentId, questionId: question.id },
+        },
+        create: {
+          assessmentId,
+          questionId: question.id,
+          answer: answer.answer,
+          note: answerNote(answer.quote, answer.page),
+        },
+        update: { answer: answer.answer, note: answerNote(answer.quote, answer.page) },
+      });
+      responsesApplied += 1;
+    }
+
+    const support = buildSupportText({
+      rationale: suggestion.rationale,
+      quotes: Array.isArray(suggestion.quotes)
+        ? (suggestion.quotes as unknown as { text: string; page: number | null }[])
+        : [],
+    });
+    const aiMetadata = {
+      assessmentId,
+      domainId: domain.id,
+      appliedFromSuggestionId: suggestion.id,
+      aiProvider: suggestion.provider,
+      aiModel: suggestion.model,
+    };
+
+    const existing = await tx.riskOfBiasJudgment.findUnique({
+      where: { assessmentId_domainId: { assessmentId, domainId: domain.id } },
+    });
+    let judgment;
+    if (existing) {
+      judgment = await tx.riskOfBiasJudgment.update({
+        where: { id: existing.id },
+        data: { judgment: suggestion.suggestedJudgment, support },
+      });
+      await audit.record(tx, {
+        projectId,
+        userId: ctx.userId,
+        entityType: "RiskOfBiasJudgment",
+        entityId: existing.id,
+        action: AuditActions.ROB_JUDGMENT_UPDATED,
+        previousValue: { judgment: existing.judgment, support: existing.support },
+        newValue: { judgment: judgment.judgment, support: judgment.support },
+        metadata: aiMetadata,
+      });
+    } else {
+      judgment = await tx.riskOfBiasJudgment.create({
+        data: {
+          assessmentId,
+          domainId: domain.id,
+          judgment: suggestion.suggestedJudgment,
+          support,
+        },
+      });
+      await audit.record(tx, {
+        projectId,
+        userId: ctx.userId,
+        entityType: "RiskOfBiasJudgment",
+        entityId: judgment.id,
+        action: AuditActions.ROB_JUDGMENT_CREATED,
+        newValue: { judgment: judgment.judgment, support: judgment.support },
+        metadata: aiMetadata,
+      });
+    }
+    return { judgment, responsesApplied, responsesSkipped };
   });
 }
 

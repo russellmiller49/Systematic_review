@@ -133,6 +133,82 @@ export interface MemberRow {
   user: { id: string; name: string; email: string };
 }
 
+// --- AI suggestions ------------------------------------------------------------
+
+// `ai` block on GET /api/projects/:id — server-side AI feature status for UI gating.
+export interface ProjectAiStatus {
+  enabled: boolean;
+  provider: string;
+  screeningModel: string;
+  extractionModel: string;
+}
+
+export interface RobSuggestionQuote {
+  text: string;
+  page: number | null;
+}
+
+export interface RobSignalingAnswerData {
+  questionId: string;
+  answer: string;
+  quote: string | null;
+  page: number | null;
+  invalidReason?: string;
+}
+
+export interface RobSuggestionData {
+  id: string;
+  domainId: string;
+  suggestedJudgment: string | null;
+  rationale: string;
+  // JSON columns — shaped by the ingest service; guard with the as* helpers below.
+  quotes: unknown;
+  signalingAnswers: unknown;
+  confidence: number | null;
+  notFound: boolean;
+  invalidReason: string | null;
+  provider: string;
+  model: string;
+  domain: { id: string; name: string; order: number };
+}
+
+export interface AiRobRunData {
+  id: string;
+  status: "PENDING" | "SUBMITTED" | "COMPLETED" | "FAILED" | "CANCELED";
+  totalDomains: number;
+  suggestedCount: number;
+  invalidCount: number;
+  notFoundCount: number;
+  error?: string | null;
+  createdAt: string;
+  requestedBy?: { id: string; name: string };
+}
+
+export interface RobSuggestionsResponse {
+  suggestions: RobSuggestionData[];
+  latestRun: AiRobRunData | null;
+  pdf: { fileId: string; filename: string; sizeBytes: number } | null;
+}
+
+export function asQuotes(v: unknown): RobSuggestionQuote[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (q): q is RobSuggestionQuote =>
+      q !== null && typeof q === "object" && typeof (q as { text?: unknown }).text === "string",
+  );
+}
+
+export function asSignalingAnswers(v: unknown): RobSignalingAnswerData[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (a): a is RobSignalingAnswerData =>
+      a !== null &&
+      typeof a === "object" &&
+      typeof (a as { questionId?: unknown }).questionId === "string" &&
+      typeof (a as { answer?: unknown }).answer === "string",
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Judgment-scale helpers — the scale is data-driven JSON, so guard defensively.
 // ---------------------------------------------------------------------------

@@ -38,3 +38,13 @@ history → export. Each maps to at least one integration or E2E test.
 7. Living-review surveillance (saved searches → new ImportBatches → triage queue)
 8. Multi-PICO projects (`picoQuestionId` FKs)
 9. Cohort-overlap detection; manuscript/table generation; notifications; OpenSearch
+10. ~~AI risk-of-bias suggestions with quoted evidence~~ ✅ 2026-07-16 —
+    `RobSuggestion`/`AiRobRun` + per-domain Apply through `applySuggestion`
+    (`src/server/services/ai-rob`, prompt `rob-v1`)
+11. ~~Cross-study extraction table (living table, phase 1)~~ ✅ 2026-07-16 — resolved
+    matrix (adjudicated > agreed > single) + evidence popovers + click-to-page PDF dialog
+    + CSV export (`src/server/services/extraction/matrix.ts`, extraction "Table" tab)
+12. Evidence anchoring phases 2–3 (pdfjs viewer + quote highlighting; server text layer +
+    anchor v2 + selection-to-anchor + re-anchor backfill) — per the 2026-07-16 roadmap
+13. PRISMA 2020 completeness polish (registers/"other methods" arms, awaiting-classification
+    bucket) — counts themselves are already fully automatic

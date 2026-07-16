@@ -107,6 +107,9 @@ export const AuditActions = {
   AI_EXTRACTION_STARTED: "ai.extraction.started",
   AI_EXTRACTION_COMPLETED: "ai.extraction.completed",
   AI_EXTRACTION_FAILED: "ai.extraction.failed",
+  AI_ROB_STARTED: "ai.rob.started",
+  AI_ROB_COMPLETED: "ai.rob.completed",
+  AI_ROB_FAILED: "ai.rob.failed",
 } as const;
 
 export type AuditAction = (typeof AuditActions)[keyof typeof AuditActions];

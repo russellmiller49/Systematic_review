@@ -250,6 +250,7 @@ model User {
   auditEvents             AuditEvent[]               @relation("AuditActor")
   aiScreeningRuns         AiScreeningRun[]           @relation("AiScreeningRunRequester")
   aiExtractionRuns        AiExtractionRun[]          @relation("AiExtractionRunRequester")
+  aiRobRuns               AiRobRun[]                 @relation("AiRobRunRequester")
 }
 
 model Organization {
@@ -316,6 +317,7 @@ model Project {
   auditEvents         AuditEvent[]
   aiScreeningRuns     AiScreeningRun[]
   aiExtractionRuns    AiExtractionRun[]
+  aiRobRuns           AiRobRun[]
 
   @@index([orgId])
 }
@@ -679,6 +681,8 @@ model Study {
   robConflicts          RiskOfBiasConflict[]
   aiExtractionRuns      AiExtractionRun[]
   aiSuggestions         ExtractionSuggestion[]
+  aiRobRuns             AiRobRun[]
+  robSuggestions        RobSuggestion[]
 
   @@index([projectId])
 }
@@ -839,6 +843,7 @@ model FullTextFile {
   uploadedBy       User                   @relation("FileUploader", fields: [uploadedById], references: [id])
   links            CitationFullTextLink[]
   aiExtractionRuns AiExtractionRun[]
+  aiRobRuns        AiRobRun[]
 
   @@index([projectId])
   @@index([sha256])
@@ -1138,6 +1143,73 @@ model ExtractionSuggestion {
   @@index([studyId])
 }
 
+// One synchronous provider call per (study, tool) reads the study's linked PDF and drafts,
+// per domain: signaling answers, a judgment, and supporting verbatim quotes with pages.
+model AiRobRun {
+  id             String      @id @default(cuid())
+  projectId      String
+  studyId        String
+  toolId         String
+  fileId         String // the FullTextFile that was read
+  status         AiRunStatus @default(PENDING)
+  provider       String
+  model          String
+  promptVersion  String
+  totalDomains   Int         @default(0)
+  suggestedCount Int         @default(0) // applyable domain suggestions stored
+  invalidCount   Int         @default(0) // judgment failed the tool's scale validation
+  notFoundCount  Int         @default(0) // domain not assessable from the document
+  error          String?
+  usage          Json?
+  requestedById  String
+  createdAt      DateTime    @default(now())
+  completedAt    DateTime?
+
+  project     Project         @relation(fields: [projectId], references: [id])
+  study       Study           @relation(fields: [studyId], references: [id])
+  tool        RiskOfBiasTool  @relation(fields: [toolId], references: [id])
+  file        FullTextFile    @relation(fields: [fileId], references: [id])
+  requestedBy User            @relation("AiRobRunRequester", fields: [requestedById], references: [id])
+  suggestions RobSuggestion[]
+
+  @@index([studyId, toolId, createdAt(sort: Desc)])
+  @@index([projectId, status])
+}
+
+// Latest AI draft per (tool, study, domain); re-runs replace. Never read by conflict,
+// completion, or adjudication logic — display + apply-source only. Applying goes through
+// the rob service's applySuggestion (human write path); the AI never writes a judgment or
+// signaling-response row itself. NOTE: like extraction suggestions, these are shared across
+// dual assessors — a deliberate, documented independence tradeoff.
+model RobSuggestion {
+  id                String   @id @default(cuid())
+  runId             String
+  toolId            String
+  studyId           String
+  domainId          String
+  suggestedJudgment String? // validated against tool.judgmentScale on ingest; raw kept + invalidReason when it fails
+  rationale         String // narrative draft for the "support for judgment" field
+  quotes            Json // [{ text, page }] — verbatim, 1-based PDF pages
+  signalingAnswers  Json // [{ questionId, answer, quote?, page?, invalidReason? }]
+  confidence        Float? // 0–1, clamped on ingest
+  notFound          Boolean  @default(false) // domain not assessable from the document
+  invalidReason     String? // judgment failed scale validation; never applyable
+  provider          String
+  model             String
+  promptVersion     String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  run    AiRobRun         @relation(fields: [runId], references: [id])
+  tool   RiskOfBiasTool   @relation(fields: [toolId], references: [id])
+  study  Study            @relation(fields: [studyId], references: [id])
+  domain RiskOfBiasDomain @relation(fields: [domainId], references: [id])
+
+  @@unique([toolId, studyId, domainId])
+  @@index([runId])
+  @@index([studyId])
+}
+
 // ---------------------------------------------------------------------------
 // Risk of bias
 // ---------------------------------------------------------------------------
@@ -1158,11 +1230,13 @@ model RiskOfBiasTool {
   project   Project? @relation(fields: [projectId], references: [id])
   createdBy User?    @relation("RobToolCreator", fields: [createdById], references: [id])
 
-  domains     RiskOfBiasDomain[]
-  assignments RiskOfBiasAssignment[]
-  assessments RiskOfBiasAssessment[]
-  conflicts   RiskOfBiasConflict[]
-  protocols   Protocol[]
+  domains       RiskOfBiasDomain[]
+  assignments   RiskOfBiasAssignment[]
+  assessments   RiskOfBiasAssessment[]
+  conflicts     RiskOfBiasConflict[]
+  protocols     Protocol[]
+  aiRuns        AiRobRun[]
+  aiSuggestions RobSuggestion[]
 
   @@index([projectId])
 }
@@ -1192,10 +1266,11 @@ model RiskOfBiasDomain {
   guidance String?
   order    Int     @default(0)
 
-  tool      RiskOfBiasTool                @relation(fields: [toolId], references: [id])
-  questions RiskOfBiasSignalingQuestion[]
-  judgments RiskOfBiasJudgment[]
-  conflicts RiskOfBiasConflict[]
+  tool          RiskOfBiasTool                @relation(fields: [toolId], references: [id])
+  questions     RiskOfBiasSignalingQuestion[]
+  judgments     RiskOfBiasJudgment[]
+  conflicts     RiskOfBiasConflict[]
+  aiSuggestions RobSuggestion[]
 
   @@index([toolId, order])
 }

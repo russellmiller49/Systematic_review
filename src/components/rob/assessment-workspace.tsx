@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowLeft, CheckCircle2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, CheckCircle2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import { apiPatch, apiPost, apiPut, ApiError } from "@/lib/api";
+import { api, apiPatch, apiPost, apiPut, ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,11 +12,17 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, Separator, Spinner } from "@/components/ui/misc";
 import { JudgmentBadge, JudgmentPicker } from "./judgment";
+import { AnswerHint, DomainSuggestionCard } from "./rob-ai-suggestions";
 import {
+  asSignalingAnswers,
   asStringArray,
   getScale,
+  type AiRobRunData,
   type AssessmentStatus,
+  type ProjectAiStatus,
   type RobAssessment,
+  type RobSuggestionData,
+  type RobSuggestionsResponse,
   type RobTool,
 } from "./types";
 
@@ -38,6 +44,7 @@ export function AssessmentWorkspace({
   assessment,
   tool,
   meId,
+  ai,
   onBack,
   onChanged,
 }: {
@@ -45,6 +52,7 @@ export function AssessmentWorkspace({
   assessment: RobAssessment;
   tool: RobTool | undefined;
   meId: string | null;
+  ai: ProjectAiStatus | null;
   onBack: () => void;
   onChanged: () => void;
 }) {
@@ -66,6 +74,12 @@ export function AssessmentWorkspace({
   const [overall, setOverall] = useState<string | null>(assessment.overallJudgment);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
+  // AI RoB suggestions (only loaded for the assessment's own assessor while editable).
+  const [aiData, setAiData] = useState<RobSuggestionsResponse | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  const [applyingAll, setApplyingAll] = useState(false);
+  const [applyingDomain, setApplyingDomain] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   const mine = meId !== null && assessment.assessorId === meId;
   const readOnly = status === "COMPLETED" || !mine;
@@ -74,9 +88,124 @@ export function AssessmentWorkspace({
   const judgedCount = toolDomains.filter((d) => domains[d.id]?.judgment).length;
   const base = `/api/projects/${projectId}/rob/assessments/${assessment.id}`;
 
+  const aiActive = mine && status === "IN_PROGRESS" && ai !== null && ai.enabled;
+  const suggestionsUrl = `/api/projects/${projectId}/studies/${assessment.studyId}/rob-suggestions?toolId=${assessment.toolId}`;
+
+  useEffect(() => {
+    if (!aiActive) return;
+    let cancelled = false;
+    api<RobSuggestionsResponse>(suggestionsUrl)
+      .then((resp) => {
+        if (!cancelled) setAiData(resp);
+      })
+      .catch(() => {
+        // Silent: the AI panel simply stays inert; errors surface on explicit actions.
+        if (!cancelled) setAiData(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [aiActive, suggestionsUrl]);
+
+  const suggestionByDomain = new Map(
+    (aiData?.suggestions ?? []).map((s) => [s.domainId, s] as const),
+  );
+
+  function isApplyable(s: RobSuggestionData): boolean {
+    return !s.notFound && !s.invalidReason && s.suggestedJudgment !== null;
+  }
+
   function domainState(domainId: string): DomainState {
     return domains[domainId] ?? { judgment: null, support: "" };
   }
+
+  async function runDraft() {
+    setDrafting(true);
+    try {
+      const resp = await apiPost<{ run: AiRobRunData; suggestions: RobSuggestionData[] }>(
+        `/api/projects/${projectId}/studies/${assessment.studyId}/rob-suggestions`,
+        { toolId: assessment.toolId },
+      );
+      setAiData((prev) => ({
+        suggestions: resp.suggestions,
+        latestRun: resp.run,
+        pdf: prev?.pdf ?? null,
+      }));
+      setDismissed(new Set());
+      // Background refresh keeps the pdf info accurate (not part of the POST response).
+      api<RobSuggestionsResponse>(suggestionsUrl).then(setAiData).catch(() => undefined);
+      toast.success(
+        `AI draft ready — ${resp.run.suggestedCount} of ${resp.run.totalDomains} domains suggested` +
+          (resp.run.notFoundCount > 0
+            ? `, ${resp.run.notFoundCount} not assessable from the PDF`
+            : ""),
+      );
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "AI risk-of-bias draft failed");
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  // Applies the suggestion for one domain into MY assessment via the dedicated route.
+  // The server copies judgment + support + valid signaling answers from the suggestion
+  // row atomically; the response tells us what was written.
+  async function applyDomainSuggestion(domainId: string): Promise<boolean> {
+    const suggestion = suggestionByDomain.get(domainId);
+    if (!suggestion) return false;
+    setApplyingDomain(domainId);
+    try {
+      const result = await apiPost<{
+        judgment: { judgment: string; support: string | null };
+        responsesApplied: number;
+        responsesSkipped: number;
+      }>(`${base}/apply-suggestion`, { domainId });
+      setDomains((prev) => ({
+        ...prev,
+        [domainId]: {
+          judgment: result.judgment.judgment,
+          support: result.judgment.support ?? "",
+        },
+      }));
+      setSavedSupport((prev) => ({ ...prev, [domainId]: result.judgment.support ?? "" }));
+      // Mirror the responses the server just wrote (valid answers only).
+      setResponses((prev) => {
+        const next = { ...prev };
+        for (const answer of asSignalingAnswers(suggestion.signalingAnswers)) {
+          if (!answer.invalidReason) next[answer.questionId] = answer.answer;
+        }
+        return next;
+      });
+      return true;
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to apply AI suggestion");
+      return false;
+    } finally {
+      setApplyingDomain(null);
+    }
+  }
+
+  // Bulk apply into UNJUDGED domains only — never overwrites judgments you made.
+  async function applyAllUnjudged() {
+    const targets = toolDomains.filter((d) => {
+      const s = suggestionByDomain.get(d.id);
+      return s !== undefined && isApplyable(s) && !dismissed.has(s.id) && !domainState(d.id).judgment;
+    });
+    if (targets.length === 0) return;
+    setApplyingAll(true);
+    let applied = 0;
+    for (const domain of targets) {
+      if (await applyDomainSuggestion(domain.id)) applied += 1;
+    }
+    setApplyingAll(false);
+    toast.success(`Applied ${applied} AI suggestion${applied === 1 ? "" : "s"}`);
+  }
+
+  const applyAllCount = toolDomains.filter((d) => {
+    const s = suggestionByDomain.get(d.id);
+    return s !== undefined && isApplyable(s) && !dismissed.has(s.id) && !domainState(d.id).judgment;
+  }).length;
+  const pdfMissing = aiData !== null && aiData.pdf === null;
 
   async function saveAnswer(questionId: string, answer: string) {
     const previous = responses[questionId];
@@ -180,6 +309,35 @@ export function AssessmentWorkspace({
           </p>
         </div>
         <div className="flex-1" />
+        {aiActive && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={drafting || applyingAll || pdfMissing}
+              title={
+                pdfMissing
+                  ? "Link a PDF to this study's report on the Full text page first"
+                  : "Have the AI read the study PDF and draft judgments with quoted evidence"
+              }
+              onClick={() => void runDraft()}
+            >
+              {drafting ? <Spinner className="h-3.5 w-3.5" /> : <Sparkles />}
+              {drafting ? "Reading PDF…" : "AI draft"}
+            </Button>
+            {applyAllCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={applyingAll || drafting}
+                title="Apply AI suggestions to every domain you haven't judged yet"
+                onClick={() => void applyAllUnjudged()}
+              >
+                {applyingAll && <Spinner className="h-3.5 w-3.5" />} Apply all ({applyAllCount})
+              </Button>
+            )}
+          </>
+        )}
         <Badge variant={status === "COMPLETED" ? "include" : "maybe"}>
           {status === "COMPLETED" ? "completed" : "in progress"}
         </Badge>
@@ -229,7 +387,20 @@ export function AssessmentWorkspace({
                       className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                     >
                       <div className="min-w-0">
-                        <p className="text-sm leading-snug">{q.text}</p>
+                        <p className="text-sm leading-snug">
+                          {q.text}{" "}
+                          {aiActive && (
+                            <AnswerHint
+                              suggestion={
+                                suggestionByDomain.get(domain.id) &&
+                                !dismissed.has(suggestionByDomain.get(domain.id)!.id)
+                                  ? suggestionByDomain.get(domain.id)
+                                  : undefined
+                              }
+                              questionId={q.id}
+                            />
+                          )}
+                        </p>
                         {q.guidance && (
                           <p className="mt-0.5 text-xs text-muted-foreground">{q.guidance}</p>
                         )}
@@ -267,6 +438,22 @@ export function AssessmentWorkspace({
                   onChange={(v) => void saveJudgment(domain.id, v)}
                 />
               </div>
+
+              {(() => {
+                if (!aiActive) return null;
+                const suggestion = suggestionByDomain.get(domain.id);
+                if (!suggestion || dismissed.has(suggestion.id)) return null;
+                return (
+                  <DomainSuggestionCard
+                    suggestion={suggestion}
+                    scale={scale}
+                    canApply={!readOnly}
+                    applying={applyingDomain === domain.id || applyingAll}
+                    onApply={() => void applyDomainSuggestion(domain.id)}
+                    onDismiss={() => setDismissed((p) => new Set(p).add(suggestion.id))}
+                  />
+                );
+              })()}
 
               <div className="space-y-2">
                 <Label htmlFor={`support-${domain.id}`}>Support for judgment</Label>

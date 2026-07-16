@@ -4,6 +4,65 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.claude/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-16) — AI-features roadmap Wave 1 (AI RoB + living extraction table)
+
+A five-feature prioritized roadmap was planned (plan file:
+`~/.claude/plans/i-m-interested-in-utilizing-jiggly-hennessy.md`): living extraction tables
+w/ sentence anchoring, effect sizes + forest plots, PRISMA auto-tracking (found already
+complete), AI RoB suggestions + cohort detection, GRADE drafts. Build order: quick wins →
+meta-analysis (binary/continuous first, proportions next) → deep anchoring/cohorts → GRADE.
+Wave 1 is done:
+
+- **AI RoB suggestions (roadmap #4a)**: ✅ `AiRobRun` + `RobSuggestion`
+  (`@@unique([toolId,studyId,domainId])`, latest-wins full replace; migration
+  `20260716154758_ai_rob_suggestions`). One sync `extractFromPdf` call per (study, tool)
+  covering ALL domains (PDF dominates tokens): `runRobSuggestion` (rob.assess; PUBLISHED
+  project-or-builtin tool; reuses `resolveStudyPdf`; reuses `AI_EXTRACTION_MODEL` — add a
+  dedicated env if they ever diverge). Prompt `rob-v1` (`src/server/ai/prompts/rob.ts`)
+  serializes the full tool structure (domains + SQs + allowedAnswers + judgmentScale +
+  guidance) so all six seeded standard tools AND custom tools work; conditional-NA rules
+  ride on guidance strings. Wire schema uses a UNION answer enum (not per-question oneOf —
+  OpenAI strict-mode safe); authoritative per-question validation on ingest
+  (`parseRobResult` clamps: rationale ≤4000, quotes ≤3×1500, answer quotes ≤500). Per
+  domain: applyable | invalid judgment (kept + invalidReason, never applyable) | notFound
+  (not assessable). Apply is server-authoritative via `rob.applySuggestion` (one atomic tx:
+  judgment + support built from rationale + "p. N: “quote”" lines [10k clamp, quotes win] +
+  valid signaling responses with "“quote” (p. N)" notes; `assertJudgmentInScale` +
+  `assertNotAdjudicated` intact; audit `ROB_JUDGMENT_*` with
+  `{appliedFromSuggestionId, aiProvider, aiModel}`). Audit run-level only (`ai.rob.*`).
+  R1 note: suggestions shared across dual assessors — same documented tradeoff as
+  extraction. UI: assessment-workspace gains "AI draft"/"Apply all (n)" header buttons
+  (gated `ai.enabled` + own + IN_PROGRESS + PDF present), per-domain suggestion cards
+  (JudgmentBadge + confidence + quotes + Apply/Dismiss), per-question "AI: Y" hint chips.
+- **Living extraction table, phase 1 (roadmap #1a)**: ✅ new "Table" tab on the extraction
+  page. `getExtractionMatrix` (`src/server/services/extraction/matrix.ts`) + pure
+  `resolveMatrixCell` (`matrix-resolve.ts`): precedence ADJUDICATED (RESOLVED conflict's
+  finalValue) > disputed (OPEN conflict, or completed disagreement) > AGREED (≥2 COMPLETED
+  `valuesEqual`) > SINGLE > empty; VOIDED conflicts ignored. Blinding reuses the `listForms`
+  rule verbatim (extraction.adjudicate || project.edit ⇒ see all + conflicts/adjudications;
+  else own forms only — a personal table, no dispute leak). Batched study→PDF resolution
+  mirrors `resolveStudyPdf` ordering. UI (`matrix-tab.tsx`): sticky first column, source
+  badges (Adjudicated/Agreed/Single/Conflict), evidence dot, cell popover (per-extractor
+  entries + quotes + adjudication reason + "Open in PDF"), iframe PDF dialog with `#page=N`
+  + quote banner (Safari may ignore #page — accepted, fixed by roadmap phase 2 pdfjs
+  viewer), client-side CSV export (papaparse), focus + 60s refetch. New routes:
+  `GET extraction/matrix?templateId=`, `GET studies/[studyId]/pdf` (project.view — works
+  with AI off). New `src/components/ui/popover.tsx` primitive (dep already present).
+- **PRISMA (roadmap #3)**: verified already fully automatic (all 11 counts incl.
+  `reports_not_retrieved` latest-attempt logic at `prisma-report/index.ts:82-100`);
+  nothing built; completeness polish recorded as docs/08 backlog #13.
+- Verified: tsc, next build, **167 unit + 174 integration**, 5/5 E2E; browser-checked the
+  Table tab on the seeded demo (Agreed badges, Adjudicated badge on Criner 2018 sample size,
+  popover showing "Adjudicated: 190 by Ada Adjudicator" + both extractors' 190/180 values)
+  and the RoB page (AI controls correctly hidden while `ai.enabled=false`). AI RoB flow
+  covered end-to-end by `tests/integration/ai-rob.test.ts` (FakeAiProvider). Demo DB was
+  only read during browser checks (no reseed needed).
+- Next up (roadmap Wave 2): meta-analysis phase A (AnalysisOutcome + field-role mapping +
+  `src/lib/stats/` with metafor golden fixtures + forest-plot SVG per diagram-layout
+  pattern; binary + continuous first per user) and pdfjs viewer + quote highlight
+  (`src/lib/quote-match.ts`). Then Wave 3 (anchor v2 + proportions + cohort detection
+  incl. NBIB/RIS affiliation + registry-ID capture), Wave 4 (GRADE + SoF).
+
 ## Pilot deployment (2026-07-14)
 
 - **Live:** `https://synthesis-production-07a3.up.railway.app` in the dedicated Railway
@@ -169,8 +228,10 @@ the UI and demonstrated by the seed + E2E. Remaining items are all post-MVP back
 ## Remaining work
 
 **None for MVP**, and post-MVP backlog items 1–4 (PRISMA diagram, built-in RoB tool catalog,
-AI prescreening, AI extraction) are ✅ done (2026-07-12 and 2026-07-14 states above). Next up
-in docs/08: meta-analysis (#5), GRADE (#6), … — plus the "Known follow-ups" below remain open.
+AI prescreening, AI extraction) plus AI RoB suggestions (#10) and the living extraction table
+phase 1 (#11) are ✅ done (2026-07-12/14/16 states above). Next up per the 2026-07-16 roadmap:
+meta-analysis (#5, binary+continuous first), evidence-anchoring phases 2–3 (#12), cohort
+detection (#9), GRADE (#6) — plus the "Known follow-ups" below remain open.
 
 ### (historical, for reference)
 

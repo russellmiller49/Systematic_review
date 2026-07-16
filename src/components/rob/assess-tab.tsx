@@ -32,6 +32,7 @@ import { JudgmentBadge } from "./judgment";
 import {
   getScale,
   type MemberRow,
+  type ProjectAiStatus,
   type RobAssessment,
   type RobAssignment,
   type RobTool,
@@ -50,6 +51,7 @@ export function AssessTab({
   myAssignments,
   canAssess,
   canEditProject,
+  ai,
   reloadAssessments,
   refreshAll,
 }: {
@@ -62,6 +64,7 @@ export function AssessTab({
   myAssignments: RobAssignment[] | null;
   canAssess: boolean;
   canEditProject: boolean;
+  ai: ProjectAiStatus | null;
   reloadAssessments: () => Promise<RobAssessment[]>;
   refreshAll: () => void;
 }) {
@@ -112,6 +115,7 @@ export function AssessTab({
         assessment={open}
         tool={tools?.find((t) => t.id === open.toolId)}
         meId={meId}
+        ai={ai}
         onBack={() => {
           setOpenId(null);
           refreshAll();
