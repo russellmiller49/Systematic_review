@@ -33,7 +33,11 @@ history → export. Each maps to at least one integration or E2E test.
 4. ~~AI extraction with source anchoring (anchor slot exists)~~ ✅ 2026-07-14 —
    `ExtractionSuggestion`/`AiExtractionRun` + per-field Apply through `upsertValue`
    (`appliedSuggestionId`), which now populates `ExtractionValue.sourceAnchor`
-5. Meta-analysis module (effect measures, forest/funnel, R export)
+5. Meta-analysis module — **phase A ✅ 2026-07-16** (binary RR/OR/RD + continuous MD/SMD,
+   fixed IV + DerSimonian-Laird pooling, scipy-pinned golden fixtures, field-role mapping over
+   adjudicated>consensus>single values, live forest plot with SVG/PNG download —
+   `src/lib/stats/`, `src/server/services/analysis/`, `src/components/analysis/`).
+   Remaining: proportions (with transforms), funnel plot, R export
 6. GRADE per outcome + SoF tables
 7. Living-review surveillance (saved searches → new ImportBatches → triage queue)
 8. Multi-PICO projects (`picoQuestionId` FKs)
@@ -44,7 +48,9 @@ history → export. Each maps to at least one integration or E2E test.
 11. ~~Cross-study extraction table (living table, phase 1)~~ ✅ 2026-07-16 — resolved
     matrix (adjudicated > agreed > single) + evidence popovers + click-to-page PDF dialog
     + CSV export (`src/server/services/extraction/matrix.ts`, extraction "Table" tab)
-12. Evidence anchoring phases 2–3 (pdfjs viewer + quote highlighting; server text layer +
-    anchor v2 + selection-to-anchor + re-anchor backfill) — per the 2026-07-16 roadmap
+12. Evidence anchoring — **phase 2 ✅ 2026-07-16** (pdfjs evidence viewer with quote
+    highlighting via `src/lib/quote-match.ts`, wired into the extraction form quote blocks and
+    the matrix Table tab, iframe fallback behind an error boundary — `src/components/pdf/`).
+    Remaining phase 3: server text layer + anchor v2 + selection-to-anchor + re-anchor backfill
 13. PRISMA 2020 completeness polish (registers/"other methods" arms, awaiting-classification
     bucket) — counts themselves are already fully automatic

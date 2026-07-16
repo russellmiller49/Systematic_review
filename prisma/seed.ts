@@ -22,6 +22,7 @@ import * as dedup from "@/server/services/dedup";
 import * as screening from "@/server/services/screening";
 import * as studiesService from "@/server/services/studies";
 import * as fulltext from "@/server/services/fulltext";
+import * as analysis from "@/server/services/analysis";
 import * as extraction from "@/server/services/extraction";
 import * as rob from "@/server/services/rob";
 import { ensureBuiltinGenericTool } from "@/server/services/rob/builtin";
@@ -30,19 +31,127 @@ import * as prismaReport from "@/server/services/prisma-report";
 
 const PASSWORD = "demo-password-123";
 
-// A tiny but structurally valid PDF (starts with the %PDF- magic bytes the upload validator
-// sniffs — see R13). `tag` makes each demo file's bytes unique so content-addressed storage
-// (sha256 dedup) keeps them as distinct blobs rather than collapsing them into one.
-function demoPdf(tag: string): Buffer {
-  return Buffer.from(
-    "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n" +
-      "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
-      "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n" +
-      `% ${tag}\n` +
-      "xref\n0 4\n0000000000 65535 f \ntrailer<</Root 1 0 R/Size 4>>\n%%EOF\n",
-    "utf8",
-  );
+// A small but REAL PDF: valid xref offsets, Helvetica text content, one page per entry in
+// `pages`. Starts with the %PDF- magic bytes the upload validator sniffs (R13). Real text
+// matters — the evidence viewer extracts a text layer to locate and highlight source quotes,
+// so a content-free PDF would leave the demo unable to exercise anchoring. `tag` keeps each
+// demo file's bytes unique so content-addressed storage (sha256 dedup) keeps them distinct.
+function escapePdfText(line: string): string {
+  return line.replace(/[\\()]/g, (c) => `\\${c}`);
 }
+
+function demoPdf(tag: string, pages: string[][]): Buffer {
+  const objects: string[] = [];
+  const pageCount = Math.max(1, pages.length);
+  // Object layout: 1 = catalog, 2 = pages, 3 = font, then per page: page obj + content obj.
+  const pageObjIds = pages.map((_, i) => 4 + i * 2);
+  const contentObjIds = pages.map((_, i) => 5 + i * 2);
+
+  objects[1] = `<</Type/Catalog/Pages 2 0 R>>`;
+  objects[2] = `<</Type/Pages/Kids[${pageObjIds.map((id) => `${id} 0 R`).join(" ")}]/Count ${pageCount}>>`;
+  objects[3] = `<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>`;
+  pages.forEach((lines, i) => {
+    const body =
+      `BT /F1 11 Tf 72 720 Td 16 TL\n` +
+      lines.map((line) => `(${escapePdfText(line)}) Tj T*`).join("\n") +
+      `\nET`;
+    objects[pageObjIds[i]!] =
+      `<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]` +
+      `/Resources<</Font<</F1 3 0 R>>>>/Contents ${contentObjIds[i]} 0 R>>`;
+    objects[contentObjIds[i]!] = `<</Length ${Buffer.byteLength(body, "utf8")}>>stream\n${body}\nendstream`;
+  });
+
+  // Serialize with byte-accurate xref offsets so pdf.js parses without recovery.
+  let pdf = `%PDF-1.4\n% ${tag}\n`;
+  const offsets: number[] = [];
+  for (let id = 1; id < objects.length; id += 1) {
+    const obj = objects[id];
+    if (obj === undefined) continue;
+    offsets[id] = Buffer.byteLength(pdf, "utf8");
+    pdf += `${id} 0 obj${obj}endobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf, "utf8");
+  const size = objects.length;
+  pdf += `xref\n0 ${size}\n0000000000 65535 f \n`;
+  for (let id = 1; id < size; id += 1) {
+    pdf += `${String(offsets[id] ?? 0).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer<</Root 1 0 R/Size ${size}>>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "utf8");
+}
+
+// Page text per demo study. Sentences here are the anchors the seeded extraction quotes
+// point at, so "View in PDF" locates and highlights them.
+const DEMO_PDF_PAGES: Record<string, string[][]> = {
+  criner: [
+    [
+      "A Multicenter Randomized Controlled Trial of Zephyr Endobronchial Valves",
+      "",
+      "Abstract. Patients with severe heterogeneous emphysema and little collateral",
+      "ventilation were randomized to bronchoscopic valve placement or standard care.",
+    ],
+    [
+      "Methods and Results",
+      "",
+      "A total of 190 participants were randomized in a 2:1 ratio; 128 received valves",
+      "and 62 continued standard medical care. Allocation used a computer-generated",
+      "sequence with concealed assignment held by an independent center.",
+      "The mean age was 64 years and 47% of participants were female.",
+      "At 12 months, 60 of 128 patients in the valve arm and 10 of 62 in the control",
+      "arm achieved an FEV1 improvement of at least 15%.",
+    ],
+  ],
+  slebos: [
+    [
+      "Durability of Zephyr Valve Treatment: The LIBERATE Extension",
+      "",
+      "Abstract. This extension study followed treated participants to assess whether",
+      "lung function gains persisted through 12 months of follow-up.",
+    ],
+    [
+      "Methods and Results",
+      "",
+      "Ninety-seven participants were enrolled, of whom 47 received valve treatment",
+      "and 50 served as controls. The mean age was 63 years and 52% were female.",
+      "Outcome assessors were blinded to treatment allocation throughout follow-up.",
+      "FEV1 response at 12 months was observed in 18 of 47 treated participants",
+      "compared with 6 of 50 controls.",
+    ],
+  ],
+  davey_believer: [
+    [
+      "The BeLieVeR-HIFi Study: Valves in Emphysema with Collateral Ventilation",
+      "",
+      "Abstract. A randomized sham-controlled trial in patients not preselected for",
+      "the absence of interlobar collateral ventilation.",
+    ],
+  ],
+};
+
+// Extraction quotes + PDF pages for the seeded values, keyed by study then field. These
+// populate ExtractionValue.sourceQuote/pageNumber so the evidence viewer has real anchors.
+const DEMO_QUOTES: Record<string, Record<string, { quote: string; page: number }>> = {
+  criner: {
+    sample_size: { quote: "A total of 190 participants were randomized in a 2:1 ratio", page: 2 },
+    mean_age: { quote: "The mean age was 64 years", page: 2 },
+    female_pct: { quote: "47% of participants were female", page: 2 },
+    resp_valve_events: {
+      quote: "60 of 128 patients in the valve arm",
+      page: 2,
+    },
+    resp_control_events: { quote: "10 of 62 in the control arm", page: 2 },
+  },
+  slebos: {
+    sample_size: { quote: "Ninety-seven participants were enrolled", page: 2 },
+    mean_age: { quote: "The mean age was 63 years", page: 2 },
+    female_pct: { quote: "52% were female", page: 2 },
+    resp_valve_events: {
+      quote: "FEV1 response at 12 months was observed in 18 of 47 treated participants",
+      page: 2,
+    },
+    resp_control_events: { quote: "compared with 6 of 50 controls", page: 2 },
+  },
+};
 
 // --- Citation fixtures --------------------------------------------------------------------
 
@@ -679,11 +788,11 @@ async function main() {
       notes: "PDF obtained via institutional subscription.",
     });
   }
-  for (const key of ["criner", "slebos", "deslee"]) {
+  for (const key of ["criner", "slebos", "deslee", "davey_believer"]) {
     await fulltext.uploadFullText(ownerCtx, projectId, {
       citationId: cid(key),
       filename: `${key}.pdf`,
-      bytes: demoPdf(`full text for ${key}`),
+      bytes: demoPdf(`full text for ${key}`, DEMO_PDF_PAGES[key] ?? [["Full text not available."]]),
       label: "Full text (PDF)",
     });
   }
@@ -761,6 +870,11 @@ async function main() {
       ],
     },
     { key: "blinded_outcome", label: "Blinded outcome assessment", type: "BOOLEAN" as const },
+    // Binary-outcome counts feeding the seeded meta-analysis (section 12).
+    { key: "resp_valve_events", label: "FEV1 responders — valve arm (n)", type: "NUMBER" as const },
+    { key: "resp_valve_total", label: "Valve arm total (N)", type: "NUMBER" as const },
+    { key: "resp_control_events", label: "FEV1 responders — control arm (n)", type: "NUMBER" as const },
+    { key: "resp_control_total", label: "Control arm total (N)", type: "NUMBER" as const },
     {
       key: "primary_outcome_notes",
       label: "Primary outcome notes",
@@ -799,6 +913,10 @@ async function main() {
       intervention_arm: "Zephyr endobronchial valves",
       comorbidities: ["gold3", "gold4"],
       blinded_outcome: false,
+      resp_valve_events: 60,
+      resp_valve_total: 128,
+      resp_control_events: 10,
+      resp_control_total: 62,
       primary_outcome_notes: "FEV1 responder analysis (≥15% improvement) at 12 months.",
     },
     slebos: {
@@ -809,6 +927,10 @@ async function main() {
       intervention_arm: "Zephyr valve (LIBERATE extension)",
       comorbidities: ["gold3"],
       blinded_outcome: true,
+      resp_valve_events: 18,
+      resp_valve_total: 47,
+      resp_control_events: 6,
+      resp_control_total: 50,
       primary_outcome_notes: "Durability of FEV1 improvement at 12 months.",
     },
   };
@@ -821,7 +943,13 @@ async function main() {
         let value = extractionValues[key]![def.key];
         // Introduce one field-level disagreement: reviewer2's Criner sample size.
         if (key === "criner" && def.key === "sample_size" && ctx === r2Ctx) value = 180;
-        await extraction.upsertValue(ctx, projectId, form.id, fieldIdByKey[def.key]!, { value });
+        // Quoted evidence (where the demo PDFs carry a matching sentence) so the
+        // evidence viewer can locate and highlight it.
+        const evidence = DEMO_QUOTES[key]?.[def.key];
+        await extraction.upsertValue(ctx, projectId, form.id, fieldIdByKey[def.key]!, {
+          value,
+          ...(evidence ? { sourceQuote: evidence.quote, pageNumber: evidence.page } : {}),
+        });
       }
       await extraction.completeForm(ctx, projectId, form.id);
     }
@@ -908,7 +1036,25 @@ async function main() {
     });
   }
 
-  // 12. PRISMA snapshot --------------------------------------------------------------------
+  // 12. Analysis (meta-analysis outcome over the extracted responder counts) ---------------
+  console.log("Creating analysis outcome + field mappings…");
+  const analysisOutcome = await analysis.createOutcome(ownerCtx, projectId, {
+    name: "FEV1 responder (≥15% improvement)",
+    timepoint: "12 months",
+    measure: "RR",
+    direction: "HIGHER_IS_BETTER",
+    groupLabels: { g1: "Valve", g2: "Control" },
+  });
+  await analysis.replaceMappings(ownerCtx, projectId, analysisOutcome.id, {
+    mappings: [
+      { role: "G1_EVENTS", templateId: template.id, fieldKey: "resp_valve_events" },
+      { role: "G1_TOTAL", templateId: template.id, fieldKey: "resp_valve_total" },
+      { role: "G2_EVENTS", templateId: template.id, fieldKey: "resp_control_events" },
+      { role: "G2_TOTAL", templateId: template.id, fieldKey: "resp_control_total" },
+    ],
+  });
+
+  // 13. PRISMA snapshot --------------------------------------------------------------------
   console.log("Creating PRISMA snapshot…");
   await prismaReport.createPrismaSnapshot(ownerCtx, projectId, {
     label: "Initial submission snapshot",

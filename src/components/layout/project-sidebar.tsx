@@ -17,6 +17,7 @@ import {
   Settings,
   Swords,
   Table2,
+  TrendingUp,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,7 @@ const NAV = [
   { href: "/fulltext", label: "Full text", icon: FileSearch },
   { href: "/extraction", label: "Extraction", icon: Table2 },
   { href: "/rob", label: "Risk of bias", icon: Scale },
+  { href: "/analysis", label: "Analysis", icon: TrendingUp },
   { href: "/prisma", label: "PRISMA", icon: BarChart3 },
   { href: "/audit", label: "Audit trail", icon: History },
   { href: "/settings", label: "Settings", icon: Settings },

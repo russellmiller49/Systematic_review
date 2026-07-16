@@ -14,6 +14,7 @@ const NAV = [
   "Full text",
   "Extraction",
   "Risk of bias",
+  "Analysis",
   "PRISMA",
   "Audit trail",
   "Settings",

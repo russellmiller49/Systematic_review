@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { PdfEvidenceViewer } from "@/components/pdf/pdf-evidence-viewer";
 import { EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select } from "@/components/ui/select";
@@ -298,10 +299,9 @@ export function MatrixTab({
                   {evidence.page ? ` (p. ${evidence.page})` : ""}
                 </p>
               )}
-              <iframe
-                src={`/api/files/${evidence.fileId}${evidence.page ? `#page=${evidence.page}` : ""}`}
-                title="Source PDF"
-                className="h-[65vh] w-full rounded-md border border-border"
+              <PdfEvidenceViewer
+                target={{ fileId: evidence.fileId, page: evidence.page, quote: evidence.quote }}
+                heightClass="h-[65vh]"
               />
             </>
           )}

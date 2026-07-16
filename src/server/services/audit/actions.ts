@@ -95,6 +95,14 @@ export const AuditActions = {
   ROB_CONFLICT_OPENED: "rob.conflict.opened",
   ROB_CONFLICT_ADJUDICATED: "rob.conflict.adjudicated",
 
+  // analysis (meta-analysis module; read/compute endpoints are unaudited — precedent:
+  // live PRISMA counts)
+  ANALYSIS_OUTCOME_CREATED: "analysis.outcome.created",
+  ANALYSIS_OUTCOME_UPDATED: "analysis.outcome.updated",
+  ANALYSIS_OUTCOME_DELETED: "analysis.outcome.deleted",
+  ANALYSIS_MAPPINGS_REPLACED: "analysis.mappings.replaced",
+  ANALYSIS_STUDY_EXCLUSION_SET: "analysis.study_exclusion.set",
+
   // prisma / exports
   PRISMA_SNAPSHOT_CREATED: "prisma.snapshot.created",
   EXPORT_CREATED: "export.created",

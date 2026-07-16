@@ -14,6 +14,7 @@ const EXPECTED: Record<ProjectRole, Capability[] | "ALL"> = {
     "fulltext.manage",
     "extraction.adjudicate",
     "rob.adjudicate",
+    "analysis.view",
     "audit.view",
   ],
   EXTRACTOR: ["project.view", "fulltext.manage", "extraction.perform", "rob.assess", "audit.view"],
@@ -23,6 +24,8 @@ const EXPECTED: Record<ProjectRole, Capability[] | "ALL"> = {
     "extraction.perform",
     "rob.tools",
     "rob.assess",
+    "analysis.view",
+    "analysis.manage",
     "prisma.snapshot",
     "audit.view",
     "export.create",
@@ -37,9 +40,9 @@ const EXPECTED: Record<ProjectRole, Capability[] | "ALL"> = {
     "audit.view",
     "export.create",
   ],
-  PANEL_MEMBER: ["project.view", "audit.view"],
+  PANEL_MEMBER: ["project.view", "analysis.view", "audit.view"],
   TRAINEE: ["project.view", "screening.decide", "fulltext.manage", "extraction.perform", "rob.assess"],
-  OBSERVER: ["project.view", "audit.view"],
+  OBSERVER: ["project.view", "analysis.view", "audit.view"],
 };
 
 describe("permission matrix", () => {
@@ -68,7 +71,9 @@ describe("permission matrix", () => {
 
   it("mutation capabilities are never granted to read-only roles", () => {
     const readOnly: ProjectRole[] = ["OBSERVER", "PANEL_MEMBER"];
-    const mutating = CAPABILITIES.filter((c) => c !== "project.view" && c !== "audit.view");
+    const mutating = CAPABILITIES.filter(
+      (c) => c !== "project.view" && c !== "analysis.view" && c !== "audit.view",
+    );
     for (const role of readOnly) {
       for (const cap of mutating) expect(can([role], cap), `${role} × ${cap}`).toBe(false);
     }

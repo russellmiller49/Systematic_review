@@ -209,6 +209,53 @@ enum AiRunStatus {
   CANCELED
 }
 
+// --- Analysis (meta-analysis module) ---------------------------------------
+
+enum EffectMeasure {
+  RR // risk ratio (binary 2x2, log scale)
+  OR // odds ratio (binary 2x2, log scale)
+  RD // risk difference (binary 2x2, linear scale)
+  MD // mean difference (continuous, linear scale)
+  SMD // standardized mean difference, Hedges g (continuous, linear scale)
+  PROPORTION // single-arm proportion (phase B)
+  GENERIC_IV // pre-computed estimate + SE (phase B)
+}
+
+enum PoolingModel {
+  FIXED
+  RANDOM
+}
+
+enum ProportionTransform {
+  LOGIT
+  FREEMAN_TUKEY
+}
+
+enum EffectDirection {
+  HIGHER_IS_BETTER
+  LOWER_IS_BETTER
+}
+
+// Statistical role an extraction field plays for an outcome. G1 = intervention/exposure
+// group, G2 = comparator. Which roles a measure requires is service-enforced.
+enum AnalysisRole {
+  G1_EVENTS
+  G1_TOTAL
+  G2_EVENTS
+  G2_TOTAL
+  G1_MEAN
+  G1_SD
+  G1_N
+  G2_MEAN
+  G2_SD
+  G2_N
+  EFFECT_ESTIMATE // phase B (GENERIC_IV)
+  EFFECT_SE // phase B
+  EFFECT_CI_LOW // phase B
+  EFFECT_CI_UP // phase B
+  STUDY_DESIGN // phase C (GRADE starting-certainty hint; SINGLE_SELECT field)
+}
+
 // ---------------------------------------------------------------------------
 // Users & teams
 // ---------------------------------------------------------------------------
@@ -251,6 +298,8 @@ model User {
   aiScreeningRuns         AiScreeningRun[]           @relation("AiScreeningRunRequester")
   aiExtractionRuns        AiExtractionRun[]          @relation("AiExtractionRunRequester")
   aiRobRuns               AiRobRun[]                 @relation("AiRobRunRequester")
+  analysisOutcomes        AnalysisOutcome[]          @relation("AnalysisOutcomeCreator")
+  analysisExclusions      AnalysisStudyExclusion[]   @relation("AnalysisExclusionCreator")
 }
 
 model Organization {
@@ -318,6 +367,7 @@ model Project {
   aiScreeningRuns     AiScreeningRun[]
   aiExtractionRuns    AiExtractionRun[]
   aiRobRuns           AiRobRun[]
+  analysisOutcomes    AnalysisOutcome[]
 
   @@index([orgId])
 }
@@ -441,7 +491,8 @@ model OutcomeDefinition {
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
 
-  protocol Protocol @relation(fields: [protocolId], references: [id])
+  protocol         Protocol          @relation(fields: [protocolId], references: [id])
+  analysisOutcomes AnalysisOutcome[]
 
   @@index([protocolId])
 }
@@ -683,6 +734,7 @@ model Study {
   aiSuggestions         ExtractionSuggestion[]
   aiRobRuns             AiRobRun[]
   robSuggestions        RobSuggestion[]
+  analysisExclusions    AnalysisStudyExclusion[]
 
   @@index([projectId])
 }
@@ -901,13 +953,14 @@ model ExtractionTemplate {
   sourceTemplate   ExtractionTemplate?  @relation("TemplateLineage", fields: [sourceTemplateId], references: [id])
   derivedTemplates ExtractionTemplate[] @relation("TemplateLineage")
 
-  fields        ExtractionField[]
-  assignments   ExtractionAssignment[]
-  forms         ExtractionForm[]
-  conflicts     ExtractionConflict[]
-  protocol      Protocol?
-  aiRuns        AiExtractionRun[]
-  aiSuggestions ExtractionSuggestion[]
+  fields           ExtractionField[]
+  assignments      ExtractionAssignment[]
+  forms            ExtractionForm[]
+  conflicts        ExtractionConflict[]
+  protocol         Protocol?
+  aiRuns           AiExtractionRun[]
+  aiSuggestions    ExtractionSuggestion[]
+  analysisMappings AnalysisFieldMap[]
 
   @@index([projectId])
 }
@@ -1141,6 +1194,71 @@ model ExtractionSuggestion {
   @@unique([templateId, studyId, fieldId])
   @@index([runId])
   @@index([studyId])
+}
+
+// ---------------------------------------------------------------------------
+// Analysis (meta-analysis module) — consumes extraction data READ-ONLY via the
+// value resolver (adjudicated > consensus > single); never writes extraction tables.
+// ---------------------------------------------------------------------------
+
+// A meta-analyzable outcome: which effect measure to compute and (via mappings) which
+// extraction fields carry the numbers. Optionally anchored to a protocol OutcomeDefinition.
+model AnalysisOutcome {
+  id                  String              @id @default(cuid())
+  projectId           String
+  outcomeDefinitionId String? // optional protocol anchor (R9-validated)
+  name                String
+  timepoint           String?
+  measure             EffectMeasure
+  direction           EffectDirection     @default(LOWER_IS_BETTER)
+  model               PoolingModel        @default(RANDOM) // display default; both always computed
+  proportionTransform ProportionTransform @default(LOGIT) // used when measure = PROPORTION (phase B)
+  groupLabels         Json? // { g1: "Intervention", g2: "Control" }
+  order               Int                 @default(0)
+  createdById         String
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  project           Project            @relation(fields: [projectId], references: [id])
+  outcomeDefinition OutcomeDefinition? @relation(fields: [outcomeDefinitionId], references: [id])
+  createdBy         User               @relation("AnalysisOutcomeCreator", fields: [createdById], references: [id])
+
+  mappings   AnalysisFieldMap[]
+  exclusions AnalysisStudyExclusion[]
+
+  @@index([projectId, order])
+}
+
+// Maps one AnalysisRole to an extraction field. Stores the templateId the user mapped
+// against plus the stable fieldKey; the resolver expands the template's version lineage
+// (sourceTemplateId walk) so mappings survive template versioning.
+model AnalysisFieldMap {
+  id                String       @id @default(cuid())
+  analysisOutcomeId String
+  role              AnalysisRole
+  templateId        String
+  fieldKey          String
+
+  outcome  AnalysisOutcome    @relation(fields: [analysisOutcomeId], references: [id])
+  template ExtractionTemplate @relation(fields: [templateId], references: [id])
+
+  @@unique([analysisOutcomeId, role])
+}
+
+// Manual per-outcome study exclusion (sensitivity valve) — audited.
+model AnalysisStudyExclusion {
+  id                String   @id @default(cuid())
+  analysisOutcomeId String
+  studyId           String
+  reason            String
+  createdById       String
+  createdAt         DateTime @default(now())
+
+  outcome   AnalysisOutcome @relation(fields: [analysisOutcomeId], references: [id])
+  study     Study           @relation(fields: [studyId], references: [id])
+  createdBy User            @relation("AnalysisExclusionCreator", fields: [createdById], references: [id])
+
+  @@unique([analysisOutcomeId, studyId])
 }
 
 // One synchronous provider call per (study, tool) reads the study's linked PDF and drafts,

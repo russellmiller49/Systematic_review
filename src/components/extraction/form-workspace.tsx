@@ -13,12 +13,20 @@
 //   - a field whose conflict was RESOLVED (adjudicated) is permanently locked.
 
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Check, CircleAlert, Lock, Pencil, Sparkles, X } from "lucide-react";
+import { ArrowLeft, Check, CircleAlert, ExternalLink, Lock, Pencil, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiPost, apiPut, ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { PdfEvidenceViewer } from "@/components/pdf/pdf-evidence-viewer";
 import { Alert, Progress, Skeleton, Spinner } from "@/components/ui/misc";
 import { FieldValueEditor } from "./field-value-editor";
 import { FormStatusBadge } from "./status-badges";
@@ -98,6 +106,16 @@ export function FormWorkspace({
   const [drafting, setDrafting] = useState(false);
   const [applyingAll, setApplyingAll] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  // Evidence viewing: the study's PDF descriptor (fetched once on mount) and the
+  // shared quote-viewer dialog target.
+  const [pdf, setPdf] = useState<{ fileId: string; filename: string; sizeBytes: number } | null>(
+    null,
+  );
+  const [evidence, setEvidence] = useState<{
+    fieldLabel: string;
+    quote: string | null;
+    page: number | null;
+  } | null>(null);
 
   const isMine = meId !== null && form.extractorId === meId;
   const aiActive = isMine && ai !== null && ai.enabled;
@@ -108,6 +126,21 @@ export function FormWorkspace({
       .then(setTemplate)
       .catch(() => toast.error("Failed to load template fields"));
   }, [projectId, form.templateId]);
+
+  // The study's primary-report PDF (if any) — enables the "View in PDF" affordances.
+  useEffect(() => {
+    let cancelled = false;
+    api<{ pdf: { fileId: string; filename: string; sizeBytes: number } | null }>(
+      `/api/projects/${projectId}/studies/${form.studyId}/pdf`,
+    )
+      .then((resp) => {
+        if (!cancelled) setPdf(resp.pdf);
+      })
+      .catch(() => undefined); // silent: the affordances simply don't render
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, form.studyId]);
 
   const loadConflicts = useCallback(() => {
     if (!canSeeConflicts) return;
@@ -552,10 +585,28 @@ export function FormWorkspace({
                             </Button>
                           </div>
                           {suggestion.sourceQuote && (
-                            <p className="border-l-2 border-border pl-2 italic text-muted-foreground">
-                              &ldquo;{suggestion.sourceQuote}&rdquo;
-                              {suggestion.pageNumber ? ` (p. ${suggestion.pageNumber})` : ""}
-                            </p>
+                            <div className="flex items-start gap-1.5">
+                              <p className="grow border-l-2 border-border pl-2 italic text-muted-foreground">
+                                &ldquo;{suggestion.sourceQuote}&rdquo;
+                                {suggestion.pageNumber ? ` (p. ${suggestion.pageNumber})` : ""}
+                              </p>
+                              {pdf && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 shrink-0 px-1.5 text-xs"
+                                  onClick={() =>
+                                    setEvidence({
+                                      fieldLabel: field.label,
+                                      quote: suggestion.sourceQuote ?? null,
+                                      page: suggestion.pageNumber ?? null,
+                                    })
+                                  }
+                                >
+                                  <ExternalLink className="h-3 w-3" /> View in PDF
+                                </Button>
+                              )}
+                            </div>
                           )}
                         </div>
                       );
@@ -566,10 +617,28 @@ export function FormWorkspace({
                       </p>
                     )}
                     {savedRow?.sourceQuote && (
-                      <p className="mt-2 border-l-2 border-border pl-2 text-xs italic text-muted-foreground">
-                        &ldquo;{savedRow.sourceQuote}&rdquo;
-                        {savedRow.pageNumber ? ` (p. ${savedRow.pageNumber})` : ""}
-                      </p>
+                      <div className="mt-2 flex items-start gap-1.5">
+                        <p className="grow border-l-2 border-border pl-2 text-xs italic text-muted-foreground">
+                          &ldquo;{savedRow.sourceQuote}&rdquo;
+                          {savedRow.pageNumber ? ` (p. ${savedRow.pageNumber})` : ""}
+                        </p>
+                        {pdf && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 shrink-0 px-1.5 text-xs"
+                            onClick={() =>
+                              setEvidence({
+                                fieldLabel: field.label,
+                                quote: savedRow.sourceQuote ?? null,
+                                page: savedRow.pageNumber ?? null,
+                              })
+                            }
+                          >
+                            <ExternalLink className="h-3 w-3" /> View in PDF
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </Fragment>
@@ -585,6 +654,32 @@ export function FormWorkspace({
           )}
         </>
       )}
+
+      <Dialog open={evidence !== null} onOpenChange={(open) => !open && setEvidence(null)}>
+        <DialogContent className="max-w-4xl">
+          {evidence && pdf && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{evidence.fieldLabel}</DialogTitle>
+                <DialogDescription>
+                  {pdf.filename}
+                  {evidence.page ? ` — page ${evidence.page}` : ""}
+                </DialogDescription>
+              </DialogHeader>
+              {evidence.quote && (
+                <p className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+                  &ldquo;{evidence.quote}&rdquo;
+                  {evidence.page ? ` (p. ${evidence.page})` : ""}
+                </p>
+              )}
+              <PdfEvidenceViewer
+                target={{ fileId: pdf.fileId, page: evidence.page, quote: evidence.quote }}
+                heightClass="h-[65vh]"
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

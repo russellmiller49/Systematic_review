@@ -1,0 +1,56 @@
+{
+  "name": "all-excluded-rr",
+  "measure": "RR",
+  "studies": [
+    {
+      "id": "x01",
+      "label": "Excl 01 (double zero)",
+      "data": {
+        "kind": "binary",
+        "counts": {
+          "e1": 0,
+          "n1": 30,
+          "e2": 0,
+          "n2": 28
+        }
+      }
+    },
+    {
+      "id": "x02",
+      "label": "Excl 02 (double full)",
+      "data": {
+        "kind": "binary",
+        "counts": {
+          "e1": 30,
+          "n1": 30,
+          "e2": 28,
+          "n2": 28
+        }
+      }
+    },
+    {
+      "id": "x03",
+      "label": "Excl 03 (events > total)",
+      "data": {
+        "kind": "binary",
+        "counts": {
+          "e1": 40,
+          "n1": 30,
+          "e2": 5,
+          "n2": 28
+        }
+      }
+    }
+  ],
+  "expected": {
+    "studies": [],
+    "excludedIds": [
+      "x01",
+      "x02",
+      "x03"
+    ],
+    "fixed": null,
+    "random": null,
+    "heterogeneity": null
+  }
+}

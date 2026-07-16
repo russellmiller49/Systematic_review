@@ -28,7 +28,143 @@
   role descriptions, hidden assignment controls for a Reviewer, and hidden PDF/retrieval admin
   actions for a plain Reviewer.
 
-## Current state (2026-07-16) — AI-features roadmap Wave 1 (AI RoB + living extraction table)
+## Wave 2 review + hardening (2026-07-16, follow-up session)
+
+The three pending items below were completed:
+
+1. **Clean verify pass** ✅ — with the dev server stopped: typecheck, production build,
+   343 unit, 185 integration, 7 E2E, all green (before the review fixes; re-verified after).
+2. **Review pass** ✅ — an 8-dimension multi-agent review over the Wave 2 diff (stats
+   numerics, resolver precedence, route security/tenancy/blinding, service logic,
+   analysis UI/forest plot, PDF viewer, quote matcher, schema/seed/tests), every finding
+   independently verified by two adversarial agents. 13 findings confirmed, all fixed:
+   - **Resolver version precedence (high)**: `fetchResolvedRoleValues` flat-pooled
+     completed values across the whole template lineage — re-extraction on a new version
+     produced unresolvable false disputes (no cross-version conflict can exist), one
+     extractor on two versions minted a fake CONSENSUS, a stale v1 adjudication could
+     nondeterministically shadow a newer v2 consensus, and a stale OPEN v1 conflict
+     permanently blocked pooling. Now: per (study, role) the NEWEST lineage version with
+     a final signal (completed value or live conflict) wins outright; deterministic
+     version-desc ordering.
+   - **R1 blind mirror on analysis results (high)**: `computeOutcomeResults` leaked
+     co-extractor pre-consensus data (SINGLE values, `?provisional=1` values from
+     IN_PROGRESS forms, and dispute existence) to any `analysis.view` holder — a
+     STATISTICIAN co-extractor could anchor on their counterpart's numbers. Now the
+     listForms seeAll rule (extraction.adjudicate || project.edit) gates it: non-seeAll
+     callers get no provisional tier (`provisionalAllowed:false` in the payload, checkbox
+     hidden), SINGLE values are withheld while any lineage version has an in-progress
+     form or pending assignment for the study, and disputed rows render as generic
+     "Extraction not finalized" incomplete rows.
+   - **UI race (medium)**: results-table had no staleness guard — a slow response for a
+     previous outcome could overwrite the current outcome's numbers. Request-generation
+     counter added (repo's cancelled-flag pattern).
+   - Also: erfc/pnorm NaN on x² overflow (saturates to 0/2 now); non-finite
+     inverse-variance weights excluded in computeMeta instead of poisoning pooled sums;
+     qnorm's r>5 deep-tail branch genuinely pinned against scipy (the old "deep tail"
+     test actually hit the middle branch); draft templates rejected from mappings (their
+     fields are deletable → orphaned fieldKeys); mapping audit payloads record
+     (templateId, fieldKey), not fieldKey alone; PDF highlight no longer splits a
+     trailing surrogate pair; seed uploads the authored Davey PDF (was dead data); the
+     E2E highlight assertion now proves geometric overlap with the quoted text span.
+   - Quote matcher reviewed line-by-line (offset map under every length-changing
+     normalization): no defects.
+   New coverage: +4 stats unit tests, +7 integration tests (version precedence ×3,
+   blinding ×2, draft-mapping rejection, audit payload).
+3. **Docs** ✅ — backlog #5 (meta-analysis phase A) and #12 (evidence anchoring phase 2)
+   marked done in docs/08-milestones.md.
+
+## Prior state (2026-07-16) — roadmap Wave 2 (meta-analysis + PDF evidence viewer) — BUILT
+
+Wave 2 of the roadmap (plan file `~/.claude/plans/i-m-interested-in-utilizing-jiggly-hennessy.md`)
+is code-complete. (Wave 1 was committed as 502a5cf during the concurrent session; Wave 2
+was working tree until the review above landed.)
+
+### What landed
+
+- **Schema** (migration `analysis_outcomes`): `AnalysisOutcome` (name, timepoint, measure,
+  direction, model, groupLabels, optional `outcomeDefinitionId` protocol anchor),
+  `AnalysisFieldMap` (unique per `(outcome, role)`; stores `templateId` + stable `fieldKey`),
+  `AnalysisStudyExclusion` (manual sensitivity valve). Enums `EffectMeasure`, `PoolingModel`,
+  `ProportionTransform`, `EffectDirection`, `AnalysisRole`.
+- **Permissions**: new `analysis.view` / `analysis.manage` capabilities in
+  `src/server/permissions/matrix.ts` (STATISTICIAN both; ADJUDICATOR/PANEL_MEMBER/OBSERVER
+  view; OWNER/ADMIN all; EXTRACTOR/REVIEWER neither). Audit actions `analysis.*` added.
+- **Stats library** `src/lib/stats/` — pure, deterministic TypeScript, **no AI in any
+  computation**: `normal.ts` (qnorm AS241, pnorm via incomplete gamma), `chisq.ts`
+  (regularized incomplete gamma; exports the shared gamma helpers), `effects/binary.ts`
+  (log RR / log OR / RD, 0.5 continuity correction when any cell is zero, double-zero and
+  double-full excluded from RR/OR), `effects/continuous.ts` (MD; SMD as Hedges g with the J
+  correction), `pool.ts` (fixed IV + DerSimonian-Laird, Q/df/p, I², τ²), `meta.ts`
+  (`computeMeta`, never throws — bad studies come back in `excluded`).
+  Correctness is pinned by golden fixtures generated by an INDEPENDENT Python/scipy
+  reference (`scripts/generate-stats-fixtures.py` → `src/lib/stats/__fixtures__/*.json`,
+  asserted by `fixtures.test.ts` at 1e-8 / 1e-6 tolerances). That cross-check caught two
+  real numerical bugs during the build (a Lanczos t-shift and AS241 coefficient typos), so
+  the fixtures are load-bearing — regenerate them if the policies ever change.
+- **Analysis service** `src/server/services/analysis/`: `index.ts` (listOutcomes,
+  getOutcome, createOutcome, updateOutcome — measure is immutable, deleteOutcome,
+  replaceMappings, setStudyExclusion, computeOutcomeResults) + `resolve-values.ts` (pure
+  `resolveNumericField` + `expandTemplateLineage` + batched fetch). Value precedence
+  ADJUDICATED > CONSENSUS > SINGLE, with `disputed`, and PROVISIONAL only when
+  `?provisional=1`. Mappings resolve across a template's version lineage. Five routes under
+  `api/projects/[projectId]/analysis/…`.
+- **Analysis UI**: sidebar entry + `app/(app)/projects/[projectId]/analysis/page.tsx` and
+  `src/components/analysis/` (analysis-page, outcome-dialog, mapping-editor, results-table,
+  types). Results poll every 10s while visible + refetch on focus = the "live" plot.
+- **Forest plot**: `src/components/analysis/forest-plot-layout.ts` (pure layout → SVG
+  string, mirroring the PRISMA `diagram-layout.ts` pattern) + `forest-plot.tsx` (data-URI
+  `<img>` + SVG/PNG download, mirroring `prisma-diagram.tsx`).
+- **Quote matcher** `src/lib/quote-match.ts`: isomorphic, zero-import normalizer
+  (NFKC, smart quotes/dashes, soft hyphens, de-hyphenated line wraps, whitespace collapse)
+  with an exact-then-fuzzy search and an exact raw↔normalized offset map. 58 unit tests.
+- **PDF evidence viewer** `src/components/pdf/`: `pdf-evidence-viewer.tsx` (public wrapper;
+  dynamic import, ssr:false, error boundary falling back to the previous `<iframe>`),
+  `pdf-viewer-impl.tsx` (pdf.js canvas + text layer + DOM-Range highlight rects, page
+  nav/zoom, match-status chip), `error-boundary.tsx`. Wired into the extraction Table tab's
+  evidence dialog and into `form-workspace.tsx` quote blocks. Dependency: `pdfjs-dist@6.1.200`.
+- **Seed** (`prisma/seed.ts`): `demoPdf()` now emits REAL text-bearing PDFs (correct xref
+  offsets, Helvetica content stream, 2 pages for the two extracted studies); `DEMO_PDF_PAGES`
+  holds the page text and `DEMO_QUOTES` attaches `sourceQuote`/`pageNumber` to seeded
+  extraction values, so the evidence viewer has genuine anchors to locate. Four binary count
+  fields added to the demo template (`resp_valve_events/total`, `resp_control_events/total`)
+  plus a seeded `FEV1 responder` RR outcome with its four field mappings.
+
+### Verified so far
+
+- `npm run typecheck` clean; `npm run build` clean; **343 unit tests** pass.
+- `tests/integration/analysis.test.ts` (8 tests) passes: consensus + adjudicated pooling,
+  disputed/incomplete/excluded/not-pooled classification, provisional mode, template-version
+  lineage, MD continuous path, permissions + R9 tenancy, empty analysis.
+- `e2e/evidence-and-analysis.spec.ts` (2 tests) passes: the evidence viewer renders the PDF
+  and paints a real highlight rect with measurable geometry over the quote; the Analysis page
+  renders the forest plot with the correct numbers.
+- Browser-checked the Analysis page on the seeded demo: Criner RR 2.91 [1.60, 5.28] (66.1%
+  weight), Slebos 3.19 [1.39, 7.35] (33.9%), pooled random effects 3.00 [1.85, 4.87],
+  Q=0.03/df=1/p=0.858/I²=0%/τ²=0, Davey correctly "Incomplete" (no extracted counts). Those
+  match hand-computed values: (60/128)/(10/62)=2.90625 and (18/47)/(6/50)=3.1914.
+
+### Still pending
+
+All four handoff items (clean verify, review pass, docs, commit) were completed in the
+follow-up session — see "Wave 2 review + hardening" above. Verified totals after the
+review fixes: 347 unit, 192 integration, 7 E2E.
+
+### Notes worth keeping
+
+- The MCP browser pane reports `document.visibilityState === "hidden"`, and pdf.js drives its
+  canvas render loop with `requestAnimationFrame` (`useRequestAnimationFrame: !intentPrint`),
+  which never fires in a hidden document. So the PDF viewer can NOT be verified in the pane —
+  it stalls at "rendering" there. Use Playwright (`e2e/evidence-and-analysis.spec.ts`), whose
+  Chromium actually paints. This is not an app defect; it is standard pdf.js behavior.
+- Related: the highlight measurement in `pdf-viewer-impl.tsx` was moved OFF
+  `requestAnimationFrame` to a synchronous `getClientRects()` call after render (which forces
+  layout anyway). That is a robustness improvement for backgrounded tabs, not a fix for a
+  user-visible break.
+- Concurrent work from another checkout landed in this repo during the session (screening
+  assignment reset, REVIEWER losing `fulltext.manage`, a `screening.assignments.reset` audit
+  action, and its own STATUS.md section). Leave it alone; Wave 2 is additive to it.
+
+## Prior state (2026-07-16) — AI-features roadmap Wave 1 (AI RoB + living extraction table)
 
 A five-feature prioritized roadmap was planned (plan file:
 `~/.claude/plans/i-m-interested-in-utilizing-jiggly-hennessy.md`): living extraction tables

@@ -20,6 +20,8 @@ export const CAPABILITIES = [
   "rob.tools",
   "rob.assess",
   "rob.adjudicate",
+  "analysis.view",
+  "analysis.manage",
   "prisma.snapshot",
   "audit.view",
   "export.create",
@@ -43,6 +45,7 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
     "fulltext.manage",
     "extraction.adjudicate",
     "rob.adjudicate",
+    "analysis.view",
     "audit.view",
   ],
   EXTRACTOR: ["project.view", "fulltext.manage", "extraction.perform", "rob.assess", "audit.view"],
@@ -52,6 +55,8 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
     "extraction.perform",
     "rob.tools",
     "rob.assess",
+    "analysis.view",
+    "analysis.manage",
     "prisma.snapshot",
     "audit.view",
     "export.create",
@@ -66,7 +71,7 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
     "audit.view",
     "export.create",
   ],
-  PANEL_MEMBER: ["project.view", "audit.view"],
+  PANEL_MEMBER: ["project.view", "analysis.view", "audit.view"],
   TRAINEE: [
     "project.view",
     "screening.decide",
@@ -74,7 +79,7 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
     "extraction.perform",
     "rob.assess",
   ],
-  OBSERVER: ["project.view", "audit.view"],
+  OBSERVER: ["project.view", "analysis.view", "audit.view"],
 };
 
 const ROLE_SETS = Object.fromEntries(
