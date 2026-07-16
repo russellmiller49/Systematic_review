@@ -4,6 +4,30 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.claude/skills/continue-build/SKILL.md`.
 
+## Review administration and assignment reset (2026-07-16)
+
+- **Owner/Admin controls:** ✅ The project creator remains the initial `OWNER`; the existing
+  multi-role member editor now explains how to add one or more `ADMIN` users, add another
+  `OWNER`, and safely transfer ownership (the last-owner invariant remains enforced). Owners
+  and Admins can open **Manage assignments** from either screening stage to see per-reviewer
+  pending/completed/decision counts.
+- **Guarded assignment reset:** ✅ Owners/Admins may remove all pending assignments or only one
+  reviewer's pending work. A reason is required and `screening.assignments.reset` is written in
+  the same transaction. The delete is atomic and limited to `PENDING` assignments with no saved
+  decision; completed assignments, decisions, conflicts, and materialized stage results cannot
+  be removed through this control.
+- **Reviewer boundary:** ✅ A plain `REVIEWER` has assignment-gated screening access, not
+  full-text retrieval administration. The full-text queue is limited to that reviewer's assigned
+  citations, screening buttons appear only for a pending personal assignment, and PDF/retrieval
+  controls remain available only through a role that grants `fulltext.manage`.
+- **Pilot cleanup:** ✅ Cleared 1,121 zero-decision title/abstract assignments from the AABIP
+  mTEF KQ1 pilot without deleting citations, protocol data, or the import batch. The reset was
+  recorded with its operator reason; the batch is now eligible for guarded deletion if desired.
+- Verified from an isolated checkout: typecheck, production build, **167 unit + 177 integration**
+  tests. Browser-checked the Owner assignment workload dialog, shared-admin/ownership guidance,
+  role descriptions, hidden assignment controls for a Reviewer, and hidden PDF/retrieval admin
+  actions for a plain Reviewer.
+
 ## Current state (2026-07-16) — AI-features roadmap Wave 1 (AI RoB + living extraction table)
 
 A five-feature prioritized roadmap was planned (plan file:
