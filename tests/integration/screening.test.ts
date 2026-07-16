@@ -183,6 +183,91 @@ describe("screening service", () => {
     );
   });
 
+  it("lists assignment workload for admins without exposing decision content", async () => {
+    const { owner, reviewer1, reviewer2, project } = await createProjectWithTeam();
+    const stage = await makeStage(project.id, { reviewersPerCitation: 2 });
+    const c1 = await createTestCitation(project.id);
+    const c2 = await createTestCitation(project.id);
+    await assign(stage.id, c1.id, reviewer1.id);
+    await assign(stage.id, c1.id, reviewer2.id);
+    await assign(stage.id, c2.id, reviewer1.id);
+    await screening.createDecision(ctx(reviewer1.id), project.id, stage.id, {
+      citationId: c1.id,
+      decision: "INCLUDE",
+      notes: "blind content must not appear in the admin summary",
+    });
+
+    const summary = await screening.listAssignmentAdmin(ctx(owner.id), project.id, stage.id);
+    expect(summary.totals).toEqual({ assignments: 3, pending: 2, completed: 1, decisions: 1 });
+    expect(summary.reviewers.find((row) => row.reviewer.id === reviewer1.id)).toMatchObject({
+      assignments: 2,
+      pending: 1,
+      completed: 1,
+      decisions: 1,
+    });
+    expect(JSON.stringify(summary)).not.toContain("blind content");
+
+    await expectAppError(
+      screening.listAssignmentAdmin(ctx(reviewer1.id), project.id, stage.id),
+      "FORBIDDEN",
+    );
+  });
+
+  it("resets only undecided pending assignments, supports reviewer scope, and audits the reason", async () => {
+    const { owner, reviewer1, reviewer2, project } = await createProjectWithTeam();
+    const stage = await makeStage(project.id, { reviewersPerCitation: 2 });
+    const started = await createTestCitation(project.id);
+    const untouched = await createTestCitation(project.id);
+    await assign(stage.id, started.id, reviewer1.id);
+    await assign(stage.id, started.id, reviewer2.id);
+    await assign(stage.id, untouched.id, reviewer1.id);
+    await screening.createDecision(ctx(reviewer1.id), project.id, stage.id, {
+      citationId: started.id,
+      decision: "INCLUDE",
+    });
+
+    const scoped = await screening.resetPendingAssignments(ctx(owner.id), project.id, stage.id, {
+      reviewerIds: [reviewer1.id],
+      reason: "Correcting reviewer allocation",
+    });
+    expect(scoped).toMatchObject({
+      deleted: 1,
+      protectedAssignments: 1,
+      remainingAssignments: 1,
+      affectedReviewerIds: [reviewer1.id],
+    });
+    expect(
+      await prisma.screeningDecision.count({ where: { stageId: stage.id } }),
+    ).toBe(1);
+
+    const event = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        entityType: "ScreeningStage",
+        entityId: stage.id,
+        action: "screening.assignments.reset",
+      },
+    });
+    expect(event.reason).toBe("Correcting reviewer allocation");
+    expect(event.metadata).toMatchObject({
+      scope: "selected_reviewers",
+      deletedPendingAssignments: 1,
+      protectedAssignments: 1,
+    });
+
+    const all = await screening.resetPendingAssignments(ctx(owner.id), project.id, stage.id, {
+      reason: "Clear the remaining unstarted work",
+    });
+    expect(all).toMatchObject({ deleted: 1, protectedAssignments: 1 });
+    expect(await prisma.screeningAssignment.findMany({ where: { stageId: stage.id } })).toHaveLength(1);
+
+    await expectAppError(
+      screening.resetPendingAssignments(ctx(reviewer1.id), project.id, stage.id, {
+        reason: "Reviewer cannot administer work",
+      }),
+      "FORBIDDEN",
+    );
+  });
+
   it("FULL_TEXT assignments only target citations with a TA INCLUDE result (R3)", async () => {
     const { owner, reviewer1, project } = await createProjectWithTeam();
     const ta = await makeStage(project.id, { type: "TITLE_ABSTRACT" });

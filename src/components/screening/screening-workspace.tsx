@@ -11,6 +11,7 @@ import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { PageHeader } from "@/components/layout/page-header";
 import { StageQueue } from "./stage-queue";
 import { AssignReviewersDialog } from "./assign-dialog";
+import { ManageAssignmentsDialog } from "./manage-assignments-dialog";
 import { PrescreenPanel } from "./prescreen-panel";
 import { STAGE_LABELS, type ProjectAiStatus, type ScreeningStageSummary } from "./types";
 
@@ -23,6 +24,7 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
   const [canConfigure, setCanConfigure] = useState(false);
   const [ai, setAi] = useState<ProjectAiStatus | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [stageReloadKey, setStageReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +42,12 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, stageReloadKey]);
+
+  function refreshAssignments() {
+    setStageReloadKey((key) => key + 1);
+    setReloadKey((key) => key + 1);
+  }
 
   useEffect(() => {
     api<{ myRoles: string[]; ai: ProjectAiStatus }>(`/api/projects/${projectId}`)
@@ -88,7 +95,7 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
                 projectId={projectId}
                 stage={stage}
                 canConfigure={canConfigure}
-                onAssigned={() => setReloadKey((k) => k + 1)}
+                onAssignmentsChanged={refreshAssignments}
               />
               {stage.type === "TITLE_ABSTRACT" && canConfigure && ai?.enabled && (
                 <PrescreenPanel
@@ -118,12 +125,12 @@ function StageStrip({
   projectId,
   stage,
   canConfigure,
-  onAssigned,
+  onAssignmentsChanged,
 }: {
   projectId: string;
   stage: ScreeningStageSummary;
   canConfigure: boolean;
-  onAssigned: () => void;
+  onAssignmentsChanged: () => void;
 }) {
   const p = stage.progress;
   return (
@@ -155,7 +162,18 @@ function StageStrip({
           )}
         </p>
         {canConfigure && (
-          <AssignReviewersDialog projectId={projectId} stage={stage} onAssigned={onAssigned} />
+          <div className="flex flex-wrap gap-2">
+            <ManageAssignmentsDialog
+              projectId={projectId}
+              stage={stage}
+              onAssignmentsChanged={onAssignmentsChanged}
+            />
+            <AssignReviewersDialog
+              projectId={projectId}
+              stage={stage}
+              onAssigned={onAssignmentsChanged}
+            />
+          </div>
         )}
       </div>
     </div>

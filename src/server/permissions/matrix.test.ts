@@ -6,7 +6,7 @@ import type { ProjectRole } from "@prisma/client";
 const EXPECTED: Record<ProjectRole, Capability[] | "ALL"> = {
   OWNER: "ALL",
   ADMIN: "ALL",
-  REVIEWER: ["project.view", "screening.decide", "fulltext.manage", "audit.view"],
+  REVIEWER: ["project.view", "screening.decide", "audit.view"],
   ADJUDICATOR: [
     "project.view",
     "screening.decide",

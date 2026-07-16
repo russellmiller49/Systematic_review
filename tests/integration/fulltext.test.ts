@@ -89,10 +89,10 @@ describe("fulltext service", () => {
   });
 
   it("uploads a PDF: file + link + audit + sha256 + forced content type", async () => {
-    const { reviewer1, project } = await createProjectWithTeam();
+    const { owner, reviewer1, project } = await createProjectWithTeam();
     const citation = await createTestCitation(project.id);
 
-    const { file, link, reused } = await ft.uploadFullText(ctx(reviewer1.id), project.id, {
+    const { file, link, reused } = await ft.uploadFullText(ctx(owner.id), project.id, {
       citationId: citation.id,
       filename: "Smith 2020 (final).pdf",
       bytes: PDF,
@@ -113,8 +113,18 @@ describe("fulltext service", () => {
     const event = await prisma.auditEvent.findFirstOrThrow({
       where: { entityType: "FullTextFile", entityId: file.id, action: "fulltext.file.uploaded" },
     });
-    expect(event.userId).toBe(reviewer1.id);
+    expect(event.userId).toBe(owner.id);
     expect(event.newValue).toMatchObject({ sha256: file.sha256, citationId: citation.id });
+
+    // REVIEWER is assignment-gated screening work only; it cannot administer full-text files.
+    await expectAppError(
+      ft.uploadFullText(ctx(reviewer1.id), project.id, {
+        citationId: citation.id,
+        filename: "reviewer-copy.pdf",
+        bytes: Buffer.from(`%PDF-1.4\n%${uniq("reviewer-copy")}`),
+      }),
+      "FORBIDDEN",
+    );
   });
 
   it("reuses the same-sha256 file: one FullTextFile, two links, LINKED audit", async () => {
@@ -254,10 +264,10 @@ describe("fulltext service", () => {
   });
 
   it("records and lists retrieval attempts with recorder names; permission enforced", async () => {
-    const { owner, reviewer1, project } = await createProjectWithTeam();
+    const { owner, reviewer1, adjudicator, project } = await createProjectWithTeam();
     const citation = await createTestCitation(project.id);
 
-    const attempt = await ft.recordRetrievalAttempt(ctx(reviewer1.id), project.id, citation.id, {
+    const attempt = await ft.recordRetrievalAttempt(ctx(adjudicator.id), project.id, citation.id, {
       method: "publisher site",
       outcome: "NOT_RETRIEVED",
       notes: "paywalled",
@@ -279,7 +289,15 @@ describe("fulltext service", () => {
     const attempts = await ft.listRetrievalAttempts(ctx(owner.id), project.id, citation.id);
     expect(attempts).toHaveLength(2);
     expect(attempts[0]!.method).toBe("interlibrary loan"); // newest first
-    expect(attempts.map((a) => a.recordedBy.name).sort()).toEqual(["Owner", "Reviewer One"]);
+    expect(attempts.map((a) => a.recordedBy.name).sort()).toEqual(["Adjudicator", "Owner"]);
+
+    await expectAppError(
+      ft.recordRetrievalAttempt(ctx(reviewer1.id), project.id, citation.id, {
+        method: "reviewer upload",
+        outcome: "PENDING",
+      }),
+      "FORBIDDEN",
+    );
 
     // OBSERVER lacks fulltext.manage
     const observer = await createTestUser();
@@ -370,6 +388,29 @@ describe("fulltext service", () => {
     // non-member cannot read the queue
     const stranger = await createTestUser();
     await expectAppError(ft.getFullTextQueue(ctx(stranger.id), project.id), "FORBIDDEN");
+  });
+
+  it("limits a plain reviewer full-text view to assigned citations", async () => {
+    const { owner, reviewer1, project } = await createProjectWithTeam();
+    const { ta, ftStage } = await createStages(project.id);
+    const assigned = await createTestCitation(project.id);
+    const unassigned = await createTestCitation(project.id);
+    await includeAtStage(ta.id, assigned.id);
+    await includeAtStage(ta.id, unassigned.id);
+    await prisma.screeningAssignment.create({
+      data: { stageId: ftStage.id, citationId: assigned.id, reviewerId: reviewer1.id },
+    });
+
+    const reviewerQueue = await ft.getFullTextQueue(ctx(reviewer1.id), project.id);
+    expect(reviewerQueue).toHaveLength(1);
+    expect(reviewerQueue[0]).toMatchObject({
+      citation: { id: assigned.id },
+      myAssignmentStatus: "PENDING",
+    });
+
+    const ownerQueue = await ft.getFullTextQueue(ctx(owner.id), project.id);
+    expect(ownerQueue).toHaveLength(2);
+    expect(ownerQueue.every((item) => item.myAssignmentStatus === null)).toBe(true);
   });
 
   it("queue is empty when the project has no TITLE_ABSTRACT stage", async () => {

@@ -32,7 +32,10 @@ const ALL: readonly Capability[] = CAPABILITIES;
 const MATRIX: Record<ProjectRole, readonly Capability[]> = {
   OWNER: ALL,
   ADMIN: ALL,
-  REVIEWER: ["project.view", "screening.decide", "fulltext.manage", "audit.view"],
+  // A plain reviewer can make screening decisions only through the assignment-gated
+  // screening service. Full-text administration belongs to admins/librarians or an
+  // explicitly combined role.
+  REVIEWER: ["project.view", "screening.decide", "audit.view"],
   ADJUDICATOR: [
     "project.view",
     "screening.decide",

@@ -27,7 +27,7 @@ Capabilities: `project.view`, `project.edit`, `project.members`, `protocol.edit`
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | OWNER | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | ADMIN | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| REVIEWER | ✅ | — | — | — | — | — | ✅ | — | — | ✅ | — | — | — | — | — | — | — | ✅ | — |
+| REVIEWER | ✅ | — | — | — | — | — | ✅ | — | — | — | — | — | — | — | — | — | — | ✅ | — |
 | ADJUDICATOR | ✅ | — | — | — | — | — | ✅ | ✅ | — | ✅ | — | — | ✅ | — | — | ✅ | — | ✅ | — |
 | EXTRACTOR | ✅ | — | — | — | — | — | — | — | — | ✅ | — | ✅ | — | — | ✅ | — | — | ✅ | — |
 | STATISTICIAN | ✅ | — | — | — | — | — | — | — | — | — | ✅ | ✅ | — | ✅ | ✅ | — | ✅ | ✅ | ✅ |
@@ -44,6 +44,10 @@ Additional invariants enforced in services, beyond the matrix:
 
 - You can only create/update **your own** screening decisions, extraction forms, and RoB
   assessments (`reviewerId`/`extractorId`/`assessorId` always come from the session).
+- A REVIEWER can decide only citation-stage pairs currently assigned to them. Assignment creation,
+  workload inspection, and reset controls require `screening.configure` (OWNER/ADMIN).
+- Assignment resets require an audit reason and remove only PENDING rows with no saved decision;
+  completed assignments, decisions, conflicts, and stage results are preserved.
 - Adjudicating your own two-way conflict is refused when the adjudicator is one of the
   conflicting reviewers **and** another eligible adjudicator exists (warn-and-allow with audit
   note otherwise — small teams are real).

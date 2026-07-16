@@ -13,6 +13,7 @@ import { prisma } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { getOrgMembership, requirePermission } from "@/server/permissions";
+import { capabilitiesFor } from "@/server/permissions/matrix";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { getAiConfig } from "@/server/ai/config";
@@ -209,6 +210,7 @@ export async function getProject(ctx: Ctx, projectId: string) {
   return {
     ...project,
     myRoles: member.roles,
+    capabilities: capabilitiesFor(member.roles),
     ai: {
       enabled: aiConfig.enabled,
       provider: aiConfig.provider,

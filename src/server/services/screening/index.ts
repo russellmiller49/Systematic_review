@@ -6,7 +6,7 @@
 //   R7 (MAYBE semantics; unanimous MAYBE always conflicts)
 
 import { z } from "zod";
-import type { Prisma, ProjectMember, ScreeningStage } from "@prisma/client";
+import { Prisma, type ProjectMember, type ScreeningStage } from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
 import { forbidden, invalidState, notFound, validationError } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
@@ -31,6 +31,11 @@ export const createAssignmentsSchema = z.object({
   reviewerIds: z.array(z.string().min(1)).min(1).max(50),
   strategy: z.enum(["all", "split"]),
   citationIds: z.array(z.string().min(1)).optional(),
+});
+
+export const resetPendingAssignmentsSchema = z.object({
+  reviewerIds: z.array(z.string().min(1)).min(1).max(50).optional(),
+  reason: z.string().trim().min(3).max(2000),
 });
 
 export const createDecisionSchema = z.object({
@@ -346,6 +351,184 @@ export async function createAssignments(
       created: result.count,
       skippedExisting: pairs.length - result.count,
       eligibleCitations: citations.length,
+    };
+  });
+}
+
+// Admin workload view. It intentionally exposes counts and assignee identity only — never
+// blinded decision content. OWNER/ADMIN hold screening.configure.
+export async function listAssignmentAdmin(
+  ctx: Ctx,
+  projectId: string,
+  stageId: string,
+) {
+  await requirePermission(ctx, projectId, "screening.configure");
+  const stage = await getStageOr404(prisma, projectId, stageId);
+
+  const grouped = await prisma.screeningAssignment.groupBy({
+    by: ["reviewerId", "status"],
+    where: { stageId: stage.id, status: { not: "VOIDED" } },
+    _count: { _all: true },
+  });
+  const decisionGroups = await prisma.screeningDecision.groupBy({
+    by: ["reviewerId"],
+    where: { stageId: stage.id },
+    _count: { _all: true },
+  });
+  const reviewerIds = [...new Set(grouped.map((row) => row.reviewerId))];
+  const users = reviewerIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: reviewerIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const members = reviewerIds.length
+    ? await prisma.projectMember.findMany({
+        where: { projectId, userId: { in: reviewerIds } },
+        select: { userId: true, roles: true, status: true },
+      })
+    : [];
+
+  const userById = new Map(users.map((user) => [user.id, user]));
+  const memberById = new Map(members.map((member) => [member.userId, member]));
+  const decisionsById = new Map(
+    decisionGroups.map((row) => [row.reviewerId, row._count._all]),
+  );
+  const countsById = new Map<
+    string,
+    { pending: number; completed: number; assignments: number }
+  >();
+  for (const row of grouped) {
+    const counts = countsById.get(row.reviewerId) ?? {
+      pending: 0,
+      completed: 0,
+      assignments: 0,
+    };
+    counts.assignments += row._count._all;
+    if (row.status === "PENDING") counts.pending += row._count._all;
+    if (row.status === "COMPLETED") counts.completed += row._count._all;
+    countsById.set(row.reviewerId, counts);
+  }
+
+  const reviewers = reviewerIds
+    .map((reviewerId) => {
+      const counts = countsById.get(reviewerId)!;
+      const member = memberById.get(reviewerId);
+      return {
+        reviewer: userById.get(reviewerId) ?? {
+          id: reviewerId,
+          name: "Former member",
+          email: "",
+        },
+        roles: member?.roles ?? [],
+        memberStatus: member?.status ?? "REMOVED",
+        assignments: counts.assignments,
+        pending: counts.pending,
+        completed: counts.completed,
+        decisions: decisionsById.get(reviewerId) ?? 0,
+      };
+    })
+    .sort((a, b) => a.reviewer.name.localeCompare(b.reviewer.name));
+
+  return {
+    stage: {
+      id: stage.id,
+      type: stage.type,
+      reviewersPerCitation: stage.reviewersPerCitation,
+    },
+    totals: {
+      assignments: reviewers.reduce((sum, row) => sum + row.assignments, 0),
+      pending: reviewers.reduce((sum, row) => sum + row.pending, 0),
+      completed: reviewers.reduce((sum, row) => sum + row.completed, 0),
+      decisions: reviewers.reduce((sum, row) => sum + row.decisions, 0),
+    },
+    reviewers,
+  };
+}
+
+// Removes only PENDING assignments with no corresponding decision. Completed work is
+// protected by construction, even if a caller asks to reset the entire stage.
+export async function resetPendingAssignments(
+  ctx: Ctx,
+  projectId: string,
+  stageId: string,
+  input: z.infer<typeof resetPendingAssignmentsSchema>,
+) {
+  await requirePermission(ctx, projectId, "screening.configure");
+  return prisma.$transaction(async (tx) => {
+    const stage = await getStageOr404(tx, projectId, stageId);
+    const reviewerIds = input.reviewerIds ? [...new Set(input.reviewerIds)] : undefined;
+
+    if (reviewerIds) {
+      const known = await tx.projectMember.count({
+        where: { projectId, userId: { in: reviewerIds } },
+      });
+      if (known !== reviewerIds.length) {
+        throw validationError("Some reviewers do not belong to this project");
+      }
+    }
+
+    const reviewerFilter = reviewerIds
+      ? Prisma.sql`AND assignment."reviewerId" IN (${Prisma.join(reviewerIds)})`
+      : Prisma.empty;
+    const before = await tx.screeningAssignment.count({
+      where: {
+        stageId: stage.id,
+        status: { not: "VOIDED" },
+        ...(reviewerIds ? { reviewerId: { in: reviewerIds } } : {}),
+      },
+    });
+
+    const removed = await tx.$queryRaw<{ id: string; reviewerId: string }[]>(Prisma.sql`
+      DELETE FROM "ScreeningAssignment" AS assignment
+      WHERE assignment."stageId" = ${stage.id}
+        AND assignment."status" = 'PENDING'
+        ${reviewerFilter}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "ScreeningDecision" AS decision
+          WHERE decision."stageId" = assignment."stageId"
+            AND decision."citationId" = assignment."citationId"
+            AND decision."reviewerId" = assignment."reviewerId"
+        )
+      RETURNING assignment."id", assignment."reviewerId"
+    `);
+
+    const remaining = await tx.screeningAssignment.count({
+      where: {
+        stageId: stage.id,
+        status: { not: "VOIDED" },
+        ...(reviewerIds ? { reviewerId: { in: reviewerIds } } : {}),
+      },
+    });
+    const affectedReviewerIds = [...new Set(removed.map((row) => row.reviewerId))];
+
+    if (removed.length > 0) {
+      await audit.record(tx, {
+        projectId,
+        userId: ctx.userId,
+        entityType: "ScreeningStage",
+        entityId: stage.id,
+        action: AuditActions.SCREENING_ASSIGNMENTS_RESET,
+        previousValue: { assignmentCount: before },
+        newValue: { assignmentCount: remaining },
+        reason: input.reason,
+        metadata: {
+          stageType: stage.type,
+          scope: reviewerIds ? "selected_reviewers" : "all_reviewers",
+          requestedReviewerIds: reviewerIds ?? null,
+          affectedReviewerIds,
+          deletedPendingAssignments: removed.length,
+          protectedAssignments: before - removed.length,
+        },
+      });
+    }
+
+    return {
+      deleted: removed.length,
+      protectedAssignments: before - removed.length,
+      remainingAssignments: remaining,
+      affectedReviewerIds,
     };
   });
 }

@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
+import { Alert, EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
 import {
   Table,
   TableBody,
@@ -165,6 +165,15 @@ export function MembersSection({
           </Dialog>
         )}
       </div>
+
+      {canManage && (
+        <Alert variant="info">
+          The project creator starts as Owner. Owners and Admins can manage members, roles, and
+          screening assignments; you may add multiple Admins. To transfer ownership, first grant
+          Owner to another member, then change the prior owner&apos;s role. Reviewers can work only
+          on citations assigned to them.
+        </Alert>
+      )}
 
       {members === null ? (
         <Skeleton className="h-40" />

@@ -65,12 +65,14 @@ export function FullTextRow({
   item,
   ftStageId,
   exclusionReasons,
+  canManageFullText,
   onChanged,
 }: {
   projectId: string;
   item: FullTextQueueItem;
   ftStageId: string | null;
   exclusionReasons: ExclusionReason[] | null;
+  canManageFullText: boolean;
   onChanged: () => void;
 }) {
   const { citation } = item;
@@ -236,15 +238,19 @@ export function FullTextRow({
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setUploadOpen(true)}>
-            <Upload /> Upload PDF
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setAttemptOutcome("RETRIEVED")}>
-            <Check /> Mark retrieved
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setAttemptOutcome("NOT_RETRIEVED")}>
-            <FileX2 /> Not retrievable
-          </Button>
+          {canManageFullText && (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setUploadOpen(true)}>
+                <Upload /> Upload PDF
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setAttemptOutcome("RETRIEVED")}>
+                <Check /> Mark retrieved
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setAttemptOutcome("NOT_RETRIEVED")}>
+                <FileX2 /> Not retrievable
+              </Button>
+            </>
+          )}
           <Button variant="ghost" size="sm" onClick={toggleExpanded}>
             <History /> Attempts {expanded ? <ChevronUp /> : <ChevronDown />}
           </Button>
@@ -253,7 +259,7 @@ export function FullTextRow({
           <p className="text-xs text-muted-foreground">
             Settled {new Date(item.fullTextResult.resolvedAt).toLocaleDateString()}
           </p>
-        ) : (
+        ) : item.myAssignmentStatus === "PENDING" ? (
           <div className="flex items-center gap-2">
             <Button
               variant="include"
@@ -274,6 +280,12 @@ export function FullTextRow({
               <X /> Exclude…
             </Button>
           </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {item.myAssignmentStatus === "COMPLETED"
+              ? "Your screening decision is complete"
+              : "No screening task assigned to you"}
+          </p>
         )}
       </div>
 
@@ -335,23 +347,27 @@ export function FullTextRow({
         </div>
       )}
 
-      <UploadPdfDialog
-        projectId={projectId}
-        citationId={citation.id}
-        open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        onUploaded={onChanged}
-      />
-      <RetrievalAttemptDialog
-        projectId={projectId}
-        citationId={citation.id}
-        open={attemptOutcome !== null}
-        defaultOutcome={attemptOutcome ?? "RETRIEVED"}
-        onOpenChange={(open) => {
-          if (!open) setAttemptOutcome(null);
-        }}
-        onSaved={handleAttemptSaved}
-      />
+      {canManageFullText && (
+        <>
+          <UploadPdfDialog
+            projectId={projectId}
+            citationId={citation.id}
+            open={uploadOpen}
+            onOpenChange={setUploadOpen}
+            onUploaded={onChanged}
+          />
+          <RetrievalAttemptDialog
+            projectId={projectId}
+            citationId={citation.id}
+            open={attemptOutcome !== null}
+            defaultOutcome={attemptOutcome ?? "RETRIEVED"}
+            onOpenChange={(open) => {
+              if (!open) setAttemptOutcome(null);
+            }}
+            onSaved={handleAttemptSaved}
+          />
+        </>
+      )}
       {ftStageId && (
         <ExcludeDialog
           projectId={projectId}

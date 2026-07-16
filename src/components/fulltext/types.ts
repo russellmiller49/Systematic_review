@@ -48,6 +48,8 @@ export interface FullTextQueueItem {
   } | null;
   // Count only — decision content stays blinded server-side.
   fullTextDecisionCount: number;
+  // Current user's assignment at the full-text screening stage, if any.
+  myAssignmentStatus: "PENDING" | "COMPLETED" | null;
 }
 
 export interface ScreeningStageRef {

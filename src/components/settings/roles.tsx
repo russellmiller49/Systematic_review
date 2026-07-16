@@ -30,6 +30,19 @@ const ROLE_LABELS: Record<ProjectRoleValue, string> = {
   OBSERVER: "Observer",
 };
 
+const ROLE_DESCRIPTIONS: Record<ProjectRoleValue, string> = {
+  OWNER: "Full control. At least one Owner must remain; add another Owner to transfer ownership.",
+  ADMIN: "Full control, including team roles, screening assignments, and project settings.",
+  REVIEWER: "Screens only citations assigned to them; cannot configure the review.",
+  ADJUDICATOR: "Resolves screening, extraction, and risk-of-bias conflicts.",
+  EXTRACTOR: "Completes assigned data extraction and risk-of-bias work.",
+  STATISTICIAN: "Manages analysis, extraction templates, and review exports.",
+  LIBRARIAN: "Manages searches, imports, deduplication, full text, and protocol details.",
+  PANEL_MEMBER: "Read-only access to review findings and analysis.",
+  TRAINEE: "Performs supervised screening, extraction, and risk-of-bias work.",
+  OBSERVER: "Read-only project access.",
+};
+
 export function roleLabel(role: string): string {
   return (ROLE_LABELS as Record<string, string>)[role] ?? role.toLowerCase().replace(/_/g, " ");
 }
@@ -42,15 +55,15 @@ export function RolesChecklist({
   onChange: (roles: string[]) => void;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-1.5">
+    <div className="grid gap-1.5 sm:grid-cols-2">
       {PROJECT_ROLES.map((role) => (
         <label
           key={role}
-          className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-sm transition-colors hover:bg-muted has-[:checked]:border-primary/40 has-[:checked]:bg-accent"
+          className="flex cursor-pointer items-start gap-2 rounded-md border border-border px-2.5 py-2 text-sm transition-colors hover:bg-muted has-[:checked]:border-primary/40 has-[:checked]:bg-accent"
         >
           <input
             type="checkbox"
-            className="h-3.5 w-3.5 accent-primary"
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-primary"
             checked={value.includes(role)}
             onChange={(e) =>
               onChange(
@@ -58,7 +71,12 @@ export function RolesChecklist({
               )
             }
           />
-          {ROLE_LABELS[role]}
+          <span>
+            <span className="block font-medium">{ROLE_LABELS[role]}</span>
+            <span className="block text-xs leading-snug text-muted-foreground">
+              {ROLE_DESCRIPTIONS[role]}
+            </span>
+          </span>
         </label>
       ))}
     </div>

@@ -37,6 +37,7 @@ export function FullTextQueueClient({ projectId }: { projectId: string }) {
   const [reasons, setReasons] = useState<ExclusionReason[] | null>(null);
   const [retrievalFilter, setRetrievalFilter] = useState<RetrievalFilter>("all");
   const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>("all");
+  const [canManageFullText, setCanManageFullText] = useState(false);
 
   const loadQueue = useCallback(() => {
     api<FullTextQueueItem[]>(`/api/projects/${projectId}/fulltext/queue`)
@@ -57,6 +58,9 @@ export function FullTextQueueClient({ projectId }: { projectId: string }) {
     api<ExclusionReason[]>(`/api/projects/${projectId}/exclusion-reasons?stage=FULL_TEXT`)
       .then(setReasons)
       .catch(() => setReasons([]));
+    api<{ capabilities: string[] }>(`/api/projects/${projectId}`)
+      .then((project) => setCanManageFullText(project.capabilities.includes("fulltext.manage")))
+      .catch(() => setCanManageFullText(false));
   }, [projectId, loadQueue]);
 
   const stats = useMemo(() => {
@@ -83,7 +87,11 @@ export function FullTextQueueClient({ projectId }: { projectId: string }) {
     <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         title="Full text"
-        description="Retrieve full-text reports for citations included at title/abstract, then record full-text screening decisions."
+        description={
+          canManageFullText
+            ? "Retrieve full-text reports for citations included at title/abstract, then record assigned screening decisions."
+            : "Review full-text reports for citations assigned to you."
+        }
       />
 
       {stats ? (
@@ -158,6 +166,7 @@ export function FullTextQueueClient({ projectId }: { projectId: string }) {
                 item={item}
                 ftStageId={ftStageId}
                 exclusionReasons={reasons}
+                canManageFullText={canManageFullText}
                 onChanged={loadQueue}
               />
             ))}

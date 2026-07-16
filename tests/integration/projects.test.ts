@@ -114,6 +114,7 @@ describe("projects service", () => {
 
       const detail = await projects.getProject(ctx(owner.id), project.id);
       expect(detail.myRoles).toEqual(["OWNER"]);
+      expect(detail.capabilities).toEqual(expect.arrayContaining(["project.members", "screening.configure"]));
       expect(detail.screeningStages).toHaveLength(2);
 
       // org member without a project membership cannot read project detail

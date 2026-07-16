@@ -10,6 +10,7 @@ import { prisma } from "@/server/db";
 import { conflict, invalidState, notFound, validationError } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { requirePermission } from "@/server/permissions";
+import { can } from "@/server/permissions/matrix";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { getStorage } from "@/server/storage";
@@ -253,7 +254,7 @@ export async function getFullTextQueue(
   projectId: string,
   filter: z.infer<typeof queueFilterSchema> = {},
 ) {
-  await requirePermission(ctx, projectId, "project.view");
+  const member = await requirePermission(ctx, projectId, "project.view");
 
   const taStage = await prisma.screeningStage.findFirst({
     where: { projectId, type: "TITLE_ABSTRACT" },
@@ -263,12 +264,25 @@ export async function getFullTextQueue(
     where: { projectId, type: "FULL_TEXT" },
   });
   const ftStageId = ftStage?.id ?? "__no_full_text_stage__";
+  const assignedWorkOnly =
+    can(member.roles, "screening.decide") && !can(member.roles, "fulltext.manage");
 
   const citations = await prisma.citation.findMany({
     where: {
       projectId,
       status: "ACTIVE",
       stageResults: { some: { stageId: taStage.id, outcome: "INCLUDE" } },
+      ...(assignedWorkOnly
+        ? {
+            assignments: {
+              some: {
+                stageId: ftStageId,
+                reviewerId: ctx.userId,
+                status: { not: "VOIDED" as const },
+              },
+            },
+          }
+        : {}),
     },
     include: {
       fullTextLinks: {
@@ -281,6 +295,11 @@ export async function getFullTextQueue(
         include: { recordedBy: { select: { id: true, name: true } } },
       },
       stageResults: { where: { stageId: ftStageId } },
+      assignments: {
+        where: { stageId: ftStageId, reviewerId: ctx.userId, status: { not: "VOIDED" } },
+        select: { status: true },
+        take: 1,
+      },
       _count: { select: { decisions: { where: { stageId: ftStageId } } } },
     },
     orderBy: { createdAt: "asc" },
@@ -331,6 +350,7 @@ export async function getFullTextQueue(
         ? { outcome: ftResult.outcome, resolvedVia: ftResult.resolvedVia, resolvedAt: ftResult.resolvedAt }
         : null,
       fullTextDecisionCount: c._count.decisions,
+      myAssignmentStatus: c.assignments[0]?.status ?? null,
     };
   });
 

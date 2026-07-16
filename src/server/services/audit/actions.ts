@@ -46,6 +46,7 @@ export const AuditActions = {
 
   // screening
   SCREENING_ASSIGNED: "screening.assigned",
+  SCREENING_ASSIGNMENTS_RESET: "screening.assignments.reset",
   SCREENING_DECISION_CREATED: "screening.decision.created",
   SCREENING_DECISION_UPDATED: "screening.decision.updated",
   SCREENING_CONFLICT_OPENED: "screening.conflict.opened",

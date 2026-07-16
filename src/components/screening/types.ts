@@ -27,6 +27,28 @@ export interface ScreeningStageSummary {
   progress: StageProgress;
 }
 
+export interface AssignmentAdminReviewer {
+  reviewer: { id: string; name: string; email: string };
+  roles: string[];
+  memberStatus: string;
+  assignments: number;
+  pending: number;
+  completed: number;
+  decisions: number;
+}
+
+// GET /api/projects/:id/screening/stages/:stageId/assignments (OWNER/ADMIN only).
+export interface AssignmentAdminSummary {
+  stage: { id: string; type: StageType; reviewersPerCitation: number };
+  totals: {
+    assignments: number;
+    pending: number;
+    completed: number;
+    decisions: number;
+  };
+  reviewers: AssignmentAdminReviewer[];
+}
+
 // `ai` block on GET /api/projects/:id — server-side AI feature status for UI gating.
 export interface ProjectAiStatus {
   enabled: boolean;
