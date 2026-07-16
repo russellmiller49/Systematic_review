@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, FileWarning, Inbox } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FileWarning, Inbox, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiPost, ApiError } from "@/lib/api";
 import { formatAuthors } from "@/components/citations/citation-card";
@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import type { CommitResult, ImportBatchDetail, SourceRecordRow } from "./types";
 import { BATCH_STATUS_VARIANT, FORMAT_LABELS } from "./types";
+import { DeleteBatchDialog } from "./delete-batch-dialog";
 
 const PREVIEW_ROW_CAP = 200;
 const ERROR_ROW_CAP = 50;
@@ -63,6 +64,7 @@ export function BatchDetail({
 }) {
   const [batch, setBatch] = useState<ImportBatchDetail | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const load = useCallback(() => {
     api<ImportBatchDetail>(`/api/projects/${projectId}/imports/${batchId}`)
@@ -146,11 +148,16 @@ export function BatchDetail({
             {batch.createdBy ? ` by ${batch.createdBy.name}` : ""}
           </p>
         </div>
-        {batch.status === "PREVIEWED" && (
-          <Button onClick={commit} disabled={committing || batch.parsedRecords === 0}>
-            {committing && <Spinner />} Commit {batch.parsedRecords.toLocaleString()} records
+        <div className="flex items-center gap-2">
+          {batch.status === "PREVIEWED" && (
+            <Button onClick={commit} disabled={committing || batch.parsedRecords === 0}>
+              {committing && <Spinner />} Commit {batch.parsedRecords.toLocaleString()} records
+            </Button>
+          )}
+          <Button variant="outline" onClick={() => setDeleteOpen(true)}>
+            <Trash2 /> Delete import
           </Button>
-        )}
+        </div>
       </div>
 
       {batch.status === "COMMITTED" && (
@@ -298,6 +305,16 @@ export function BatchDetail({
           </div>
         )}
       </section>
+      <DeleteBatchDialog
+        projectId={projectId}
+        batch={batch}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={() => {
+          onChanged();
+          onBack();
+        }}
+      />
     </div>
   );
 }

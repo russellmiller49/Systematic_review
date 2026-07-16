@@ -22,7 +22,48 @@ export interface ScreeningStageSummary {
   reviewersPerCitation: number;
   blinded: boolean;
   maybeGeneratesConflict: boolean;
+  aiShowScores: boolean;
+  aiRankingEnabled: boolean;
   progress: StageProgress;
+}
+
+// `ai` block on GET /api/projects/:id — server-side AI feature status for UI gating.
+export interface ProjectAiStatus {
+  enabled: boolean;
+  provider: string;
+  screeningModel: string;
+  extractionModel: string;
+}
+
+export type PrescreenRunStatus = "PENDING" | "SUBMITTED" | "COMPLETED" | "FAILED" | "CANCELED";
+
+export interface PrescreenRun {
+  id: string;
+  status: PrescreenRunStatus;
+  provider: string;
+  model: string;
+  promptVersion: string;
+  totalCount: number;
+  succeededCount: number;
+  failedCount: number;
+  error: string | null;
+  usage: { inputTokens: number; outputTokens: number } | null;
+  createdAt: string;
+  submittedAt: string | null;
+  completedAt: string | null;
+  requestedBy?: { id: string; name: string };
+}
+
+// GET /api/projects/:id/screening/stages/:stageId/prescreen
+export interface PrescreenListResponse {
+  runs: PrescreenRun[];
+  eligible: { unscored: number; unsettled: number };
+}
+
+export interface AiSuggestionSummary {
+  score: number;
+  suggestedDecision: DecisionValue;
+  rationale: string;
 }
 
 // The citation "card" payload embedded in queue items.
@@ -44,6 +85,8 @@ export interface QueueItem {
   citation: QueueCitation;
   // Present only in rare states (e.g. after a reopen) — the queue is my PENDING work.
   myDecision: { decision: DecisionValue } | null;
+  // Present only when the stage's aiShowScores toggle is on and a suggestion exists.
+  aiSuggestion: AiSuggestionSummary | null;
 }
 
 // GET /api/projects/:id/screening/stages/:stageId/queue

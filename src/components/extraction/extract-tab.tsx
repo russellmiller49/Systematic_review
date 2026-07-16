@@ -29,6 +29,7 @@ import {
   hasCap,
   type ExtractionFormData,
   type MyAssignment,
+  type ProjectAiStatus,
   type Study,
   type Template,
 } from "./types";
@@ -45,11 +46,13 @@ export function ExtractTab({
   templates,
   meId,
   roles,
+  ai,
 }: {
   projectId: string;
   templates: Template[] | null;
   meId: string | null;
   roles: string[] | null;
+  ai: ProjectAiStatus | null;
 }) {
   const [studies, setStudies] = useState<Study[] | null>(null);
   const [forms, setForms] = useState<ExtractionFormData[] | null>(null);
@@ -181,6 +184,7 @@ export function ExtractTab({
         initialForm={workspaceForm}
         meId={meId}
         canSeeConflicts={hasCap(roles, "extraction.adjudicate")}
+        ai={ai}
         onClose={() => {
           setWorkspaceForm(null);
           load();

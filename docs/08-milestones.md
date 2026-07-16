@@ -27,8 +27,12 @@ history → export. Each maps to at least one integration or E2E test.
 2. ~~Built-in RoB 2 / ROBINS-I / QUADAS-2 / NOS / JBI / AMSTAR-2 tool seeds~~ ✅ 2026-07-12 —
    `ensureBuiltinStandardTools()` (`src/server/services/rob/standard-tools.ts`), seeded by
    `npm run db:seed`
-3. AI screening suggestions (separate tables) + active-learning ranking
-4. AI extraction with source anchoring (anchor slot exists)
+3. ~~AI screening suggestions (separate tables) + active-learning ranking~~ ✅ 2026-07-14 —
+   `ScreeningSuggestion`/`AiScreeningRun` + provider Batch API runs + queue score badges and
+   score-ranked ordering (`src/server/services/ai-screening`, `src/server/ai/`)
+4. ~~AI extraction with source anchoring (anchor slot exists)~~ ✅ 2026-07-14 —
+   `ExtractionSuggestion`/`AiExtractionRun` + per-field Apply through `upsertValue`
+   (`appliedSuggestionId`), which now populates `ExtractionValue.sourceAnchor`
 5. Meta-analysis module (effect measures, forest/funnel, R export)
 6. GRADE per outcome + SoF tables
 7. Living-review surveillance (saved searches → new ImportBatches → triage queue)

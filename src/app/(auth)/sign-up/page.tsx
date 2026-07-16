@@ -1,18 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { apiPost, ApiError } from "@/lib/api";
+import { safeInternalPath } from "@/lib/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/misc";
 
-export default function SignUpPage() {
+function SignUpForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const callbackUrl = safeInternalPath(params.get("callbackUrl"));
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -27,7 +30,7 @@ export default function SignUpPage() {
       await apiPost("/api/users", { name, email, password });
       const res = await signIn("credentials", { email, password, redirect: false });
       if (res?.error) throw new Error("Sign-in after registration failed");
-      router.push("/orgs");
+      router.push(callbackUrl);
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong");
@@ -77,12 +80,27 @@ export default function SignUpPage() {
           </Button>
           <p className="text-center text-sm text-muted-foreground">
             Already registered?{" "}
-            <Link href="/sign-in" className="text-primary hover:underline">
+            <Link
+              href={
+                callbackUrl === "/orgs"
+                  ? "/sign-in"
+                  : `/sign-in?callbackUrl=${encodeURIComponent(callbackUrl)}`
+              }
+              className="text-primary hover:underline"
+            >
               Sign in
             </Link>
           </p>
         </form>
       </CardContent>
     </Card>
+  );
+}
+
+export default function SignUpPage() {
+  return (
+    <Suspense>
+      <SignUpForm />
+    </Suspense>
   );
 }

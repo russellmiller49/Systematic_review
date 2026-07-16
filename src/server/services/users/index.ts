@@ -1,7 +1,7 @@
 import { hash } from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/server/db";
-import { conflict } from "@/server/errors";
+import { conflict, forbidden } from "@/server/errors";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 
@@ -13,8 +13,38 @@ export const signUpSchema = z.object({
 
 export type SignUpInput = z.infer<typeof signUpSchema>;
 
+export function parsePilotEmailAllowlist(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+async function requirePilotSignupAccess(email: string) {
+  const allowlist = parsePilotEmailAllowlist(process.env.PILOT_EMAIL_ALLOWLIST);
+  if (allowlist.size === 0 || allowlist.has(email)) return;
+
+  // Once the pilot owner creates an invitation, that email may register without a deploy-time
+  // allowlist change. The one-time token is still required to join the project.
+  const invitation = await prisma.projectInvitation.findFirst({
+    where: {
+      email,
+      acceptedAt: null,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+    select: { id: true },
+  });
+  if (!invitation) {
+    throw forbidden("This pilot is invitation-only. Ask the project owner for access.");
+  }
+}
+
 export async function createUser(input: SignUpInput) {
   const email = input.email.toLowerCase().trim();
+  await requirePilotSignupAccess(email);
   const passwordHash = await hash(input.password, 12);
 
   return prisma.$transaction(async (tx) => {

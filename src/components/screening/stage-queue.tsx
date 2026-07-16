@@ -11,6 +11,7 @@ import {
   PartyPopper,
   RefreshCw,
   SkipForward,
+  Sparkles,
   StickyNote,
   TriangleAlert,
   X,
@@ -370,6 +371,25 @@ export function StageQueue({
         <>
           <CitationCard citation={current.citation} clampAbstract={false}>
             <div className="space-y-3">
+              {current.aiSuggestion && (
+                <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="font-medium tabular-nums">
+                      AI likelihood: {current.aiSuggestion.score}/100
+                    </span>
+                    <Badge variant={DECISION_BADGE[current.aiSuggestion.suggestedDecision]}>
+                      suggests {current.aiSuggestion.suggestedDecision.toLowerCase()}
+                    </Badge>
+                  </div>
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                      Rationale
+                    </summary>
+                    <p className="mt-1 text-muted-foreground">{current.aiSuggestion.rationale}</p>
+                  </details>
+                </div>
+              )}
               {current.myDecision && (
                 <Badge variant={DECISION_BADGE[current.myDecision.decision]}>
                   Your earlier decision: {current.myDecision.decision.toLowerCase()}

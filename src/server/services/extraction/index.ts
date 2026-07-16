@@ -17,7 +17,13 @@
 //         extraction mirror of R6's "agreement after an edit → auto-resolve").
 
 import { z } from "zod";
-import { Prisma, type ConflictStatus, type ExtractionValue, type FieldType } from "@prisma/client";
+import {
+  Prisma,
+  type ConflictStatus,
+  type ExtractionSuggestion,
+  type ExtractionValue,
+  type FieldType,
+} from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound, validationError } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
@@ -102,6 +108,10 @@ export const upsertValueSchema = z.object({
   sourceQuote: z.string().trim().min(1).max(8000).nullable().optional(),
   pageNumber: z.number().int().min(1).nullable().optional(),
   notes: z.string().trim().max(8000).nullable().optional(),
+  // Apply an AI suggestion (server-authoritative): when present, value/sourceQuote/
+  // pageNumber/sourceAnchor are copied from the ExtractionSuggestion row — the client
+  // body's value is ignored. The human extractor remains the author of the write.
+  appliedSuggestionId: z.string().min(1).optional(),
 });
 
 export const listConflictsQuerySchema = z.object({
@@ -743,10 +753,61 @@ export async function upsertValue(
       throw invalidState("Form is completed — only fields with an open conflict can be edited");
     }
 
+    // AI-suggestion apply: the suggestion must belong to this exact (template, study, field)
+    // and be applyable (not notFound, not invalid, non-null value). Its value still goes
+    // through validateFieldValue and every guard above — the AI never bypasses the human
+    // write path (docs/01 integrity rule 2).
+    let appliedSuggestion: ExtractionSuggestion | null = null;
+    if (input.appliedSuggestionId) {
+      appliedSuggestion = await tx.extractionSuggestion.findFirst({
+        where: {
+          id: input.appliedSuggestionId,
+          templateId: form.templateId,
+          studyId: form.studyId,
+          fieldId: field.id,
+          notFound: false,
+          invalidReason: null,
+        },
+      });
+      if (!appliedSuggestion || appliedSuggestion.value === null) {
+        throw notFound("Applyable AI suggestion");
+      }
+    }
+
     const existing = await tx.extractionValue.findUnique({
       where: { formId_fieldId: { formId: form.id, fieldId: field.id } },
     });
-    const rawValue = input.value === undefined ? null : input.value;
+    const rawValue = appliedSuggestion
+      ? appliedSuggestion.value
+      : input.value === undefined
+        ? null
+        : input.value;
+
+    // Provenance written alongside the value: on apply it comes from the suggestion row
+    // (including the sourceAnchor slot); on manual edits only explicitly provided fields
+    // change, matching the existing behavior.
+    const provenancePatch = appliedSuggestion
+      ? {
+          sourceQuote: appliedSuggestion.sourceQuote,
+          pageNumber: appliedSuggestion.pageNumber,
+          sourceAnchor:
+            appliedSuggestion.sourceAnchor === null
+              ? Prisma.JsonNull
+              : (appliedSuggestion.sourceAnchor as Prisma.InputJsonValue),
+          ...(input.notes !== undefined && { notes: input.notes }),
+        }
+      : {
+          ...(input.sourceQuote !== undefined && { sourceQuote: input.sourceQuote }),
+          ...(input.pageNumber !== undefined && { pageNumber: input.pageNumber }),
+          ...(input.notes !== undefined && { notes: input.notes }),
+        };
+    const aiAuditMetadata = appliedSuggestion
+      ? {
+          appliedFromSuggestionId: appliedSuggestion.id,
+          aiProvider: appliedSuggestion.provider,
+          aiModel: appliedSuggestion.model,
+        }
+      : {};
 
     let result: ExtractionValue | null;
     if (rawValue === null) {
@@ -774,12 +835,7 @@ export async function upsertValue(
       if (existing) {
         result = await tx.extractionValue.update({
           where: { id: existing.id },
-          data: {
-            value,
-            ...(input.sourceQuote !== undefined && { sourceQuote: input.sourceQuote }),
-            ...(input.pageNumber !== undefined && { pageNumber: input.pageNumber }),
-            ...(input.notes !== undefined && { notes: input.notes }),
-          },
+          data: { value, ...provenancePatch },
         });
         await audit.record(tx, {
           projectId,
@@ -798,7 +854,7 @@ export async function upsertValue(
             sourceQuote: result.sourceQuote,
             pageNumber: result.pageNumber,
           },
-          metadata: { formId: form.id, fieldKey: field.key },
+          metadata: { formId: form.id, fieldKey: field.key, ...aiAuditMetadata },
         });
       } else {
         result = await tx.extractionValue.create({
@@ -806,9 +862,10 @@ export async function upsertValue(
             formId: form.id,
             fieldId: field.id,
             value,
-            sourceQuote: input.sourceQuote ?? null,
-            pageNumber: input.pageNumber ?? null,
-            notes: input.notes ?? null,
+            sourceQuote: null,
+            pageNumber: null,
+            notes: null,
+            ...provenancePatch,
           },
         });
         await audit.record(tx, {
@@ -822,7 +879,7 @@ export async function upsertValue(
             sourceQuote: result.sourceQuote,
             pageNumber: result.pageNumber,
           },
-          metadata: { formId: form.id, fieldKey: field.key },
+          metadata: { formId: form.id, fieldKey: field.key, ...aiAuditMetadata },
         });
       }
     }

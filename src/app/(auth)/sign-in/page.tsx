@@ -4,6 +4,7 @@ import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
+import { safeInternalPath } from "@/lib/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,7 @@ import { Spinner } from "@/components/ui/misc";
 function SignInForm() {
   const router = useRouter();
   const params = useSearchParams();
+  const callbackUrl = safeInternalPath(params.get("callbackUrl"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +30,7 @@ function SignInForm() {
       setError("Invalid email or password");
       return;
     }
-    router.push(params.get("callbackUrl") ?? "/orgs");
+    router.push(callbackUrl);
     router.refresh();
   }
 
@@ -68,7 +70,14 @@ function SignInForm() {
           </Button>
           <p className="text-center text-sm text-muted-foreground">
             No account?{" "}
-            <Link href="/sign-up" className="text-primary hover:underline">
+            <Link
+              href={
+                callbackUrl === "/orgs"
+                  ? "/sign-up"
+                  : `/sign-up?callbackUrl=${encodeURIComponent(callbackUrl)}`
+              }
+              className="text-primary hover:underline"
+            >
               Sign up
             </Link>
           </p>

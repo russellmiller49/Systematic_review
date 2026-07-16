@@ -140,6 +140,49 @@ export interface ConflictData {
   forms: ConflictFormValue[];
 }
 
+// --- AI suggestions ------------------------------------------------------------
+
+// `ai` block on GET /api/projects/:id — server-side AI feature status for UI gating.
+export interface ProjectAiStatus {
+  enabled: boolean;
+  provider: string;
+  screeningModel: string;
+  extractionModel: string;
+}
+
+export interface ExtractionSuggestionData {
+  id: string;
+  fieldId: string;
+  value: unknown; // null when notFound / invalid-and-unstorable
+  sourceQuote?: string | null;
+  pageNumber?: number | null;
+  confidence?: number | null;
+  notFound: boolean;
+  invalidReason?: string | null;
+  provider: string;
+  model: string;
+  field: { id: string; key: string; label: string; type: FieldType; order: number };
+}
+
+export interface AiExtractionRunData {
+  id: string;
+  status: "PENDING" | "SUBMITTED" | "COMPLETED" | "FAILED" | "CANCELED";
+  totalFields: number;
+  suggestedCount: number;
+  invalidCount: number;
+  notFoundCount: number;
+  error?: string | null;
+  createdAt: string;
+  completedAt?: string | null;
+}
+
+// GET /api/projects/:id/studies/:studyId/extraction-suggestions?templateId=
+export interface ExtractionSuggestionsResponse {
+  suggestions: ExtractionSuggestionData[];
+  latestRun: AiExtractionRunData | null;
+  pdf: { fileId: string; filename: string; sizeBytes: number } | null;
+}
+
 // --- Helpers -----------------------------------------------------------------
 
 export const FIELD_TYPE_LABELS: Record<FieldType, string> = {

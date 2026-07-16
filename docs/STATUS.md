@@ -4,7 +4,95 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.claude/skills/continue-build/SKILL.md`.
 
-## Current state (2026-07-12) — post-MVP backlog items 1–2
+## Pilot deployment (2026-07-14)
+
+- **Live:** `https://synthesis-production-07a3.up.railway.app` in the dedicated Railway
+  `synthesis-pilot` project (Pro workspace).
+- Architecture: one Railway Node service, managed PostgreSQL, and a persistent `/data` volume
+  for full-text PDFs. Migrations + the idempotent built-in RoB bootstrap run before deploy;
+  `/api/health` gates traffic.
+- Access: `PILOT_EMAIL_ALLOWLIST` restricts initial signup; active project invitations also
+  permit the invited email to register. AI is disabled until a provider key is configured.
+- Delivery is currently a manual CLI upload (`railway up`); no Git remote is configured.
+- Operator follow-up: enable scheduled backups for both Postgres and the web file volume in
+  Railway. See `docs/10-pilot-deployment.md`.
+
+## Import rollback (2026-07-15)
+
+- Import batches can now be deleted from the import list or batch-detail view through a
+  destructive confirmation dialog. PREVIEWED batches remove only their preserved source rows;
+  COMMITTED batches also remove citations created solely by that batch.
+- The rollback is deliberately guarded: citations linked to another import are retained, while
+  screening decisions/assignments, resolved dedup work, study/full-text links, extraction work,
+  AI suggestions, or an active AI screening run block deletion instead of being cascade-deleted.
+  Unreviewed dedup suggestions are derived data and are safely regenerated after reimport.
+- The endpoint is tenant-scoped, requires `import.manage`, serializes against commit, and records
+  `import.batch.deleted` with the prior batch metadata and deletion counts.
+- Verified: typecheck, production build, **145 unit + 165 integration** tests; browser-checked the
+  list action, committed-import warning, cancel path, and detail-page delete action.
+
+## Current state (2026-07-14) — post-MVP backlog items 3–4 (AI prescreening + AI extraction)
+
+- **Multi-provider AI layer (`src/server/ai/`)**: domain-shaped `AiProvider` interface
+  (createScoringBatch/getScoringBatch/cancelScoringBatch/extractFromPdf) with three thin
+  transports — `anthropic` (default, Message Batches + base64 PDF document blocks + streamed
+  extraction, structured output via `output_config.format json_schema`), `openai` (Batch API
+  JSONL + `response_format json_schema strict` + data-URL file parts), `gemini` (Batch Mode
+  inlined requests + `responseJsonSchema` + inlineData; positional results mapped via the run's
+  `requestKeys`). Prompts (`prompts/screening.ts` v screening-v1, `prompts/extraction.ts` v
+  extraction-v1) and result parsing/clamping (`schemas.ts`) are shared pure functions. Config
+  via env: `AI_PROVIDER` + per-provider key + `AI_SCREENING_MODEL`/`AI_EXTRACTION_MODEL`
+  (anthropic default `claude-opus-4-8`); missing key ⇒ `ai.enabled=false` on the project
+  payload ⇒ all AI UI hidden and endpoints 422. Test seam: `setAiProviderForTests()` +
+  `tests/fake-ai-provider.ts` (no vi.mock; mirrors the `getStorage()` singleton pattern).
+- **AI prescreening (backlog #3)**: ✅ `AiScreeningRun` + `ScreeningSuggestion`
+  (`@@unique([stageId,citationId])`, latest-wins; score 0–100 clamped, suggestedDecision,
+  rationale, provider/model/promptVersion denormalized per docs/01). Batch lifecycle with NO
+  background worker: `startPrescreenRun` (screening.configure; TA stage only; skips settled/
+  duplicate/empty-title/already-suggested unless `rescoreExisting`; run row PENDING → provider
+  call outside tx → SUBMITTED/FAILED) and `pollPrescreenRun` (idempotent; `FOR UPDATE` +
+  status re-check so concurrent polls ingest once; chunked delete+createMany; failedCount =
+  totalCount − succeeded). UI: `PrescreenPanel` on the TA tab (run + re-score checkbox +
+  10s auto-poll + refresh/cancel + usage tokens) and two audited stage toggles —
+  `aiShowScores` (default on; gates `aiSuggestion` in the queue payload) and
+  `aiRankingEnabled` (default off; `getQueue` sorts score desc, unscored last, FIFO ties).
+  Queue card shows an `AI likelihood: N/100 · suggests X` badge with collapsible rationale.
+- **AI extraction (backlog #4)**: ✅ `AiExtractionRun` + `ExtractionSuggestion`
+  (`@@unique([templateId,studyId,fieldId])`, full-replace per run). `runExtractionSuggestion`
+  (extraction.perform; PUBLISHED template; study→primary-report→`CitationFullTextLink` PDF
+  resolution; per-provider `maxPdfBytes` guard) calls the provider synchronously (minutes-long
+  request is fine on the Node server — first JobRunner customer if ever serverless), then per
+  field: `validateFieldValue` pass ⇒ stored valid; fail ⇒ stored with `invalidReason` (never
+  applyable); missing/`found:false` ⇒ `notFound`. Apply is server-authoritative through the
+  EXISTING `upsertValue` (`appliedSuggestionId` in `upsertValueSchema`): value/quote/page/
+  sourceAnchor copied from the suggestion row (client value ignored), all guards intact, audit
+  metadata `{appliedFromSuggestionId, aiProvider, aiModel}` — this activates the previously
+  inert `ExtractionValue.sourceAnchor`. UI: `FormWorkspace` gains "AI draft" (disabled w/
+  tooltip when no PDF), "Apply all (n)" (fills only EMPTY editable fields), and per-field
+  chips (valid ⇒ formatted value + confidence + quote/page + Apply/Dismiss; invalid/notFound
+  ⇒ muted notes).
+- **Cross-cutting**: audit actions `ai.prescreen.*`/`ai.extraction.*` (run-level only —
+  suggestion rows deliberately unaudited); AI run entities NOT in R1 sensitive lists (carry
+  no reviewer votes — comment in audit-query); permissions reuse (`screening.configure` /
+  `extraction.perform`, no new capabilities); `getProject` payload gains
+  `ai: {enabled, provider, screeningModel, extractionModel}`.
+- Verified: tsc, next build, **141 unit + 160 integration**, 5/5 E2E; browser-checked both
+  flows on the seeded demo (panel states + eligible counts, provider-401 error path marks run
+  FAILED with toast, ranking reorder + both badge variants, extraction chips in all three
+  states, Apply end-to-end with DB-verified sourceAnchor + audit provenance). Demo DB reseeded
+  after verification; `.env` keys left empty (AI disabled until a real key is set).
+- New: `E2E_PORT` env for Playwright (default 3000; use when another app occupies the port —
+  `reuseExistingServer` would otherwise latch onto the foreign server); `.claude/launch.json`
+  gained a `dev-alt` config on port 3457.
+- Known follow-ups (AI): no worker — a SUBMITTED batch only progresses while the panel polls
+  (provider batches expire ~24h ⇒ expired items map to failed, re-runnable); gemini inline
+  batches cap at ~15MB total payload (clear error suggests smaller runs or another provider);
+  openai/gemini default model ids (`gpt-5.1`, `gemini-2.5-pro`) are conservative — override
+  via env; extraction suggestions are shared across dual extractors (weakens independence —
+  deliberate, documented tradeoff); FULL_TEXT-stage prescreening not offered (extraction
+  covers full text).
+
+## Prior state (2026-07-12) — post-MVP backlog items 1–2
 
 - **PRISMA 2020 flow diagram (backlog #1)**: ✅ `src/components/prisma/diagram-layout.ts` is a
   pure layout + SVG-string renderer (word wrap, XML-escaped user labels, unit-tested);
@@ -80,9 +168,9 @@ the UI and demonstrated by the seed + E2E. Remaining items are all post-MVP back
 
 ## Remaining work
 
-**None for MVP**, and post-MVP backlog items 1–2 (PRISMA diagram, built-in RoB tool catalog)
-are ✅ done (2026-07-12 state above). Next up in docs/08: AI screening suggestions (#3),
-AI extraction (#4), meta-analysis (#5), … — plus the "Known follow-ups" below remain open.
+**None for MVP**, and post-MVP backlog items 1–4 (PRISMA diagram, built-in RoB tool catalog,
+AI prescreening, AI extraction) are ✅ done (2026-07-12 and 2026-07-14 states above). Next up
+in docs/08: meta-analysis (#5), GRADE (#6), … — plus the "Known follow-ups" below remain open.
 
 ### (historical, for reference)
 

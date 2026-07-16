@@ -35,6 +35,7 @@ export const AuditActions = {
   // import
   IMPORT_BATCH_CREATED: "import.batch.created",
   IMPORT_BATCH_COMMITTED: "import.batch.committed",
+  IMPORT_BATCH_DELETED: "import.batch.deleted",
   IMPORT_BATCH_FAILED: "import.batch.failed",
 
   // dedup
@@ -96,6 +97,16 @@ export const AuditActions = {
   // prisma / exports
   PRISMA_SNAPSHOT_CREATED: "prisma.snapshot.created",
   EXPORT_CREATED: "export.created",
+
+  // ai assistance (run-level only — individual suggestion rows are machine output and are
+  // deliberately NOT audited; a 5k-citation run would flood the log)
+  AI_PRESCREEN_STARTED: "ai.prescreen.started",
+  AI_PRESCREEN_COMPLETED: "ai.prescreen.completed",
+  AI_PRESCREEN_FAILED: "ai.prescreen.failed",
+  AI_PRESCREEN_CANCELED: "ai.prescreen.canceled",
+  AI_EXTRACTION_STARTED: "ai.extraction.started",
+  AI_EXTRACTION_COMPLETED: "ai.extraction.completed",
+  AI_EXTRACTION_FAILED: "ai.extraction.failed",
 } as const;
 
 export type AuditAction = (typeof AuditActions)[keyof typeof AuditActions];

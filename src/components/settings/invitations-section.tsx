@@ -111,13 +111,14 @@ export function InvitationsSection({ projectId }: { projectId: string }) {
     }
   }
 
-  async function copyToken() {
+  async function copyInvitationLink() {
     if (!created) return;
     try {
-      await navigator.clipboard.writeText(created.token);
-      toast.success("Token copied to clipboard");
+      const path = `/invitations/${encodeURIComponent(created.token)}`;
+      await navigator.clipboard.writeText(new URL(path, window.location.origin).toString());
+      toast.success("Invitation link copied to clipboard");
     } catch {
-      toast.error("Could not copy — select the token manually");
+      toast.error("Could not copy — select the invitation link manually");
     }
   }
 
@@ -248,7 +249,7 @@ export function InvitationsSection({ projectId }: { projectId: string }) {
       <Dialog open={created !== null} onOpenChange={(open) => !open && setCreated(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Invitation token</DialogTitle>
+            <DialogTitle>Invitation link</DialogTitle>
             {created && (
               <DialogDescription>
                 For {created.email} · expires {formatDate(created.expiresAt)}
@@ -256,15 +257,15 @@ export function InvitationsSection({ projectId }: { projectId: string }) {
             )}
           </DialogHeader>
           <Alert variant="warning">
-            This token is shown only once and cannot be retrieved again. Copy it now and share
-            it securely with the invitee.
+            This link is shown only once and cannot be retrieved again. Copy it now and share it
+            securely with the invitee.
           </Alert>
           {created && (
             <div className="flex items-start gap-2">
               <code className="min-w-0 flex-1 select-all break-all rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed">
-                {created.token}
+                /invitations/{encodeURIComponent(created.token)}
               </code>
-              <Button variant="outline" size="sm" onClick={copyToken}>
+              <Button variant="outline" size="sm" onClick={copyInvitationLink}>
                 <Copy /> Copy
               </Button>
             </div>

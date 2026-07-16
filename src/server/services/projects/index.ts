@@ -15,6 +15,7 @@ import type { Ctx } from "@/server/auth/session";
 import { getOrgMembership, requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
+import { getAiConfig } from "@/server/ai/config";
 
 const INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
@@ -202,7 +203,19 @@ export async function getProject(ctx: Ctx, projectId: string) {
     },
   });
   if (!project) throw notFound("Project");
-  return { ...project, myRoles: member.roles };
+  // AI feature status for UI gating (model names are not secrets; the key never leaves
+  // the server). enabled=false hides every AI affordance client-side.
+  const aiConfig = getAiConfig();
+  return {
+    ...project,
+    myRoles: member.roles,
+    ai: {
+      enabled: aiConfig.enabled,
+      provider: aiConfig.provider,
+      screeningModel: aiConfig.screeningModel,
+      extractionModel: aiConfig.extractionModel,
+    },
+  };
 }
 
 export async function updateProject(

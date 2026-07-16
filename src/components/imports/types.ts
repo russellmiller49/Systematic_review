@@ -64,6 +64,12 @@ export interface CommitResult extends ImportBatchRow {
   citationsCreated: number;
 }
 
+export interface DeleteBatchResult {
+  id: string;
+  citationsDeleted: number;
+  citationsRetained: number;
+}
+
 export const FORMAT_LABELS: Record<ImportFormat, string> = {
   RIS: "RIS",
   BIBTEX: "BibTeX",

@@ -12,6 +12,11 @@ import type { Ctx } from "@/server/auth/session";
 import { requirePermission, can } from "@/server/permissions";
 
 // R1 sensitive entity-type groups, keyed by the capability that unlocks them.
+//
+// AI entities (AiScreeningRun, AiExtractionRun) are deliberately NOT sensitive: their audit
+// events carry only run configuration and counts — no reviewer votes or per-citation
+// decisions — and the suggestion rows themselves are never audited. Screeners seeing that a
+// prescreen run happened leaks nothing about co-reviewers.
 export const SCREENING_SENSITIVE_ENTITY_TYPES = [
   "ScreeningDecision",
   "ScreeningConflict",

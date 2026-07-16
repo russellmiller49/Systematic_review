@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { BatchDetail } from "./batch-detail";
+import { DeleteBatchDialog } from "./delete-batch-dialog";
 import { SourceFormDialog } from "./source-form-dialog";
 import { UploadDialog } from "./upload-dialog";
 import type { ImportBatchRow, ImportSourceRow } from "./types";
@@ -31,6 +32,7 @@ export function ImportClient({ projectId }: { projectId: string }) {
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<ImportSourceRow | null>(null);
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
+  const [batchToDelete, setBatchToDelete] = useState<ImportBatchRow | null>(null);
 
   const load = useCallback(() => {
     api<ImportSourceRow[]>(`/api/projects/${projectId}/import-sources`)
@@ -209,7 +211,7 @@ export function ImportClient({ projectId }: { projectId: string }) {
                   <TableHead>Records</TableHead>
                   <TableHead>Uploaded by</TableHead>
                   <TableHead className="w-28">Created</TableHead>
-                  <TableHead className="w-20 text-right">View</TableHead>
+                  <TableHead className="w-32 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -242,14 +244,24 @@ export function ImportClient({ projectId }: { projectId: string }) {
                     <TableCell className="text-muted-foreground">
                       {new Date(b.createdAt).toLocaleDateString()}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setSelectedBatchId(b.id)}
-                      >
-                        {b.status === "PREVIEWED" ? "Preview" : "View"}
-                      </Button>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedBatchId(b.id)}
+                        >
+                          {b.status === "PREVIEWED" ? "Preview" : "View"}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Delete import ${b.filename}`}
+                          onClick={() => setBatchToDelete(b)}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -275,6 +287,18 @@ export function ImportClient({ projectId }: { projectId: string }) {
         open={sourceDialogOpen}
         onOpenChange={setSourceDialogOpen}
         onSaved={load}
+      />
+      <DeleteBatchDialog
+        projectId={projectId}
+        batch={batchToDelete}
+        open={batchToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setBatchToDelete(null);
+        }}
+        onDeleted={() => {
+          setBatchToDelete(null);
+          load();
+        }}
       />
     </div>
   );

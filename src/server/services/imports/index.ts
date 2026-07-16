@@ -268,6 +268,164 @@ export async function getBatch(ctx: Ctx, projectId: string, batchId: string) {
   return { ...batch, rows };
 }
 
+// Delete an import batch and roll back citations created only by that batch. A committed
+// import can be removed only while its citations are still untouched; downstream reviewer
+// work is never cascade-deleted. Citations that also have a source record from another batch
+// are retained and only this batch's provenance row is removed.
+export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) {
+  await requirePermission(ctx, projectId, "import.manage");
+
+  return prisma.$transaction(
+    async (tx) => {
+      // Serialize against commitBatch so a batch cannot be committed while it is deleted.
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id"
+        FROM "ImportBatch"
+        WHERE "id" = ${batchId} AND "projectId" = ${projectId}
+        FOR UPDATE
+      `;
+      if (locked.length === 0) throw notFound("Import batch");
+
+      const batch = await tx.importBatch.findUniqueOrThrow({
+        where: { id: batchId },
+        include: {
+          sourceRecords: { select: { citationId: true } },
+        },
+      });
+
+      const linkedCitationIds = [
+        ...new Set(
+          batch.sourceRecords
+            .map((row) => row.citationId)
+            .filter((id): id is string => id !== null),
+        ),
+      ];
+
+      const otherSourceRows =
+        linkedCitationIds.length === 0
+          ? []
+          : await tx.citationSourceRecord.findMany({
+              where: {
+                citationId: { in: linkedCitationIds },
+                batchId: { not: batch.id },
+              },
+              select: { citationId: true },
+              distinct: ["citationId"],
+            });
+      const retainedCitationIds = new Set(
+        otherSourceRows
+          .map((row) => row.citationId)
+          .filter((id): id is string => id !== null),
+      );
+      const citationIdsToDelete = linkedCitationIds.filter((id) => !retainedCitationIds.has(id));
+
+      if (citationIdsToDelete.length > 0) {
+        const activeAiRun = await tx.aiScreeningRun.findFirst({
+          where: { projectId, status: { in: ["PENDING", "SUBMITTED"] } },
+          select: { id: true },
+        });
+        if (activeAiRun) {
+          throw invalidState(
+            "An AI screening batch is still running. Wait for it to finish or cancel it before deleting an import.",
+          );
+        }
+
+        const blockedCitation = await tx.citation.findFirst({
+          where: {
+            projectId,
+            id: { in: citationIdsToDelete },
+            OR: [
+              { status: "DUPLICATE" },
+              { duplicateOfId: { not: null } },
+              { duplicates: { some: {} } },
+              { assignments: { some: {} } },
+              { decisions: { some: {} } },
+              { conflicts: { some: {} } },
+              { stageResults: { some: {} } },
+              { studyLinks: { some: {} } },
+              { fullTextLinks: { some: {} } },
+              { retrievalAttempts: { some: {} } },
+              { extractionForms: { some: {} } },
+              { aiSuggestions: { some: {} } },
+              { dedupCandidatesAsA: { some: { status: { not: "SUGGESTED" } } } },
+              { dedupCandidatesAsB: { some: { status: { not: "SUGGESTED" } } } },
+            ],
+          },
+          select: { title: true },
+        });
+        if (blockedCitation) {
+          throw invalidState(
+            `This import cannot be deleted because “${blockedCitation.title}” has downstream review work. Remove or reset that work first.`,
+          );
+        }
+
+        // Unreviewed dedup suggestions are derived data and can be regenerated after reimport.
+        const suggestedCandidates = await tx.deduplicationCandidate.findMany({
+          where: {
+            status: "SUGGESTED",
+            OR: [
+              { citationAId: { in: citationIdsToDelete } },
+              { citationBId: { in: citationIdsToDelete } },
+            ],
+          },
+          select: { id: true, groupId: true },
+        });
+        const candidateIds = suggestedCandidates.map((candidate) => candidate.id);
+        const groupIds = [
+          ...new Set(
+            suggestedCandidates
+              .map((candidate) => candidate.groupId)
+              .filter((id): id is string => id !== null),
+          ),
+        ];
+        if (candidateIds.length > 0) {
+          await tx.deduplicationCandidate.deleteMany({ where: { id: { in: candidateIds } } });
+        }
+
+        await tx.citationIdentifier.deleteMany({
+          where: { citationId: { in: citationIdsToDelete } },
+        });
+        await tx.citationSourceRecord.deleteMany({ where: { batchId: batch.id } });
+        await tx.citation.deleteMany({ where: { id: { in: citationIdsToDelete } } });
+
+        if (groupIds.length > 0) {
+          await tx.deduplicationGroup.deleteMany({
+            where: { id: { in: groupIds }, candidates: { none: {} } },
+          });
+        }
+      } else {
+        await tx.citationSourceRecord.deleteMany({ where: { batchId: batch.id } });
+      }
+
+      await tx.importBatch.delete({ where: { id: batch.id } });
+      const result = {
+        id: batch.id,
+        citationsDeleted: citationIdsToDelete.length,
+        citationsRetained: retainedCitationIds.size,
+      };
+      await audit.record(tx, {
+        projectId,
+        userId: ctx.userId,
+        entityType: "ImportBatch",
+        entityId: batch.id,
+        action: AuditActions.IMPORT_BATCH_DELETED,
+        previousValue: {
+          filename: batch.filename,
+          format: batch.format,
+          status: batch.status,
+          sourceId: batch.sourceId,
+          totalRecords: batch.totalRecords,
+          parsedRecords: batch.parsedRecords,
+          failedRecords: batch.failedRecords,
+        },
+        metadata: result,
+      });
+      return result;
+    },
+    { timeout: 60_000 },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Import batches — step 2: commit
 // ---------------------------------------------------------------------------

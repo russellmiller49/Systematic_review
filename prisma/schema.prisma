@@ -201,6 +201,14 @@ enum ExportStatus {
   FAILED
 }
 
+enum AiRunStatus {
+  PENDING // run row created; provider not yet acknowledged
+  SUBMITTED // provider batch accepted (batch runs only; sync extraction skips it)
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
 // ---------------------------------------------------------------------------
 // Users & teams
 // ---------------------------------------------------------------------------
@@ -240,6 +248,8 @@ model User {
   prismaSnapshots         PrismaSnapshot[]           @relation("SnapshotCreator")
   exportJobs              ExportJob[]                @relation("ExportRequester")
   auditEvents             AuditEvent[]               @relation("AuditActor")
+  aiScreeningRuns         AiScreeningRun[]           @relation("AiScreeningRunRequester")
+  aiExtractionRuns        AiExtractionRun[]          @relation("AiExtractionRunRequester")
 }
 
 model Organization {
@@ -304,6 +314,8 @@ model Project {
   prismaSnapshots     PrismaSnapshot[]
   exportJobs          ExportJob[]
   auditEvents         AuditEvent[]
+  aiScreeningRuns     AiScreeningRun[]
+  aiExtractionRuns    AiExtractionRun[]
 
   @@index([orgId])
 }
@@ -556,6 +568,7 @@ model Citation {
   fullTextLinks      CitationFullTextLink[]
   retrievalAttempts  FullTextRetrievalAttempt[]
   extractionForms    ExtractionForm[]
+  aiSuggestions      ScreeningSuggestion[]
   dedupCandidatesAsA DeduplicationCandidate[]   @relation("DedupCitationA")
   dedupCandidatesAsB DeduplicationCandidate[]   @relation("DedupCitationB")
 
@@ -664,6 +677,8 @@ model Study {
   robAssignments        RiskOfBiasAssignment[]
   robAssessments        RiskOfBiasAssessment[]
   robConflicts          RiskOfBiasConflict[]
+  aiExtractionRuns      AiExtractionRun[]
+  aiSuggestions         ExtractionSuggestion[]
 
   @@index([projectId])
 }
@@ -695,14 +710,20 @@ model ScreeningStage {
   blinded                Boolean   @default(true)
   maybeGeneratesConflict Boolean   @default(true)
   unblindedAt            DateTime? // admin unblind action (audited)
+  // AI prescreening display settings (see ScreeningSuggestion). Audited methodology
+  // toggles via updateStage; aiShowScores is inert until suggestions exist.
+  aiShowScores           Boolean   @default(true) // surface score badges in the queue payload
+  aiRankingEnabled       Boolean   @default(false) // order the queue by score desc, nulls last
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
-  project      Project               @relation(fields: [projectId], references: [id])
-  assignments  ScreeningAssignment[]
-  decisions    ScreeningDecision[]
-  conflicts    ScreeningConflict[]
-  stageResults CitationStageResult[]
+  project       Project               @relation(fields: [projectId], references: [id])
+  assignments   ScreeningAssignment[]
+  decisions     ScreeningDecision[]
+  conflicts     ScreeningConflict[]
+  stageResults  CitationStageResult[]
+  aiRuns        AiScreeningRun[]
+  aiSuggestions ScreeningSuggestion[]
 
   @@unique([projectId, type])
 }
@@ -814,9 +835,10 @@ model FullTextFile {
   uploadedById String
   createdAt    DateTime @default(now())
 
-  project    Project                @relation(fields: [projectId], references: [id])
-  uploadedBy User                   @relation("FileUploader", fields: [uploadedById], references: [id])
-  links      CitationFullTextLink[]
+  project          Project                @relation(fields: [projectId], references: [id])
+  uploadedBy       User                   @relation("FileUploader", fields: [uploadedById], references: [id])
+  links            CitationFullTextLink[]
+  aiExtractionRuns AiExtractionRun[]
 
   @@index([projectId])
   @@index([sha256])
@@ -874,11 +896,13 @@ model ExtractionTemplate {
   sourceTemplate   ExtractionTemplate?  @relation("TemplateLineage", fields: [sourceTemplateId], references: [id])
   derivedTemplates ExtractionTemplate[] @relation("TemplateLineage")
 
-  fields      ExtractionField[]
-  assignments ExtractionAssignment[]
-  forms       ExtractionForm[]
-  conflicts   ExtractionConflict[]
-  protocol    Protocol?
+  fields        ExtractionField[]
+  assignments   ExtractionAssignment[]
+  forms         ExtractionForm[]
+  conflicts     ExtractionConflict[]
+  protocol      Protocol?
+  aiRuns        AiExtractionRun[]
+  aiSuggestions ExtractionSuggestion[]
 
   @@index([projectId])
 }
@@ -897,9 +921,10 @@ model ExtractionField {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  template  ExtractionTemplate   @relation(fields: [templateId], references: [id])
-  values    ExtractionValue[]
-  conflicts ExtractionConflict[]
+  template      ExtractionTemplate     @relation(fields: [templateId], references: [id])
+  values        ExtractionValue[]
+  conflicts     ExtractionConflict[]
+  aiSuggestions ExtractionSuggestion[]
 
   @@unique([templateId, key])
   @@index([templateId, order])
@@ -989,6 +1014,128 @@ model ExtractionAdjudication {
 
   conflict    ExtractionConflict @relation(fields: [conflictId], references: [id])
   adjudicator User               @relation("ExtractionAdjudicator", fields: [adjudicatorId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// AI assistance (docs/01 extension seam: AI output lives in separate suggestion
+// tables keyed to the same entities — human decision tables stay human-only)
+// ---------------------------------------------------------------------------
+
+model AiScreeningRun {
+  id              String      @id @default(cuid())
+  projectId       String
+  stageId         String
+  status          AiRunStatus @default(PENDING)
+  provider        String // "anthropic" | "openai" | "gemini"
+  model           String
+  promptVersion   String
+  providerBatchId String?
+  requestKeys     Json? // citationIds in submission order — maps positional batch results (gemini inline)
+  totalCount      Int         @default(0)
+  succeededCount  Int         @default(0)
+  failedCount     Int         @default(0)
+  error           String?
+  usage           Json? // { inputTokens, outputTokens } aggregated over batch items
+  requestedById   String
+  createdAt       DateTime    @default(now())
+  submittedAt     DateTime?
+  completedAt     DateTime?
+
+  project     Project               @relation(fields: [projectId], references: [id])
+  stage       ScreeningStage        @relation(fields: [stageId], references: [id])
+  requestedBy User                  @relation("AiScreeningRunRequester", fields: [requestedById], references: [id])
+  suggestions ScreeningSuggestion[]
+
+  @@index([stageId, createdAt(sort: Desc)])
+  @@index([projectId, status])
+}
+
+// Latest AI likelihood-of-inclusion suggestion per (stage, citation); re-runs replace.
+// Never read by decision/conflict/PRISMA logic — display + queue ordering only.
+model ScreeningSuggestion {
+  id                String   @id @default(cuid())
+  stageId           String
+  citationId        String
+  runId             String
+  score             Int // 0–100 likelihood of inclusion, clamped on ingest
+  suggestedDecision Decision // INCLUDE | EXCLUDE | MAYBE (UNRESOLVED never written)
+  rationale         String
+  provider          String // denormalized from run (docs/01: model/version live on the row)
+  model             String
+  promptVersion     String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  stage    ScreeningStage @relation(fields: [stageId], references: [id])
+  citation Citation       @relation(fields: [citationId], references: [id])
+  run      AiScreeningRun @relation(fields: [runId], references: [id])
+
+  @@unique([stageId, citationId])
+  @@index([runId])
+  @@index([stageId, score])
+}
+
+model AiExtractionRun {
+  id             String      @id @default(cuid())
+  projectId      String
+  studyId        String
+  templateId     String
+  fileId         String // the FullTextFile that was read
+  status         AiRunStatus @default(PENDING)
+  provider       String
+  model          String
+  promptVersion  String
+  totalFields    Int         @default(0)
+  suggestedCount Int         @default(0) // valid suggestions stored
+  invalidCount   Int         @default(0) // returned but failed validateFieldValue
+  notFoundCount  Int         @default(0)
+  error          String?
+  usage          Json?
+  requestedById  String
+  createdAt      DateTime    @default(now())
+  completedAt    DateTime?
+
+  project     Project                @relation(fields: [projectId], references: [id])
+  study       Study                  @relation(fields: [studyId], references: [id])
+  template    ExtractionTemplate     @relation(fields: [templateId], references: [id])
+  file        FullTextFile           @relation(fields: [fileId], references: [id])
+  requestedBy User                   @relation("AiExtractionRunRequester", fields: [requestedById], references: [id])
+  suggestions ExtractionSuggestion[]
+
+  @@index([studyId, templateId, createdAt(sort: Desc)])
+  @@index([projectId, status])
+}
+
+// Latest AI value suggestion per (template, study, field); re-runs replace. Applying copies
+// the value into the extractor's own ExtractionValue via upsertValue — the human stays the
+// author; nothing ever writes an ExtractionValue directly from AI output.
+model ExtractionSuggestion {
+  id            String   @id @default(cuid())
+  runId         String
+  templateId    String
+  studyId       String
+  fieldId       String
+  value         Json? // null when notFound or invalid-and-unstorable
+  sourceQuote   String?
+  pageNumber    Int?
+  sourceAnchor  Json? // { fileId, page } — copied onto ExtractionValue.sourceAnchor on apply
+  confidence    Float? // 0–1, clamped on ingest
+  notFound      Boolean  @default(false)
+  invalidReason String? // set when the model's value failed validateFieldValue; never applyable
+  provider      String
+  model         String
+  promptVersion String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  run      AiExtractionRun    @relation(fields: [runId], references: [id])
+  template ExtractionTemplate @relation(fields: [templateId], references: [id])
+  study    Study              @relation(fields: [studyId], references: [id])
+  field    ExtractionField    @relation(fields: [fieldId], references: [id])
+
+  @@unique([templateId, studyId, fieldId])
+  @@index([runId])
+  @@index([studyId])
 }
 
 // ---------------------------------------------------------------------------

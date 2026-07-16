@@ -316,6 +316,85 @@ describe("imports + citations", () => {
     });
   });
 
+  describe("deleting import batches", () => {
+    it("deletes an uncommitted preview with its source records and audits the rollback", async () => {
+      const { owner, project, source } = await setupProject();
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "preview-only.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+
+      const result = await imports.deleteBatch(ctx(owner.id), project.id, batch.id);
+      expect(result).toEqual({ id: batch.id, citationsDeleted: 0, citationsRetained: 0 });
+      expect(await prisma.importBatch.findUnique({ where: { id: batch.id } })).toBeNull();
+      expect(await prisma.citationSourceRecord.count({ where: { batchId: batch.id } })).toBe(0);
+
+      const event = await prisma.auditEvent.findFirstOrThrow({
+        where: {
+          entityType: "ImportBatch",
+          entityId: batch.id,
+          action: "import.batch.deleted",
+        },
+      });
+      expect(event.previousValue).toMatchObject({
+        filename: "preview-only.csv",
+        status: "PREVIEWED",
+      });
+    });
+
+    it("deletes a committed import and its untouched citations", async () => {
+      const { owner, project, source } = await setupProject();
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "rollback.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+      await imports.commitBatch(ctx(owner.id), project.id, batch.id);
+      const citationIds = (
+        await prisma.citationSourceRecord.findMany({
+          where: { batchId: batch.id, citationId: { not: null } },
+          select: { citationId: true },
+        })
+      ).map((row) => row.citationId!);
+      expect(citationIds).toHaveLength(2);
+
+      const result = await imports.deleteBatch(ctx(owner.id), project.id, batch.id);
+      expect(result.citationsDeleted).toBe(2);
+      expect(result.citationsRetained).toBe(0);
+      expect(await prisma.importBatch.findUnique({ where: { id: batch.id } })).toBeNull();
+      expect(await prisma.citation.count({ where: { id: { in: citationIds } } })).toBe(0);
+      expect(await prisma.citationIdentifier.count({ where: { citationId: { in: citationIds } } })).toBe(0);
+    });
+
+    it("blocks committed deletion after downstream screening work and forbids reviewers", async () => {
+      const { owner, reviewer1, project, source } = await setupProject();
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "screened.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+      await imports.commitBatch(ctx(owner.id), project.id, batch.id);
+
+      await expectAppError(
+        imports.deleteBatch(ctx(reviewer1.id), project.id, batch.id),
+        "FORBIDDEN",
+      );
+
+      const citation = await prisma.citation.findFirstOrThrow({ where: { projectId: project.id } });
+      const stage = await prisma.screeningStage.create({
+        data: { projectId: project.id, type: "TITLE_ABSTRACT" },
+      });
+      await prisma.screeningAssignment.create({
+        data: { stageId: stage.id, citationId: citation.id, reviewerId: reviewer1.id },
+      });
+
+      await expectAppError(imports.deleteBatch(ctx(owner.id), project.id, batch.id), "INVALID_STATE");
+      expect(await prisma.importBatch.findUnique({ where: { id: batch.id } })).not.toBeNull();
+      expect(await prisma.citation.findUnique({ where: { id: citation.id } })).not.toBeNull();
+    });
+  });
+
   describe("citations list & detail", () => {
     it("filters by q, batchId and status; paginates with a cursor", async () => {
       const { owner, project, source } = await setupProject();

@@ -23,6 +23,8 @@ export const updateStageSchema = z.object({
   reviewersPerCitation: z.number().int().min(1).max(3).optional(),
   blinded: z.boolean().optional(),
   maybeGeneratesConflict: z.boolean().optional(),
+  aiShowScores: z.boolean().optional(),
+  aiRankingEnabled: z.boolean().optional(),
 });
 
 export const createAssignmentsSchema = z.object({
@@ -221,11 +223,15 @@ export async function updateStage(
         reviewersPerCitation: stage.reviewersPerCitation,
         blinded: stage.blinded,
         maybeGeneratesConflict: stage.maybeGeneratesConflict,
+        aiShowScores: stage.aiShowScores,
+        aiRankingEnabled: stage.aiRankingEnabled,
       },
       newValue: {
         reviewersPerCitation: updated.reviewersPerCitation,
         blinded: updated.blinded,
         maybeGeneratesConflict: updated.maybeGeneratesConflict,
+        aiShowScores: updated.aiShowScores,
+        aiRankingEnabled: updated.aiRankingEnabled,
       },
     });
     return updated;
@@ -344,8 +350,13 @@ export async function createAssignments(
   });
 }
 
+type QueueAssignment = Prisma.ScreeningAssignmentGetPayload<{
+  include: { citation: { include: typeof citationCardInclude } };
+}>;
+
 // My pending work at a stage. Blind-safe by construction: the payload only ever contains
-// MY decision data — never other reviewers' decisions.
+// MY decision data — never other reviewers' decisions. AI suggestions (ScreeningSuggestion)
+// carry no reviewer data, so surfacing them here cannot leak votes.
 export async function getQueue(ctx: Ctx, projectId: string, stageId: string) {
   await requirePermission(ctx, projectId, "screening.decide");
   const stage = await getStageOr404(prisma, projectId, stageId);
@@ -360,32 +371,82 @@ export async function getQueue(ctx: Ctx, projectId: string, stageId: string) {
       stageResults: { none: { stageId: stage.id } },
     },
   };
-  const [total, assignments] = await Promise.all([
-    prisma.screeningAssignment.count({ where }),
-    prisma.screeningAssignment.findMany({
+
+  const total = await prisma.screeningAssignment.count({ where });
+  let assignments: QueueAssignment[];
+  if (stage.aiRankingEnabled) {
+    // Rank by AI score (desc, unscored last), tie-broken FIFO. Sort over a slim projection
+    // of ALL pending assignments; only the top page loads full citation cards.
+    const slim = await prisma.screeningAssignment.findMany({
+      where,
+      select: { id: true, citationId: true, createdAt: true },
+    });
+    const scores = await prisma.screeningSuggestion.findMany({
+      where: { stageId: stage.id, citationId: { in: slim.map((a) => a.citationId) } },
+      select: { citationId: true, score: true },
+    });
+    const scoreByCitation = new Map(scores.map((s) => [s.citationId, s.score]));
+    slim.sort((a, b) => {
+      const sa = scoreByCitation.get(a.citationId);
+      const sb = scoreByCitation.get(b.citationId);
+      if (sa !== undefined && sb !== undefined && sa !== sb) return sb - sa;
+      if ((sa !== undefined) !== (sb !== undefined)) return sa !== undefined ? -1 : 1;
+      const dt = a.createdAt.getTime() - b.createdAt.getTime();
+      if (dt !== 0) return dt;
+      return a.id < b.id ? -1 : 1;
+    });
+    const pageIds = slim.slice(0, 25).map((a) => a.id);
+    const loaded = await prisma.screeningAssignment.findMany({
+      where: { id: { in: pageIds } },
+      include: { citation: { include: citationCardInclude } },
+    });
+    const byId = new Map(loaded.map((a) => [a.id, a]));
+    assignments = pageIds
+      .map((id) => byId.get(id))
+      .filter((a): a is QueueAssignment => a !== undefined);
+  } else {
+    assignments = await prisma.screeningAssignment.findMany({
       where,
       take: 25,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       include: { citation: { include: citationCardInclude } },
+    });
+  }
+
+  const citationIds = assignments.map((a) => a.citationId);
+  const [myDecisions, visibleSuggestions] = await Promise.all([
+    prisma.screeningDecision.findMany({
+      where: { stageId: stage.id, reviewerId: ctx.userId, citationId: { in: citationIds } },
+      include: decisionInclude,
     }),
+    // Scores reach screeners only when the stage's aiShowScores toggle is on.
+    stage.aiShowScores
+      ? prisma.screeningSuggestion.findMany({
+          where: { stageId: stage.id, citationId: { in: citationIds } },
+          select: { citationId: true, score: true, suggestedDecision: true, rationale: true },
+        })
+      : Promise.resolve([]),
   ]);
-  const myDecisions = await prisma.screeningDecision.findMany({
-    where: {
-      stageId: stage.id,
-      reviewerId: ctx.userId,
-      citationId: { in: assignments.map((a) => a.citationId) },
-    },
-    include: decisionInclude,
-  });
   const decisionByCitation = new Map(myDecisions.map((d) => [d.citationId, d]));
+  const suggestionByCitation = new Map(visibleSuggestions.map((s) => [s.citationId, s]));
   return {
     stage: { id: stage.id, type: stage.type },
     total,
-    items: assignments.map((a) => ({
-      assignmentId: a.id,
-      citation: citationCard(a.citation),
-      myDecision: decisionByCitation.get(a.citationId) ?? null,
-    })),
+    items: assignments.map((a) => {
+      const suggestion = suggestionByCitation.get(a.citationId);
+      return {
+        assignmentId: a.id,
+        citation: citationCard(a.citation),
+        myDecision: decisionByCitation.get(a.citationId) ?? null,
+        aiSuggestion: suggestion
+          ? {
+              score: suggestion.score,
+              suggestedDecision: suggestion.suggestedDecision,
+              rationale: suggestion.rationale,
+            }
+          : null,
+      };
+    }),
   };
 }
 

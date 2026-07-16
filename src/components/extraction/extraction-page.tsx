@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConflictsTab } from "./conflicts-tab";
 import { ExtractTab } from "./extract-tab";
 import { TemplatesTab } from "./templates-tab";
-import { hasCap, type Template } from "./types";
+import { hasCap, type ProjectAiStatus, type Template } from "./types";
 
 interface MeResponse {
   user: { id: string };
@@ -19,11 +19,13 @@ interface MeResponse {
 
 interface ProjectResponse {
   myRoles: string[];
+  ai: ProjectAiStatus;
 }
 
 export function ExtractionClient({ projectId }: { projectId: string }) {
   const [meId, setMeId] = useState<string | null>(null);
   const [roles, setRoles] = useState<string[] | null>(null);
+  const [ai, setAi] = useState<ProjectAiStatus | null>(null);
   const [templates, setTemplates] = useState<Template[] | null>(null);
 
   const loadTemplates = useCallback(() => {
@@ -40,8 +42,14 @@ export function ExtractionClient({ projectId }: { projectId: string }) {
       .then((d) => setMeId(d.user.id))
       .catch(() => setMeId(null));
     api<ProjectResponse>(`/api/projects/${projectId}`)
-      .then((p) => setRoles(p.myRoles))
-      .catch(() => setRoles([]));
+      .then((p) => {
+        setRoles(p.myRoles);
+        setAi(p.ai);
+      })
+      .catch(() => {
+        setRoles([]);
+        setAi(null);
+      });
     loadTemplates();
   }, [projectId, loadTemplates]);
 
@@ -66,7 +74,7 @@ export function ExtractionClient({ projectId }: { projectId: string }) {
           />
         </TabsContent>
         <TabsContent value="extract" forceMount className="data-[state=inactive]:hidden">
-          <ExtractTab projectId={projectId} templates={templates} meId={meId} roles={roles} />
+          <ExtractTab projectId={projectId} templates={templates} meId={meId} roles={roles} ai={ai} />
         </TabsContent>
         <TabsContent value="conflicts" forceMount className="data-[state=inactive]:hidden">
           <ConflictsTab projectId={projectId} roles={roles} />

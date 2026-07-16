@@ -136,6 +136,19 @@ e2e/                   Playwright specs
 | `AUTH_SECRET` | Auth.js JWT secret — generate with `openssl rand -base64 32` |
 | `AUTH_TRUST_HOST` | `true` for local development |
 | `STORAGE_DIR` | Local directory for uploaded full-text PDFs |
+| `PILOT_EMAIL_ALLOWLIST` | Optional comma-separated signup allowlist; active project invitations are also accepted |
+| `AI_PROVIDER` + provider key | Optional AI prescreening/extraction provider; no key disables AI features |
+
+## Pilot deployment
+
+The recommended pilot target is Railway: one persistent Node service, one managed PostgreSQL
+service, and one volume mounted at `/data` for uploaded PDFs. The checked-in `railway.toml`
+runs migrations and the safe built-in-tool bootstrap before each deploy, then gates traffic on
+`/api/health`.
+
+See [docs/10-pilot-deployment.md](docs/10-pilot-deployment.md) for the exact provisioning,
+deployment, access, backup, and rollback workflow. Do **not** run `npm run db:seed` against the
+pilot database; the demo seed intentionally resets its target database.
 
 ## Design contract
 

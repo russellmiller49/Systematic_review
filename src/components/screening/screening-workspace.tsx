@@ -11,7 +11,8 @@ import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { PageHeader } from "@/components/layout/page-header";
 import { StageQueue } from "./stage-queue";
 import { AssignReviewersDialog } from "./assign-dialog";
-import { STAGE_LABELS, type ScreeningStageSummary } from "./types";
+import { PrescreenPanel } from "./prescreen-panel";
+import { STAGE_LABELS, type ProjectAiStatus, type ScreeningStageSummary } from "./types";
 
 // Roles holding `screening.configure` (permission matrix) — who may assign reviewers.
 const CONFIGURE_ROLES = new Set(["OWNER", "ADMIN"]);
@@ -20,6 +21,7 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
   const [stages, setStages] = useState<ScreeningStageSummary[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [canConfigure, setCanConfigure] = useState(false);
+  const [ai, setAi] = useState<ProjectAiStatus | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -41,9 +43,15 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
   }, [projectId]);
 
   useEffect(() => {
-    api<{ myRoles: string[] }>(`/api/projects/${projectId}`)
-      .then((p) => setCanConfigure(p.myRoles.some((r) => CONFIGURE_ROLES.has(r))))
-      .catch(() => setCanConfigure(false));
+    api<{ myRoles: string[]; ai: ProjectAiStatus }>(`/api/projects/${projectId}`)
+      .then((p) => {
+        setCanConfigure(p.myRoles.some((r) => CONFIGURE_ROLES.has(r)));
+        setAi(p.ai);
+      })
+      .catch(() => {
+        setCanConfigure(false);
+        setAi(null);
+      });
   }, [projectId]);
 
   return (
@@ -82,6 +90,20 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
                 canConfigure={canConfigure}
                 onAssigned={() => setReloadKey((k) => k + 1)}
               />
+              {stage.type === "TITLE_ABSTRACT" && canConfigure && ai?.enabled && (
+                <PrescreenPanel
+                  projectId={projectId}
+                  stage={stage}
+                  ai={ai}
+                  onStageChanged={(patch) =>
+                    setStages(
+                      (prev) =>
+                        prev?.map((s) => (s.id === stage.id ? { ...s, ...patch } : s)) ?? prev,
+                    )
+                  }
+                  onSuggestionsChanged={() => setReloadKey((k) => k + 1)}
+                />
+              )}
               <StageQueue key={`${stage.id}:${reloadKey}`} projectId={projectId} stage={stage} />
             </TabsContent>
           ))}
