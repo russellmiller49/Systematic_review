@@ -720,6 +720,64 @@ describe("analysis blinding (R1 mirror)", () => {
     expect(row.status).toBe("included");
     expect(row.values.G1_EVENTS).toEqual({ value: 30, source: "SINGLE" });
   });
+
+  it("uses caller-independent final-only resolution for shared outputs", async () => {
+    const s = await setup();
+    const study = await s.makeStudy("FinalOnly 2020");
+    await fillForm(s, study.id, s.extractor1.id, { e1: 30, n1: 60, e2: 15, n2: 60 });
+    const outcome = await binaryOutcome(s);
+
+    // Ordinary analysis remains requester-relative: OWNER may inspect the completed
+    // extractor's SINGLE values while the co-extractor assignment is still pending.
+    const ordinary = await analysis.computeOutcomeResults(
+      ctx(s.owner.id),
+      s.project.id,
+      outcome.id,
+    );
+    const ordinaryRow = ordinary.rows.find((r) => r.studyId === study.id)!;
+    expect(ordinary.provisionalAllowed).toBe(true);
+    expect(ordinaryRow.status).toBe("included");
+    expect(ordinaryRow.values.G1_EVENTS).toEqual({ value: 30, source: "SINGLE" });
+
+    // Shared GRADE/SoF computation must be caller-independent. Even for OWNER, finalOnly
+    // disables provisional data and withholds that SINGLE while lineage work is open.
+    const withheld = await analysis.computeOutcomeResults(
+      ctx(s.owner.id),
+      s.project.id,
+      outcome.id,
+      { includeProvisional: true, finalOnly: true },
+    );
+    const withheldRow = withheld.rows.find((r) => r.studyId === study.id)!;
+    expect(withheld.provisionalAllowed).toBe(false);
+    expect(withheldRow.status).toBe("incomplete");
+    expect(withheldRow.values.G1_EVENTS).toEqual({ value: null, source: null });
+    expect(withheld.pooled.random).toBeNull();
+
+    // Once co-extraction finishes in agreement, the same final-only call sees consensus.
+    await fillForm(s, study.id, s.extractor2.id, { e1: 30, n1: 60, e2: 15, n2: 60 });
+    const finalized = await analysis.computeOutcomeResults(
+      ctx(s.owner.id),
+      s.project.id,
+      outcome.id,
+      { finalOnly: true },
+    );
+    const finalizedRow = finalized.rows.find((r) => r.studyId === study.id)!;
+    expect(finalized.provisionalAllowed).toBe(false);
+    expect(finalizedRow.status).toBe("included");
+    expect(finalizedRow.values.G1_EVENTS).toEqual({ value: 30, source: "CONSENSUS" });
+    expect(finalized.pooled.random).not.toBeNull();
+  });
+
+  it("orders studies with equal labels deterministically by id", async () => {
+    const s = await setup();
+    await s.makeStudy("Same Label 2020");
+    await s.makeStudy("Same Label 2020");
+    const outcome = await binaryOutcome(s);
+
+    const results = await analysis.computeOutcomeResults(ctx(s.owner.id), s.project.id, outcome.id);
+    const ids = results.rows.map((row) => row.studyId);
+    expect(ids).toEqual([...ids].sort());
+  });
 });
 
 describe("mapping guards + audit detail", () => {

@@ -7,7 +7,7 @@
 // ResultsSection polls to keep the plot live while extraction proceeds elsewhere.
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, CircleDashed, Lock, Pencil, Plus, Sigma } from "lucide-react";
+import { CheckCircle2, CircleDashed, Lock, Pencil, Plus, Sigma, Table2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -15,10 +15,13 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Template } from "@/components/extraction/types";
+import { GradePanel } from "./grade-panel";
 import { MappingEditor } from "./mapping-editor";
 import { OutcomeDialog, type OutcomeDialogState } from "./outcome-dialog";
 import { ResultsSection } from "./results-table";
+import { SofTable } from "./sof-table";
 import {
   DIRECTION_LABELS,
   hasCap,
@@ -29,6 +32,7 @@ import {
 
 interface ProjectResponse {
   myRoles: string[];
+  ai?: { enabled: boolean } | null;
 }
 
 interface ProtocolResponse {
@@ -37,9 +41,12 @@ interface ProtocolResponse {
 
 export function AnalysisClient({ projectId }: { projectId: string }) {
   const [roles, setRoles] = useState<string[] | null>(null);
+  const [aiEnabled, setAiEnabled] = useState(false);
   const [outcomes, setOutcomes] = useState<AnalysisOutcomeRow[] | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The pinned "Summary of findings" aside entry — mutually exclusive with outcomes.
+  const [sofSelected, setSofSelected] = useState(false);
   const [templates, setTemplates] = useState<Template[] | null>(null);
   const [protocolOutcomes, setProtocolOutcomes] = useState<ProtocolOutcomeOption[]>([]);
   const [dialog, setDialog] = useState<OutcomeDialogState | null>(null);
@@ -59,7 +66,10 @@ export function AnalysisClient({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     api<ProjectResponse>(`/api/projects/${projectId}`)
-      .then((p) => setRoles(p.myRoles))
+      .then((p) => {
+        setRoles(p.myRoles);
+        setAiEnabled(p.ai?.enabled ?? false);
+      })
       .catch(() => setRoles([]));
     // Templates and protocol outcomes feed the mapping editor / anchor picker;
     // a failure degrades those pickers rather than blocking the page.
@@ -76,7 +86,9 @@ export function AnalysisClient({ projectId }: { projectId: string }) {
   const deniedByRole = roles !== null && !hasCap(roles, "analysis.view");
 
   const selected =
-    outcomes === null ? null : (outcomes.find((o) => o.id === selectedId) ?? outcomes[0] ?? null);
+    sofSelected || outcomes === null
+      ? null
+      : (outcomes.find((o) => o.id === selectedId) ?? outcomes[0] ?? null);
 
   if (deniedByRole || forbidden) {
     return (
@@ -102,6 +114,16 @@ export function AnalysisClient({ projectId }: { projectId: string }) {
       />
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <aside className="w-full shrink-0 space-y-3 lg:w-72">
+          <button
+            type="button"
+            onClick={() => setSofSelected(true)}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-lg border border-border bg-card p-3 text-left font-medium transition-colors hover:bg-muted/50",
+              sofSelected && "border-primary ring-1 ring-primary",
+            )}
+          >
+            <Table2 className="h-4 w-4 shrink-0 text-muted-foreground" /> Summary of findings
+          </button>
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium text-muted-foreground">Outcomes</h2>
             {canManage && (
@@ -127,7 +149,10 @@ export function AnalysisClient({ projectId }: { projectId: string }) {
               <button
                 key={o.id}
                 type="button"
-                onClick={() => setSelectedId(o.id)}
+                onClick={() => {
+                  setSelectedId(o.id);
+                  setSofSelected(false);
+                }}
                 className={cn(
                   "w-full rounded-lg border border-border bg-card p-3 text-left transition-colors hover:bg-muted/50",
                   selected?.id === o.id && "border-primary ring-1 ring-primary",
@@ -156,7 +181,9 @@ export function AnalysisClient({ projectId }: { projectId: string }) {
         </aside>
 
         <main className="min-w-0 flex-1 space-y-6">
-          {selected === null ? (
+          {sofSelected ? (
+            <SofTable projectId={projectId} />
+          ) : selected === null ? (
             outcomes !== null && (
               <EmptyState
                 title="Select an outcome"
@@ -184,14 +211,35 @@ export function AnalysisClient({ projectId }: { projectId: string }) {
                   </Button>
                 )}
               </div>
-              <MappingEditor
-                projectId={projectId}
-                outcome={selected}
-                templates={templates}
-                canManage={canManage}
-                onSaved={loadOutcomes}
-              />
-              <ResultsSection projectId={projectId} outcome={selected} canManage={canManage} />
+              <Tabs defaultValue="results">
+                <TabsList>
+                  <TabsTrigger value="results">Results</TabsTrigger>
+                  <TabsTrigger value="grade">GRADE</TabsTrigger>
+                </TabsList>
+                <TabsContent value="results" className="space-y-6">
+                  <MappingEditor
+                    projectId={projectId}
+                    outcome={selected}
+                    templates={templates}
+                    canManage={canManage}
+                    onSaved={loadOutcomes}
+                  />
+                  <ResultsSection
+                    projectId={projectId}
+                    outcome={selected}
+                    canManage={canManage}
+                  />
+                </TabsContent>
+                <TabsContent value="grade">
+                  <GradePanel
+                    key={selected.id}
+                    projectId={projectId}
+                    outcomeId={selected.id}
+                    canManage={canManage}
+                    aiEnabled={aiEnabled}
+                  />
+                </TabsContent>
+              </Tabs>
             </>
           )}
         </main>
@@ -205,6 +253,7 @@ export function AnalysisClient({ projectId }: { projectId: string }) {
         onSaved={(row) => {
           setDialog(null);
           setSelectedId(row.id);
+          setSofSelected(false);
           loadOutcomes();
         }}
         onDeleted={(id) => {

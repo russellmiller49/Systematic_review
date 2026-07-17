@@ -340,6 +340,123 @@ export function parseRobResult(json: unknown): ParsedRobDomain[] {
   return [...byDomain.values()];
 }
 
+// ---------------------------------------------------------------------------
+// GRADE
+// ---------------------------------------------------------------------------
+
+export const GRADE_DOMAIN_IDS = [
+  "RISK_OF_BIAS",
+  "INCONSISTENCY",
+  "INDIRECTNESS",
+  "IMPRECISION",
+  "PUBLICATION_BIAS",
+] as const;
+
+export const GRADE_JUDGMENT_IDS = ["NOT_SERIOUS", "SERIOUS", "VERY_SERIOUS"] as const;
+
+export type GradeDomainName = (typeof GRADE_DOMAIN_IDS)[number];
+export type GradeJudgmentName = (typeof GRADE_JUDGMENT_IDS)[number];
+
+// One entry per GRADE certainty domain. Confidence is a plain number on the wire
+// (providers can't enforce 0–1 bounds); parseGradeResult clamps on ingest.
+export const GRADE_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    domains: {
+      type: "array",
+      description: "Exactly one entry per GRADE domain — all five, each exactly once",
+      items: {
+        type: "object",
+        properties: {
+          domain: { type: "string", enum: [...GRADE_DOMAIN_IDS] },
+          judgment: {
+            type: "string",
+            enum: [...GRADE_JUDGMENT_IDS],
+            description: "Suggested GRADE concern level for this domain",
+          },
+          rationale: {
+            type: "string",
+            minLength: 1,
+            description: "One to three sentences citing the provided numbers",
+          },
+          confidence: {
+            type: "number",
+            description: "Confidence in the suggested judgment, from 0 to 1",
+          },
+        },
+        required: ["domain", "judgment", "rationale", "confidence"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["domains"],
+  additionalProperties: false,
+};
+
+// Only the envelope is enforced by zod — item-level validation is authoritative in code so
+// malformed items are dropped and counted instead of failing the whole run.
+const gradeResultSchema = z.object({
+  domains: z.array(z.unknown()),
+});
+
+export interface ParsedGradeDomain {
+  domain: GradeDomainName;
+  judgment: GradeJudgmentName;
+  rationale: string;
+  confidence: number | null; // clamped to 0–1
+}
+
+const MAX_GRADE_RATIONALE_CHARS = 4000;
+
+const GRADE_DOMAIN_SET = new Set<string>(GRADE_DOMAIN_IDS);
+const GRADE_JUDGMENT_SET = new Set<string>(GRADE_JUDGMENT_IDS);
+
+// Throws (ZodError) on envelope mismatch — the caller marks the run FAILED. Unknown or
+// duplicate domains and invalid judgments are DROPPED and counted in invalidCount (for
+// duplicates the first kept occurrence wins).
+export function parseGradeResult(json: unknown): {
+  domains: ParsedGradeDomain[];
+  invalidCount: number;
+} {
+  const parsed = gradeResultSchema.parse(json);
+  const byDomain = new Map<GradeDomainName, ParsedGradeDomain>();
+  let invalidCount = 0;
+  for (const raw of parsed.domains) {
+    const item =
+      raw !== null && typeof raw === "object"
+        ? (raw as { domain?: unknown; judgment?: unknown; rationale?: unknown; confidence?: unknown })
+        : null;
+    const domain = typeof item?.domain === "string" ? item.domain : null;
+    const judgment = typeof item?.judgment === "string" ? item.judgment : null;
+    const rationale =
+      typeof item?.rationale === "string"
+        ? item.rationale.trim().slice(0, MAX_GRADE_RATIONALE_CHARS)
+        : "";
+    if (
+      domain === null ||
+      !GRADE_DOMAIN_SET.has(domain) ||
+      judgment === null ||
+      !GRADE_JUDGMENT_SET.has(judgment) ||
+      rationale.length === 0 ||
+      byDomain.has(domain as GradeDomainName)
+    ) {
+      invalidCount += 1;
+      continue;
+    }
+    const confidence =
+      typeof item?.confidence === "number" && Number.isFinite(item.confidence)
+        ? Math.min(1, Math.max(0, item.confidence))
+        : null;
+    byDomain.set(domain as GradeDomainName, {
+      domain: domain as GradeDomainName,
+      judgment: judgment as GradeJudgmentName,
+      rationale,
+      confidence,
+    });
+  }
+  return { domains: [...byDomain.values()], invalidCount };
+}
+
 const extractionItemSchema = z.object({
   key: z.string(),
   found: z.boolean(),

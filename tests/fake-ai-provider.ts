@@ -18,15 +18,19 @@ export class FakeAiProvider implements AiProvider {
   // Programmable behavior
   failSubmit: string | null = null;
   failExtract: string | null = null;
+  failComplete: string | null = null;
   batchSnapshot: ScoringBatchSnapshot = { status: "processing" };
   extractionJson: unknown = { fields: [] };
   extractionUsage: UsageTotals | undefined = { inputTokens: 1000, outputTokens: 100 };
+  completeJson: unknown = { domains: [] };
+  completeUsage: UsageTotals | undefined = undefined;
 
   // Recorded calls
   createdBatches: { model: string; items: ScoringBatchItem[] }[] = [];
   polls: { providerBatchId: string; customIds: string[] }[] = [];
   canceledBatchIds: string[] = [];
   extractCalls: { model: string; prompt: BuiltPrompt; pdfBytes: number; filename: string }[] = [];
+  completeCalls: { model: string; prompt: BuiltPrompt }[] = [];
 
   async createScoringBatch(req: { model: string; items: ScoringBatchItem[] }) {
     if (this.failSubmit) throw new Error(this.failSubmit);
@@ -56,6 +60,12 @@ export class FakeAiProvider implements AiProvider {
       filename: req.pdf.filename,
     });
     return { json: this.extractionJson, usage: this.extractionUsage };
+  }
+
+  async completeStructured(req: { model: string; prompt: BuiltPrompt }) {
+    if (this.failComplete) throw new Error(this.failComplete);
+    this.completeCalls.push(req);
+    return { json: this.completeJson, usage: this.completeUsage };
   }
 
   // Convenience: mark the batch ended with the given per-item results.

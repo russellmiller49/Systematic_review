@@ -23,6 +23,7 @@ import * as screening from "@/server/services/screening";
 import * as studiesService from "@/server/services/studies";
 import * as fulltext from "@/server/services/fulltext";
 import * as analysis from "@/server/services/analysis";
+import * as grade from "@/server/services/grade";
 import * as extraction from "@/server/services/extraction";
 import * as rob from "@/server/services/rob";
 import { ensureBuiltinGenericTool } from "@/server/services/rob/builtin";
@@ -1103,6 +1104,18 @@ async function main() {
       { role: "G2_EVENTS", templateId: template.id, fieldKey: "resp_control_events" },
       { role: "G2_TOTAL", templateId: template.id, fieldKey: "resp_control_total" },
     ],
+  });
+
+  // 12b. GRADE draft on the seeded outcome. Expected on this dataset: RoB NOT_SERIOUS (both
+  // pooled studies at consensus "low", 100% of weight), inconsistency NOT_SERIOUS (I² = 0),
+  // imprecision SERIOUS (287 participants < 400 OIS), publication bias + indirectness
+  // review-marked → certainty 4 − 1 = 3 = MODERATE, status DRAFT. One human edit on
+  // indirectness demonstrates the HUMAN origin + audit trail.
+  console.log("Creating GRADE draft…");
+  await grade.generateDraft(ownerCtx, projectId, analysisOutcome.id, {});
+  await grade.updateDomainRating(ownerCtx, projectId, analysisOutcome.id, "INDIRECTNESS", {
+    rationale:
+      "Population, intervention and comparator match the protocol PICO; the outcome is measured at the protocol timepoint.",
   });
 
   // 13. PRISMA snapshot --------------------------------------------------------------------

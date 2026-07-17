@@ -112,6 +112,13 @@ export const AuditActions = {
   ANALYSIS_MAPPINGS_REPLACED: "analysis.mappings.replaced",
   ANALYSIS_STUDY_EXCLUSION_SET: "analysis.study_exclusion.set",
 
+  // grade (certainty of evidence; getGradeView/computeSof are unaudited reads — same
+  // precedent as analysis results)
+  GRADE_ASSESSMENT_GENERATED: "grade.assessment.generated",
+  GRADE_ASSESSMENT_UPDATED: "grade.assessment.updated",
+  GRADE_ASSESSMENT_REVIEWED: "grade.assessment.reviewed",
+  GRADE_RATING_UPDATED: "grade.rating.updated",
+
   // prisma / exports
   PRISMA_SNAPSHOT_CREATED: "prisma.snapshot.created",
   EXPORT_CREATED: "export.created",
@@ -128,6 +135,9 @@ export const AuditActions = {
   AI_ROB_STARTED: "ai.rob.started",
   AI_ROB_COMPLETED: "ai.rob.completed",
   AI_ROB_FAILED: "ai.rob.failed",
+  AI_GRADE_STARTED: "ai.grade.started",
+  AI_GRADE_COMPLETED: "ai.grade.completed",
+  AI_GRADE_FAILED: "ai.grade.failed",
 } as const;
 
 export type AuditAction = (typeof AuditActions)[keyof typeof AuditActions];

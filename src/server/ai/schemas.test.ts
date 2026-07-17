@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   extractionJsonSchemaFor,
+  GRADE_JSON_SCHEMA,
   parseExtractionResult,
+  parseGradeResult,
   parseScreeningResult,
   parseRobResult,
   robJsonSchemaFor,
@@ -337,5 +339,136 @@ describe("parseRobResult", () => {
   it("throws when the envelope is malformed", () => {
     expect(() => parseRobResult({ items: [] })).toThrow();
     expect(() => parseRobResult(null)).toThrow();
+  });
+});
+
+describe("GRADE_JSON_SCHEMA", () => {
+  it("is strict-mode compatible with the five domains and three judgments pinned", () => {
+    const schema = GRADE_JSON_SCHEMA as {
+      additionalProperties: boolean;
+      required: string[];
+      properties: {
+        domains: {
+          items: {
+            additionalProperties: boolean;
+            required: string[];
+            properties: {
+              domain: { enum: string[] };
+              judgment: { enum: string[] };
+              confidence: Record<string, unknown>;
+            };
+          };
+        };
+      };
+    };
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["domains"]);
+    const items = schema.properties.domains.items;
+    expect(items.additionalProperties).toBe(false);
+    expect(items.properties.domain.enum).toEqual([
+      "RISK_OF_BIAS",
+      "INCONSISTENCY",
+      "INDIRECTNESS",
+      "IMPRECISION",
+      "PUBLICATION_BIAS",
+    ]);
+    expect(items.properties.judgment.enum).toEqual(["NOT_SERIOUS", "SERIOUS", "VERY_SERIOUS"]);
+    // OpenAI strict mode requires every property listed in required; no numeric bounds.
+    expect(items.required.sort()).toEqual(
+      ["confidence", "domain", "judgment", "rationale"].sort(),
+    );
+    expect(items.properties.confidence).not.toHaveProperty("minimum");
+    expect(items.properties.confidence).not.toHaveProperty("maximum");
+  });
+});
+
+describe("parseGradeResult", () => {
+  it("normalizes a valid domain — trims the rationale and clamps confidence to 0–1", () => {
+    const parsed = parseGradeResult({
+      domains: [
+        {
+          domain: "INCONSISTENCY",
+          judgment: "SERIOUS",
+          rationale: "  I2 of 62% indicates substantial heterogeneity.  ",
+          confidence: 1.4,
+        },
+        {
+          domain: "IMPRECISION",
+          judgment: "NOT_SERIOUS",
+          rationale: "CI excludes the null.",
+          confidence: -0.2,
+        },
+      ],
+    });
+    expect(parsed.invalidCount).toBe(0);
+    expect(parsed.domains).toEqual([
+      {
+        domain: "INCONSISTENCY",
+        judgment: "SERIOUS",
+        rationale: "I2 of 62% indicates substantial heterogeneity.",
+        confidence: 1,
+      },
+      {
+        domain: "IMPRECISION",
+        judgment: "NOT_SERIOUS",
+        rationale: "CI excludes the null.",
+        confidence: 0,
+      },
+    ]);
+  });
+
+  it("drops and counts duplicate domains (first occurrence wins)", () => {
+    const parsed = parseGradeResult({
+      domains: [
+        { domain: "RISK_OF_BIAS", judgment: "SERIOUS", rationale: "first", confidence: 0.9 },
+        { domain: "RISK_OF_BIAS", judgment: "NOT_SERIOUS", rationale: "second", confidence: 0.1 },
+      ],
+    });
+    expect(parsed.invalidCount).toBe(1);
+    expect(parsed.domains).toEqual([
+      { domain: "RISK_OF_BIAS", judgment: "SERIOUS", rationale: "first", confidence: 0.9 },
+    ]);
+  });
+
+  it("drops and counts unknown domains, invalid judgments, and non-object items", () => {
+    const parsed = parseGradeResult({
+      domains: [
+        { domain: "FUNDING_BIAS", judgment: "SERIOUS", rationale: "x", confidence: 0.5 },
+        { domain: "IMPRECISION", judgment: "EXTREMELY_SERIOUS", rationale: "x", confidence: 0.5 },
+        "not an object",
+        { domain: "INDIRECTNESS", judgment: "NOT_SERIOUS", rationale: "PICO matches.", confidence: 0.8 },
+      ],
+    });
+    expect(parsed.invalidCount).toBe(3);
+    expect(parsed.domains).toEqual([
+      { domain: "INDIRECTNESS", judgment: "NOT_SERIOUS", rationale: "PICO matches.", confidence: 0.8 },
+    ]);
+  });
+
+  it("drops blank/non-string rationales, normalizes confidence, and clamps long rationales", () => {
+    const parsed = parseGradeResult({
+      domains: [
+        { domain: "PUBLICATION_BIAS", judgment: "NOT_SERIOUS", rationale: 42, confidence: Number.NaN },
+        { domain: "INDIRECTNESS", judgment: "NOT_SERIOUS", rationale: "   ", confidence: 0.7 },
+        { domain: "INCONSISTENCY", judgment: "NOT_SERIOUS", rationale: "Enough detail.", confidence: Number.NaN },
+        { domain: "IMPRECISION", judgment: "SERIOUS", rationale: "a".repeat(9000), confidence: "high" },
+      ],
+    });
+    expect(parsed.invalidCount).toBe(2);
+    expect(parsed.domains[0]).toEqual({
+      domain: "INCONSISTENCY",
+      judgment: "NOT_SERIOUS",
+      rationale: "Enough detail.",
+      confidence: null,
+    });
+    expect(parsed.domains[1]!.rationale).toHaveLength(4000);
+    expect(parsed.domains[1]!.confidence).toBeNull();
+  });
+
+  it("throws when the envelope is malformed", () => {
+    expect(() => parseGradeResult({ ratings: [] })).toThrow();
+    expect(() => parseGradeResult({ domains: "none" })).toThrow();
+    expect(() => parseGradeResult(null)).toThrow();
+    expect(() => parseGradeResult("not an object")).toThrow();
   });
 });

@@ -1,7 +1,8 @@
 // Gemini provider. Batch scoring via Batch Mode with inlined requests (responses are
 // positional — mapped back to customIds by submission order, which the service persists on
-// the run row as requestKeys); extraction via generateContent with an inline PDF part.
-// Structured output via responseJsonSchema + responseMimeType application/json.
+// the run row as requestKeys); extraction via generateContent with an inline PDF part;
+// text-only structured completions via a plain generateContent call. Structured output via
+// responseJsonSchema + responseMimeType application/json.
 
 import { GoogleGenAI } from "@google/genai";
 import type {
@@ -30,6 +31,11 @@ export function buildGeminiScoringRequest(prompt: BuiltPrompt) {
       responseJsonSchema: prompt.jsonSchema,
     },
   };
+}
+
+// Scoring request shape with the model inlined — the generateContent parameter shape.
+export function buildGeminiCompletionRequest(model: string, prompt: BuiltPrompt) {
+  return { model, ...buildGeminiScoringRequest(prompt) };
 }
 
 export function buildGeminiExtractionRequest(prompt: BuiltPrompt, pdfBase64: string) {
@@ -171,6 +177,21 @@ export class GeminiProvider implements AiProvider {
     const request = buildGeminiExtractionRequest(req.prompt, req.pdf.bytes.toString("base64"));
     const response = await this.client.models.generateContent({
       model: req.model,
+      contents: request.contents,
+      config: request.config,
+    });
+    const text = textOf(response as GeminiResponseLike);
+    if (!text) throw new Error("The model returned no response");
+    return {
+      json: JSON.parse(text) as unknown,
+      usage: usageOf(response as GeminiResponseLike),
+    };
+  }
+
+  async completeStructured(req: { model: string; prompt: BuiltPrompt }) {
+    const request = buildGeminiCompletionRequest(req.model, req.prompt);
+    const response = await this.client.models.generateContent({
+      model: request.model,
       contents: request.contents,
       config: request.config,
     });

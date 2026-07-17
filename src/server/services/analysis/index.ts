@@ -210,6 +210,19 @@ async function loadOutcome(db: Tx, projectId: string, outcomeId: string) {
   return outcome;
 }
 
+// Analysis metadata mutations and GRADE assessment mutations serialize on the same
+// always-present parent row. This prevents a mapping/model/exclusion write from crossing
+// a GRADE snapshot boundary while still allowing unrelated outcomes to proceed.
+async function lockOutcomeForMutation(db: Tx, projectId: string, outcomeId: string) {
+  const locked = await db.$queryRaw<{ id: string }[]>`
+    SELECT "id"
+    FROM "AnalysisOutcome"
+    WHERE "id" = ${outcomeId} AND "projectId" = ${projectId}
+    FOR UPDATE
+  `;
+  if (locked.length === 0) throw notFound("Analysis outcome");
+}
+
 // R9: a body-supplied outcomeDefinitionId must belong to the project's protocol.
 async function assertOutcomeDefinitionInProject(
   tx: Tx,
@@ -305,6 +318,7 @@ export async function updateOutcome(
 ): Promise<AnalysisOutcomeRow> {
   await requirePermission(ctx, projectId, "analysis.manage");
   return prisma.$transaction(async (tx) => {
+    await lockOutcomeForMutation(tx, projectId, outcomeId);
     const outcome = await loadOutcome(tx, projectId, outcomeId);
     if (typeof input.outcomeDefinitionId === "string") {
       await assertOutcomeDefinitionInProject(tx, projectId, input.outcomeDefinitionId);
@@ -365,7 +379,15 @@ export async function updateOutcome(
 export async function deleteOutcome(ctx: Ctx, projectId: string, outcomeId: string) {
   await requirePermission(ctx, projectId, "analysis.manage");
   return prisma.$transaction(async (tx) => {
+    await lockOutcomeForMutation(tx, projectId, outcomeId);
     const outcome = await loadOutcome(tx, projectId, outcomeId);
+    // GRADE children first (suggestions reference runs; ratings reference the assessment).
+    await tx.gradeDomainSuggestion.deleteMany({ where: { analysisOutcomeId: outcomeId } });
+    await tx.aiGradeRun.deleteMany({ where: { analysisOutcomeId: outcomeId } });
+    await tx.gradeDomainRating.deleteMany({
+      where: { assessment: { analysisOutcomeId: outcomeId } },
+    });
+    await tx.gradeAssessment.deleteMany({ where: { analysisOutcomeId: outcomeId } });
     await tx.analysisFieldMap.deleteMany({ where: { analysisOutcomeId: outcomeId } });
     await tx.analysisStudyExclusion.deleteMany({ where: { analysisOutcomeId: outcomeId } });
     await tx.analysisOutcome.delete({ where: { id: outcomeId } });
@@ -393,6 +415,7 @@ export async function replaceMappings(
 ): Promise<AnalysisOutcomeRow> {
   await requirePermission(ctx, projectId, "analysis.manage");
   return prisma.$transaction(async (tx) => {
+    await lockOutcomeForMutation(tx, projectId, outcomeId);
     const outcome = await loadOutcome(tx, projectId, outcomeId);
     const required = requiredRolesFor(outcome.measure);
 
@@ -503,6 +526,7 @@ export async function setStudyExclusion(
 ): Promise<{ excluded: boolean }> {
   await requirePermission(ctx, projectId, "analysis.manage");
   return prisma.$transaction(async (tx) => {
+    await lockOutcomeForMutation(tx, projectId, outcomeId);
     await loadOutcome(tx, projectId, outcomeId);
     // R9: the study must belong to this project.
     const study = await tx.study.findFirst({
@@ -586,8 +610,8 @@ export interface AnalysisResults {
   scale: AnalysisScale;
   nullValue: number | null; // null for PROPORTION (no meaningful null line)
   displayMeta: DisplayMeta; // back-transform metadata (FT harmonic mean etc.)
-  // False for callers under the extraction blind — the server then ignores
-  // ?provisional=1 and withholds pre-consensus SINGLE values / dispute detail.
+  // False for callers under the extraction blind and for internal final-only computations —
+  // the server then ignores provisional input and withholds SINGLE values / dispute detail.
   provisionalAllowed: boolean;
 }
 
@@ -595,26 +619,37 @@ export async function computeOutcomeResults(
   ctx: Ctx,
   projectId: string,
   outcomeId: string,
-  query: { includeProvisional?: boolean } = {},
+  query: {
+    includeProvisional?: boolean;
+    // Internal shared-output mode (GRADE/SoF): resolve only caller-independent final data.
+    // API routes never forward this flag from request input.
+    finalOnly?: boolean;
+  } = {},
+  db: Tx = prisma,
 ): Promise<AnalysisResults> {
   const member = await requirePermission(ctx, projectId, "analysis.view");
   // R1 blind mirror (same rule as listForms/getExtractionMatrix): only
   // extraction.adjudicate or project.edit holders may see pre-consensus extraction
   // data — provisional values, lone-extractor SINGLE values while co-extraction is
   // open, and the existence of extraction disagreements.
-  const seeAll = can(member.roles, "extraction.adjudicate") || can(member.roles, "project.edit");
-  const outcome = await loadOutcome(prisma, projectId, outcomeId);
+  const requesterCanSeeAll =
+    can(member.roles, "extraction.adjudicate") || can(member.roles, "project.edit");
+  const finalOnly = query.finalOnly === true;
+  // Shared persisted outputs must never depend on which authorized caller generated them.
+  // Reuse the blind resolver's withholding rule even for OWNER/ADMIN in final-only mode.
+  const seePreConsensus = requesterCanSeeAll && !finalOnly;
+  const outcome = await loadOutcome(db, projectId, outcomeId);
   const measure = outcome.measure as EffectMeasureId;
   const required = requiredRolesFor(outcome.measure);
-  const includeProvisional = query.includeProvisional === true && seeAll;
+  const includeProvisional = query.includeProvisional === true && seePreConsensus;
 
   const [studies, exclusions] = await Promise.all([
-    prisma.study.findMany({
+    db.study.findMany({
       where: { projectId },
-      orderBy: { label: "asc" },
+      orderBy: [{ label: "asc" }, { id: "asc" }],
       select: { id: true, label: true, inQuantitativeSynthesis: true },
     }),
-    prisma.analysisStudyExclusion.findMany({ where: { analysisOutcomeId: outcomeId } }),
+    db.analysisStudyExclusion.findMany({ where: { analysisOutcomeId: outcomeId } }),
   ]);
   const exclusionByStudy = new Map(exclusions.map((e) => [e.studyId, e]));
 
@@ -625,7 +660,8 @@ export async function computeOutcomeResults(
     studyIds: resolvable.map((s) => s.id),
     mappings: outcome.mappings,
     includeProvisional,
-    blinded: !seeAll,
+    blinded: !seePreConsensus,
+    db,
   });
 
   const rows: AnalysisResultRow[] = [];
@@ -687,8 +723,8 @@ export async function computeOutcomeResults(
       // conflicts from them too) — present the row as generically unfinished.
       rows.push({
         ...base,
-        status: seeAll ? "disputed" : "incomplete",
-        reason: seeAll
+        status: seePreConsensus ? "disputed" : "incomplete",
+        reason: seePreConsensus
           ? `Unresolved extraction disagreement for ${disputedRoles.join(", ")}`
           : `Extraction not finalized for ${disputedRoles.join(", ")}`,
         values,
@@ -793,6 +829,6 @@ export async function computeOutcomeResults(
     scale: meta.scale,
     nullValue: meta.nullValue,
     displayMeta: meta.displayMeta,
-    provisionalAllowed: seeAll,
+    provisionalAllowed: seePreConsensus,
   };
 }

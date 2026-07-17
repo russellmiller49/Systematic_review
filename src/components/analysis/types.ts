@@ -373,3 +373,234 @@ export function hasCap(
 ): boolean {
   return Array.isArray(roles) && roles.some((r) => CAP_ROLES[cap].includes(r));
 }
+
+// --- GRADE certainty (mirrors the grade API payloads) -----------------------------
+
+export type GradeDomainId =
+  | "RISK_OF_BIAS"
+  | "INCONSISTENCY"
+  | "INDIRECTNESS"
+  | "IMPRECISION"
+  | "PUBLICATION_BIAS";
+export type GradeJudgmentId = "NOT_SERIOUS" | "SERIOUS" | "VERY_SERIOUS";
+export type GradeCertaintyId = "HIGH" | "MODERATE" | "LOW" | "VERY_LOW";
+export type RobBucket = "low" | "moderate" | "high" | "unclear" | "unassessed";
+export type GradeStartingLevel = "HIGH" | "LOW";
+export type GradeAssessmentStatus = "DRAFT" | "REVIEWED";
+export type GradeRatingOrigin = "AUTO" | "HUMAN" | "AI_APPLIED";
+
+export interface GradeRatingPayload {
+  id: string;
+  domain: GradeDomainId;
+  judgment: GradeJudgmentId;
+  rationale: string;
+  origin: GradeRatingOrigin;
+  requiresReview: boolean;
+  metrics: Record<string, unknown> | null;
+  updatedAt: string;
+}
+
+export interface GradeAssessmentPayload {
+  id: string;
+  status: GradeAssessmentStatus;
+  startingLevel: GradeStartingLevel;
+  certainty: GradeCertaintyId;
+  points: number;
+  generatedAt: string;
+  reviewedAt: string | null;
+  reviewedBy: { id: string; name: string } | null;
+  ratings: GradeRatingPayload[];
+}
+
+export interface GradeSuggestionPayload {
+  id: string;
+  domain: GradeDomainId;
+  suggestedJudgment: GradeJudgmentId;
+  rationale: string;
+  confidence: number | null;
+  provider: string;
+  model: string;
+  createdAt: string;
+}
+
+// Latest AI prose run (display only — suggestions ride alongside in GradeView).
+export interface GradeRunPayload {
+  id: string;
+  status: "PENDING" | "SUBMITTED" | "COMPLETED" | "FAILED" | "CANCELED";
+  provider: string;
+  model: string;
+  totalDomains: number;
+  suggestedCount: number;
+  invalidCount: number;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+// GET /analysis/outcomes/:outcomeId/grade
+export interface GradeView {
+  assessment: GradeAssessmentPayload | null;
+  canDraft: boolean;
+  staleDomains: GradeDomainId[];
+  sourceUnavailable: boolean;
+  outOfDate: boolean;
+  suggestions: GradeSuggestionPayload[];
+  latestRun: GradeRunPayload | null;
+}
+
+// --- Summary of findings (GET /analysis/sof) --------------------------------------
+
+export interface SofAbsoluteEffect {
+  assumedPer1000: number;
+  correspondingPer1000: number;
+  correspondingCiLowPer1000: number;
+  correspondingCiHighPer1000: number;
+}
+
+export interface SofCertainty {
+  level: GradeCertaintyId;
+  points: number;
+  status: GradeAssessmentStatus;
+  startingLevel: GradeStartingLevel;
+  reviewedByName: string | null;
+  stale: boolean;
+  sourceUnavailable: boolean;
+}
+
+export interface SofRow {
+  outcomeId: string;
+  name: string;
+  timepoint: string | null;
+  measure: EffectMeasure;
+  direction: EffectDirection;
+  model: PoolingModel;
+  groupLabels: { g1: string; g2: string };
+  k: number;
+  totalN: number | null;
+  relative: EffectDisplay | null; // display scale, the outcome's model
+  absolute: SofAbsoluteEffect | null; // binary measures with control risks only
+  proportionPer1000: EffectDisplay | null; // PROPORTION only, ×1000
+  certainty: SofCertainty | null;
+  footnotes: string[];
+}
+
+export interface SofPayload {
+  rows: SofRow[];
+  generatedAt: string;
+}
+
+export interface SofCertaintyPresentation {
+  certaintyText: string;
+  statusText: string;
+  detail: string | null;
+  outOfDate: boolean;
+}
+
+/** Shared table/CSV wording so stale saved certainty is never presented as current. */
+export function sofCertaintyPresentation(
+  certainty: SofCertainty,
+): SofCertaintyPresentation {
+  const label = CERTAINTY_META[certainty.level].label;
+  const outOfDate = certainty.stale || certainty.sourceUnavailable;
+  if (outOfDate) {
+    return {
+      certaintyText: `${label} (out of date)`,
+      statusText: certainty.sourceUnavailable ? "Source unavailable" : "Out of date",
+      detail: certainty.sourceUnavailable
+        ? "No study currently contributes to the pooled result; this saved certainty is out of date."
+        : "Evidence or protocol context changed; regenerate GRADE before using this saved certainty.",
+      outOfDate: true,
+    };
+  }
+  return {
+    certaintyText: label,
+    statusText: certainty.status === "REVIEWED" ? "Reviewed" : "Draft",
+    detail: null,
+    outOfDate: false,
+  };
+}
+
+// --- GRADE presentation metadata ---------------------------------------------------
+
+export const DOMAIN_ORDER: readonly GradeDomainId[] = [
+  "RISK_OF_BIAS",
+  "INCONSISTENCY",
+  "INDIRECTNESS",
+  "IMPRECISION",
+  "PUBLICATION_BIAS",
+];
+
+export const DOMAIN_LABELS: Record<GradeDomainId, string> = {
+  RISK_OF_BIAS: "Risk of bias",
+  INCONSISTENCY: "Inconsistency",
+  INDIRECTNESS: "Indirectness",
+  IMPRECISION: "Imprecision",
+  PUBLICATION_BIAS: "Publication bias",
+};
+
+export const JUDGMENT_META: Record<
+  GradeJudgmentId,
+  { label: string; variant: AnalysisBadgeVariant }
+> = {
+  NOT_SERIOUS: { label: "Not serious", variant: "include" },
+  SERIOUS: { label: "Serious", variant: "maybe" },
+  VERY_SERIOUS: { label: "Very serious", variant: "exclude" },
+};
+
+// GRADE plus/circle notation + one color per level. LOW sits between the amber and
+// red theme tokens, so it uses the stock orange palette (the app is light-only).
+export const CERTAINTY_META: Record<
+  GradeCertaintyId,
+  { label: string; symbols: string; colorClass: string }
+> = {
+  HIGH: {
+    label: "High",
+    symbols: "⊕⊕⊕⊕",
+    colorClass: "border-include/30 bg-include-muted text-include",
+  },
+  MODERATE: {
+    label: "Moderate",
+    symbols: "⊕⊕⊕◯",
+    colorClass: "border-lime-600/30 bg-lime-100 text-lime-700",
+  },
+  LOW: {
+    label: "Low",
+    symbols: "⊕⊕◯◯",
+    colorClass: "border-orange-600/30 bg-orange-100 text-orange-700",
+  },
+  VERY_LOW: {
+    label: "Very low",
+    symbols: "⊕◯◯◯",
+    colorClass: "border-exclude/30 bg-exclude-muted text-exclude",
+  },
+};
+
+export const ORIGIN_LABELS: Record<GradeRatingOrigin, string> = {
+  AUTO: "Auto",
+  HUMAN: "Edited",
+  AI_APPLIED: "AI-assisted",
+};
+
+export const STARTING_LEVEL_LABELS: Record<GradeStartingLevel, string> = {
+  HIGH: "High — randomized evidence",
+  LOW: "Low — observational evidence",
+};
+
+export const STARTING_POINTS: Record<GradeStartingLevel, number> = { HIGH: 4, LOW: 2 };
+
+/** "Started HIGH (4) − 1 = 3 → Moderate" (deduction shown after the ≥1 floor). */
+export function pointsArithmetic(
+  startingLevel: GradeStartingLevel,
+  points: number,
+  certainty: GradeCertaintyId,
+): string {
+  const start = STARTING_POINTS[startingLevel];
+  return `Started ${startingLevel} (${start}) − ${start - points} = ${points} → ${CERTAINTY_META[certainty].label}`;
+}
+
+const SUPERSCRIPT_DIGITS = ["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"] as const;
+
+/** 12 → "¹²" — footnote markers for the summary-of-findings table. */
+export function superscriptMarker(n: number): string {
+  return [...String(n)].map((d) => SUPERSCRIPT_DIGITS[Number(d)] ?? d).join("");
+}

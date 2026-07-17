@@ -21,20 +21,20 @@ Capabilities: `project.view`, `project.edit`, `project.members`, `protocol.edit`
 `import.manage`, `dedup.manage`, `screening.decide`, `screening.adjudicate`,
 `screening.configure`, `fulltext.manage` (upload/link/retrieval), `extraction.templates`,
 `extraction.perform`, `extraction.adjudicate`, `rob.tools`, `rob.assess`, `rob.adjudicate`,
-`prisma.snapshot`, `audit.view`, `export.create`.
+`analysis.view`, `analysis.manage`, `prisma.snapshot`, `audit.view`, `export.create`.
 
-| Role \ Capability | view | edit | members | protocol | import | dedup | screen | adjudicate | scr.config | fulltext | ext.tmpl | extract | ext.adj | rob.tools | rob | rob.adj | prisma | audit | export |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| OWNER | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| ADMIN | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| REVIEWER | ✅ | — | — | — | — | — | ✅ | — | — | — | — | — | — | — | — | — | — | ✅ | — |
-| ADJUDICATOR | ✅ | — | — | — | — | — | ✅ | ✅ | — | ✅ | — | — | ✅ | — | — | ✅ | — | ✅ | — |
-| EXTRACTOR | ✅ | — | — | — | — | — | — | — | — | ✅ | — | ✅ | — | — | ✅ | — | — | ✅ | — |
-| STATISTICIAN | ✅ | — | — | — | — | — | — | — | — | — | ✅ | ✅ | — | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| LIBRARIAN | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | ✅ | — | — | — | — | — | — | ✅ | ✅ | ✅ |
-| PANEL_MEMBER | ✅ | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ✅ | — |
-| TRAINEE | ✅ | — | — | — | — | — | ✅* | — | — | ✅ | — | ✅* | — | — | ✅* | — | — | — | — |
-| OBSERVER | ✅ | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ✅ | — |
+| Role \ Capability | view | edit | members | protocol | import | dedup | screen | adjudicate | scr.config | fulltext | ext.tmpl | extract | ext.adj | rob.tools | rob | rob.adj | analysis | analysis.manage | prisma | audit | export |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| OWNER | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| ADMIN | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| REVIEWER | ✅ | — | — | — | — | — | ✅ | — | — | — | — | — | — | — | — | — | — | — | — | ✅ | — |
+| ADJUDICATOR | ✅ | — | — | — | — | — | ✅ | ✅ | — | ✅ | — | — | ✅ | — | — | ✅ | ✅ | — | — | ✅ | — |
+| EXTRACTOR | ✅ | — | — | — | — | — | — | — | — | ✅ | — | ✅ | — | — | ✅ | — | — | — | — | ✅ | — |
+| STATISTICIAN | ✅ | — | — | — | — | — | — | — | — | — | ✅ | ✅ | — | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+| LIBRARIAN | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | ✅ | — | — | — | — | — | — | — | — | ✅ | ✅ | ✅ |
+| PANEL_MEMBER | ✅ | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ✅ | — | — | ✅ | — |
+| TRAINEE | ✅ | — | — | — | — | — | ✅* | — | — | ✅ | — | ✅* | — | — | ✅* | — | — | — | — | — | — |
+| OBSERVER | ✅ | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | ✅ | — | — | ✅ | — |
 
 \* TRAINEE acts like REVIEWER/EXTRACTOR/ROB-assessor but their stage participation is expected to
 be supervised (workflow convention; same capabilities as the corresponding worker role — the
@@ -54,6 +54,8 @@ Additional invariants enforced in services, beyond the matrix:
 - Blinded reads: `screening.decide` grants access to *your* decisions; others' decisions require
   the citation to be fully screened + stage unblinded, or `screening.adjudicate`.
 - `project.members`: role changes and removals always write audit events with previous/new roles.
+- GRADE audit rows require current `analysis.view` (or `project.edit`), even for a former actor;
+  GRADE/ANALYSIS exports require both `export.create` and `analysis.view`.
 - OBSERVER/PANEL_MEMBER are read-only everywhere by construction (no mutation capability).
 
 ## Mechanics

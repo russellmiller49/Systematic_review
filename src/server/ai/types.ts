@@ -57,4 +57,10 @@ export interface AiProvider {
     prompt: BuiltPrompt;
     pdf: { bytes: Buffer; filename: string };
   }): Promise<{ json: unknown; usage?: UsageTotals }>;
+
+  // Text-only structured completion (no document attached); synchronous, not batched.
+  completeStructured(req: {
+    model: string;
+    prompt: BuiltPrompt;
+  }): Promise<{ json: unknown; usage?: UsageTotals }>;
 }

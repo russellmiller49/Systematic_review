@@ -14,10 +14,13 @@ findings (deduplicating to ~18 issues). This document records the decided policy
 (b) holders of `project.edit` (OWNER/ADMIN), (c) holders of the domain's adjudicate capability
 (`screening.adjudicate` for screening entities, etc.). Everyone else sees these rows excluded
 entirely. This is a static rule (no per-citation blinding join) — simple, safe, testable.
+Final-tier GRADE entities (`GradeAssessment`, `GradeDomainRating`, `AiGradeRun`) follow a
+separate analysis boundary: their pooled-result/PICO prose and actor attribution are visible
+only with current `analysis.view` or `project.edit`; the historical actor exception does not
+apply after that capability is removed.
 **Exports**: kinds `SCREENING`, `EXTRACTION`, `ROB`, `AUDIT`, `FULL` additionally require
-`project.edit`; `CITATIONS` and `PRISMA` require only `export.create`. Integration tests assert
-both (blinded reviewer queries audit → no co-reviewer decisions; reviewer+statistician cannot
-create SCREENING export).
+`project.edit`; `ANALYSIS` and `GRADE` require `export.create` plus `analysis.view`;
+`CITATIONS` and `PRISMA` require only `export.create`. Integration tests assert these boundaries.
 
 ### R2. RoB judgments are Strings validated per tool
 `RiskOfBiasJudgment.judgment`, `RiskOfBiasAssessment.overallJudgment`,

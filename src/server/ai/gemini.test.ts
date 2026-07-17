@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildGeminiExtractionRequest, buildGeminiScoringRequest } from "./gemini";
+import {
+  buildGeminiCompletionRequest,
+  buildGeminiExtractionRequest,
+  buildGeminiScoringRequest,
+} from "./gemini";
 import type { BuiltPrompt } from "./types";
 
 const PROMPT: BuiltPrompt = {
@@ -11,6 +15,17 @@ const PROMPT: BuiltPrompt = {
 describe("buildGeminiScoringRequest", () => {
   it("uses responseJsonSchema with application/json output", () => {
     const request = buildGeminiScoringRequest(PROMPT);
+    expect(request.contents).toEqual([{ role: "user", parts: [{ text: "user text" }] }]);
+    expect(request.config.systemInstruction).toBe("system text");
+    expect(request.config.responseMimeType).toBe("application/json");
+    expect(request.config.responseJsonSchema).toBe(PROMPT.jsonSchema);
+  });
+});
+
+describe("buildGeminiCompletionRequest", () => {
+  it("is the scoring request with the model inlined", () => {
+    const request = buildGeminiCompletionRequest("gemini-3-pro", PROMPT);
+    expect(request.model).toBe("gemini-3-pro");
     expect(request.contents).toEqual([{ role: "user", parts: [{ text: "user text" }] }]);
     expect(request.config.systemInstruction).toBe("system text");
     expect(request.config.responseMimeType).toBe("application/json");

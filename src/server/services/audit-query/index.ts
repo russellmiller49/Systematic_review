@@ -1,9 +1,9 @@
 // Audit query API with the R1 blind filter (docs/09-design-review-resolutions.md).
 //
-// AuditEvent rows for SENSITIVE entity types (screening/extraction/RoB work products) are
-// visible only to (a) the event's actor, (b) holders of project.edit, (c) holders of the
-// domain's adjudicate capability. Everyone else gets those rows excluded entirely — a static
-// where-clause, no per-citation blinding join.
+// AuditEvent rows for blinded screening/extraction/RoB work products are visible only to the
+// actor, project editors, or that domain's adjudicators. GRADE work products instead require
+// current analysis.view (or project.edit), including for a former actor. Everyone else gets
+// those rows excluded entirely through one static where-clause.
 
 import { z } from "zod";
 import type { Prisma, ProjectRole } from "@prisma/client";
@@ -17,6 +17,10 @@ import { requirePermission, can } from "@/server/permissions";
 // events carry only run configuration and counts — no reviewer votes or per-citation
 // decisions — and the suggestion rows themselves are never audited. Screeners seeing that a
 // prescreen run happened leaks nothing about co-reviewers.
+//
+// GRADE entities contain pooled-result/PICO-derived prose and explicit editor/reviewer
+// attribution. They are final-tier rather than provisional, but still belong behind the
+// analysis.view boundary.
 export const SCREENING_SENSITIVE_ENTITY_TYPES = [
   "ScreeningDecision",
   "ScreeningConflict",
@@ -36,10 +40,17 @@ export const ROB_SENSITIVE_ENTITY_TYPES = [
   "RiskOfBiasConflict",
 ] as const;
 
+export const GRADE_SENSITIVE_ENTITY_TYPES = [
+  "GradeAssessment",
+  "GradeDomainRating",
+  "AiGradeRun",
+] as const;
+
 export const SENSITIVE_ENTITY_TYPES: readonly string[] = [
   ...SCREENING_SENSITIVE_ENTITY_TYPES,
   ...EXTRACTION_SENSITIVE_ENTITY_TYPES,
   ...ROB_SENSITIVE_ENTITY_TYPES,
+  ...GRADE_SENSITIVE_ENTITY_TYPES,
 ];
 
 const MAX_LIMIT = 100;
@@ -96,8 +107,23 @@ function blindVisibilityClause(
   const visibility: Prisma.AuditEventWhereInput[] = [
     // Non-sensitive rows are visible to every audit.view holder.
     { entityType: { notIn: [...SENSITIVE_ENTITY_TYPES] } },
-    // Your own events are always visible to you.
-    { userId: callerUserId },
+    // Screening/extraction/RoB actors retain access to their own blinded work. GRADE is
+    // different: current analysis.view is required even for a former editor, because an
+    // event's previousValue can contain auto-generated pooled-result prose.
+    {
+      AND: [
+        {
+          entityType: {
+            in: [
+              ...SCREENING_SENSITIVE_ENTITY_TYPES,
+              ...EXTRACTION_SENSITIVE_ENTITY_TYPES,
+              ...ROB_SENSITIVE_ENTITY_TYPES,
+            ],
+          },
+        },
+        { userId: callerUserId },
+      ],
+    },
   ];
   if (can(roles, "screening.adjudicate")) {
     visibility.push({ entityType: { in: [...SCREENING_SENSITIVE_ENTITY_TYPES] } });
@@ -107,6 +133,9 @@ function blindVisibilityClause(
   }
   if (can(roles, "rob.adjudicate")) {
     visibility.push({ entityType: { in: [...ROB_SENSITIVE_ENTITY_TYPES] } });
+  }
+  if (can(roles, "analysis.view")) {
+    visibility.push({ entityType: { in: [...GRADE_SENSITIVE_ENTITY_TYPES] } });
   }
   return { OR: visibility };
 }

@@ -44,6 +44,7 @@ const EXPORT_KINDS: { value: string; label: string }[] = [
   { value: "CITATIONS", label: "Citations" },
   { value: "PRISMA", label: "PRISMA counts" },
   { value: "ANALYSIS", label: "Analysis results" },
+  { value: "GRADE", label: "GRADE / Summary of findings" },
   { value: "SCREENING", label: "Screening (admin only)" },
   { value: "EXTRACTION", label: "Extraction (admin only)" },
   { value: "ROB", label: "Risk of bias (admin only)" },

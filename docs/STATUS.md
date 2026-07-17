@@ -2,7 +2,101 @@
 
 > Purpose: durable progress anchor. If you are resuming work on this repo, read this first,
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
-> There is a continuation skill: `.claude/skills/continue-build/SKILL.md`.
+> There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
+
+## Current state (2026-07-16) — roadmap Wave 4 (GRADE + Summary of Findings) — DONE
+
+Wave 4 is built, adversarially reviewed, and fully verified. This completes the four-wave
+2026-07-16 roadmap.
+
+### Verification
+
+- `npm run typecheck` and `npm run build` are clean.
+- `npm run test:unit` — **558 passed / 48 files**.
+- `npm run test:integration` — **255 passed / 22 files**.
+- `npm run e2e` — **9 passed**, including the previously unexecuted GRADE/SoF scenario. Its
+  fragile guessed `div` locator was replaced with a role- and heading-scoped domain-card
+  locator, and the test now asserts the exact formatted rationale and SoF result.
+- Demo DB reseeded and both GRADE and Summary of Findings browser-checked through the real UI.
+  The seeded draft is Moderate, starts at High (4) with one downgrade, preserves the human
+  indirectness edit, flags publication bias for review, hides AI suggestions while disabled,
+  renders `3.00 (95% CI 1.85 to 4.87)` in prose, and renders `3.00 [1.85, 4.87]` in SoF.
+- Both GRADE migrations are applied to the development database.
+
+### Review hardening
+
+- Human-facing estimates use the same display precision as the rest of the app, while stored
+  metrics retain `round4` precision for deterministic staleness checks.
+- The assessment-wide, canonical source fingerprint covers final-only pooled inputs, RoB
+  judgment and tool identity, relevant protocol/PICO context, and the evidence displayed to
+  the AI. JSON object keys are recursively sorted because Postgres `jsonb` does not preserve
+  key order. Legacy rows without a fingerprint are stale by construction.
+- GRADE mutations, relevant analysis-source mutations, AI publication, SoF, and export use
+  coherent repeatable-read snapshots plus a shared outcome lock; serialization conflicts are
+  retried. Slow AI responses are revalidated before suggestions can be published.
+- Review status and AI suggestions cannot mask or clear source/context staleness. Stale
+  suggestions are hidden and rejected server-side; an out-of-date assessment cannot be marked
+  reviewed.
+- GRADE audit reads require the caller's current project permissions, and exports preserve the
+  existing `analysis.view` boundary at creation and download.
+
+### What landed (all per the build contract; 5 parallel agents over disjoint files)
+
+- **Schema** (migrations `grade` + `grade_source_fingerprint`): `GradeAssessment` (one per
+  `AnalysisOutcome`, stored `certainty` recomputed in the same tx as every change, canonical
+  `sourceFingerprint`), `GradeDomainRating` (`@@unique
+  ([assessmentId, domain])`, `origin AUTO|HUMAN|AI_APPLIED`, `requiresReview`, `metrics Json`),
+  `AiGradeRun` + `GradeDomainSuggestion` (`@@unique([analysisOutcomeId, domain])`, latest-wins
+  full replace, unaudited), enums `GradeDomain`/`GradeJudgment`/`GradeCertainty`/
+  `GradeAssessmentStatus`/`GradeStartingLevel`/`GradeRatingOrigin`, `ExportKind.GRADE`.
+- **`src/lib/grade/`** — pure, zero-AI Tier-1 rules mirroring the `src/lib/stats` discipline:
+  `rules.ts` (all thresholds exported consts: I² 40/75, OIS 400, ratio appreciable 0.75/1.25,
+  SMD ±0.5, RoB weight 50/20/50, pub-bias k<10, Egger p<0.10; certainty = start 4|2 − strikes,
+  floor 1), `rob-bucket.ts` (**severity-driven** classifier — string matching would invert on
+  AMSTAR 2, whose "high" means high *confidence*; per R2 every `judgmentScale` entry carries
+  `severity`, 1 = best), `absolute.ts` (SoF per-1000 math), `types.ts`.
+- **`src/server/services/grade/`** — `rob-rollup.ts` resolves each study's overall RoB
+  server-side (there was no server resolver; it mirrors the client traffic-light precedence in
+  `src/components/rob/summary-tab.tsx` `cell(studyId, null)`): adjudicated > unanimous
+  COMPLETED consensus > single **withheld while any co-assessment is IN_PROGRESS or an
+  assignment is PENDING** > derived-from-domains (worst bucket). The withholding is
+  caller-independent by design — stored GRADE metrics must never contain provisional RoB data.
+  `index.ts`: source-fingerprint freshness across every rating origin, `getGradeView`,
+  `generateDraft` (final-only results; **AUTO-only replace** so HUMAN/AI_APPLIED ratings survive
+  regeneration), `updateDomainRating` (server-authoritative suggestion apply;
+  REVIEWED→DRAFT flip), `setStartingLevel`, `markReviewed`, and coherent-snapshot `computeSof`.
+- **AI Tier 2** — `AiProvider.completeStructured` (text-only structured completion) added to all
+  three transports + `FakeAiProvider`; prompt `grade-v2`; `parseGradeResult` (authoritative:
+  drops+counts unknown/dupe domains, invalid judgments, and blank rationales);
+  `src/server/services/ai-grade/` cloned from ai-rob minus the PDF path. AI writes only
+  version-bound suggestion rows a human applies; indirectness remains a human-review judgment
+  because the prompt does not contain study-level applicability characteristics.
+- **UI** — `grade-panel.tsx` (certainty badge, points arithmetic, five domain cards, edit
+  dialog, regenerate confirm, stale alert, AI suggestion cards), `sof-table.tsx` (+ CSV),
+  `certainty-badge.tsx`; analysis page gained a pinned "Summary of findings" aside entry and
+  Results|GRADE tabs.
+- **Export** `GRADE` kind (export.create + the `analysis.view` mirror at create AND download,
+  exactly like ANALYSIS), seed GRADE draft + one human edit, `grade.*`/`ai.grade.*` audit
+  actions, `deleteOutcome` cascades the grade rows.
+
+### Decisions/deviations worth knowing (from the agents' reports)
+
+- Fingerprint and metrics comparisons use a **recursive key-sorted stringify**, not plain
+  `JSON.stringify`: Postgres jsonb does not preserve key order, so a naive compare marked
+  unchanged data stale.
+- `updateDomainRating` always audits, but gates the certainty write + REVIEWED→DRAFT flip on an
+  actual change — resubmitting identical values cannot silently un-review an assessment.
+- Final-only source computation is caller-independent for withholding decisions, while reads
+  and exports still run under the caller's R1 visibility boundary.
+- AI joins per-study evidence by immutable study ID (with a legacy label fallback), and the
+  stored RoB metrics retain raw judgment plus tool identity so prompt and assessment freshness
+  change when the underlying tool context changes.
+- `AnalysisRole.STUDY_DESIGN` remains **unwired** (declared in Wave 2 for this purpose):
+  starting level is a manual audited field on the assessment instead. `replaceMappings` still
+  rejects non-NUMBER fields, so wiring it later needs that guard relaxed for that role.
+- The GRADE service reuses `analysis.view`/`analysis.manage` — no new capabilities. Audit reads
+  for GRADE assessments, ratings, and AI runs re-check current project permission, so actor
+  self-visibility cannot leak the result after access is removed.
 
 ## Review administration and assignment reset (2026-07-16)
 
@@ -436,11 +530,14 @@ the UI and demonstrated by the seed + E2E. Remaining items are all post-MVP back
 
 ## Remaining work
 
-**None for MVP**, and post-MVP backlog items 1–4 (PRISMA diagram, built-in RoB tool catalog,
-AI prescreening, AI extraction) plus AI RoB suggestions (#10) and the living extraction table
-phase 1 (#11) are ✅ done (2026-07-12/14/16 states above). Next up per the 2026-07-16 roadmap:
-meta-analysis (#5, binary+continuous first), evidence-anchoring phases 2–3 (#12), cohort
-detection (#9), GRADE (#6) — plus the "Known follow-ups" below remain open.
+**None for MVP.** The whole 2026-07-16 AI roadmap is built and verified: Wave 1 (AI RoB #10 +
+living extraction table #11), Wave 2 (meta-analysis phase A #5 + evidence anchoring phase 2
+#12), Wave 3 (anchoring phase 3, meta-analysis phase B, cohort detection #9), and Wave 4
+(GRADE + Summary of Findings #6).
+
+Backlog still open after Wave 4 (docs/08): #7 living-review surveillance, #8 multi-PICO
+projects, #13 PRISMA 2020 completeness polish, plus manuscript/table generation, notifications
+and OpenSearch from the #9 line — and the "Known follow-ups" below.
 
 ### (historical, for reference)
 
@@ -507,9 +604,13 @@ detection (#9), GRADE (#6) — plus the "Known follow-ups" below remain open.
 - `docker compose up -d` — Postgres 16 (dev `srb_dev`, test `srb_test`, port **5442**)
 - `npm run dev` / `npm run build` / `npm run typecheck`
 - `npx prisma migrate dev` / `npm run db:seed` (demo dataset + built-in RoB tool catalog)
-- `npm run test:unit` (111) / `npm run test:integration` (146) / `npm test` / `npm run e2e` (5)
-- Env in `.env` (already created; see `.env.example`)
+- `npm run test:unit` (558) / `npm run test:integration` (255) / `npm test` /
+  `npm run e2e` (9) — counts as of the verified Wave 4 milestone
+- Env in `.env` (already created; see `.env.example`). AI keys are empty ⇒ `ai.enabled=false`.
 
 ## Git
 
-- main, all green at every commit. No remote configured.
+- main, all green at every milestone. No remote configured.
+- Wave 4 (GRADE + Summary of Findings) is the current completed milestone. Migrations
+  `20260716223319_grade` and `20260717001900_grade_source_fingerprint` are applied to the
+  development database.

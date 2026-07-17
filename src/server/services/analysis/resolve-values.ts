@@ -22,7 +22,7 @@
 // results, which listForms/getExtractionMatrix deliberately forbid (R1 blind mirror).
 
 import type { AnalysisRole } from "@prisma/client";
-import { prisma } from "@/server/db";
+import { prisma, type Tx } from "@/server/db";
 import { valuesEqual } from "@/server/services/extraction/validation";
 
 // ---------------------------------------------------------------------------
@@ -155,14 +155,16 @@ export async function fetchResolvedRoleValues(input: {
   // R1 blind mirror for callers without extraction.adjudicate/project.edit: no
   // PROVISIONAL tier, and SINGLE values are withheld while extraction is still open.
   blinded?: boolean;
+  db?: Tx;
 }): Promise<StudyRoleValues> {
   const out: StudyRoleValues = new Map(input.studyIds.map((id) => [id, {}]));
   if (input.mappings.length === 0 || input.studyIds.length === 0) return out;
   const blinded = input.blinded === true;
   const includeProvisional = input.includeProvisional && !blinded;
+  const db = input.db ?? prisma;
 
   // One load of the project's template graph (with fields); lineage math is in-memory.
-  const templates = await prisma.extractionTemplate.findMany({
+  const templates = await db.extractionTemplate.findMany({
     where: { projectId: input.projectId },
     select: {
       id: true,
@@ -208,7 +210,7 @@ export async function fetchResolvedRoleValues(input: {
   }
 
   const [forms, conflicts, pendingAssignments] = await Promise.all([
-    prisma.extractionForm.findMany({
+    db.extractionForm.findMany({
       where: {
         templateId: { in: [...allTemplateIds] },
         studyId: { in: input.studyIds },
@@ -223,7 +225,7 @@ export async function fetchResolvedRoleValues(input: {
         },
       },
     }),
-    prisma.extractionConflict.findMany({
+    db.extractionConflict.findMany({
       where: {
         studyId: { in: input.studyIds },
         fieldId: { in: [...allFieldIds] },
@@ -237,7 +239,7 @@ export async function fetchResolvedRoleValues(input: {
     }),
     // Open-work signal for the blind: only fetched when it can matter.
     blinded
-      ? prisma.extractionAssignment.findMany({
+      ? db.extractionAssignment.findMany({
           where: {
             templateId: { in: [...allTemplateIds] },
             studyId: { in: input.studyIds },

@@ -1,6 +1,7 @@
 // Anthropic provider (default). Batch scoring via the Message Batches API; extraction via a
-// streaming Messages call with a base64 PDF document block. Structured output via
-// output_config.format json_schema on every request.
+// streaming Messages call with a base64 PDF document block; text-only structured completions
+// via a synchronous Messages call. Structured output via output_config.format json_schema on
+// every request.
 //
 // claude-opus-4-8 notes: never send temperature/top_p/budget_tokens (rejected with 400);
 // thinking {type:"adaptive"} is allowed and used for extraction only — scoring omits
@@ -25,6 +26,18 @@ export function buildAnthropicScoringParams(model: string, prompt: BuiltPrompt) 
   return {
     model,
     max_tokens: 2048,
+    system: prompt.system,
+    messages: [{ role: "user" as const, content: prompt.user }],
+    output_config: { format: { type: "json_schema" as const, schema: prompt.jsonSchema } },
+  };
+}
+
+// Scoring shape with more output headroom: completions return prose rationales for several
+// items in one response. No thinking (short prose keeps max_tokens predictable).
+export function buildAnthropicCompletionParams(model: string, prompt: BuiltPrompt) {
+  return {
+    model,
+    max_tokens: 8192,
     system: prompt.system,
     messages: [{ role: "user" as const, content: prompt.user }],
     output_config: { format: { type: "json_schema" as const, schema: prompt.jsonSchema } },
@@ -160,6 +173,19 @@ export class AnthropicProvider implements AiProvider {
     }
     if (message.stop_reason === "max_tokens") {
       throw new Error("The model's response was truncated (max_tokens) — try a smaller template");
+    }
+    return { json: JSON.parse(textOf(message.content)) as unknown, usage: usageOf(message) };
+  }
+
+  async completeStructured(req: { model: string; prompt: BuiltPrompt }) {
+    const message = await this.client.messages.create(
+      buildAnthropicCompletionParams(req.model, req.prompt),
+    );
+    if (message.stop_reason === "refusal") {
+      throw new Error("The model declined this request");
+    }
+    if (message.stop_reason === "max_tokens") {
+      throw new Error("The model's response was truncated (max_tokens)");
     }
     return { json: JSON.parse(textOf(message.content)) as unknown, usage: usageOf(message) };
   }

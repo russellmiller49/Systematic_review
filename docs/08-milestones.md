@@ -41,7 +41,12 @@ history → export. Each maps to at least one integration or E2E test.
    harmonic-mean back-transform, generic inverse variance with CI→SE, prediction intervals,
    Egger's test + funnel plot, "Generate outcome fields" template scaffold, ANALYSIS
    export kind). Remaining: R script export (unplanned; CSV/JSON export covers the data)
-6. GRADE per outcome + SoF tables
+6. ~~GRADE per outcome + SoF tables~~ ✅ 2026-07-16 — deterministic five-domain Tier-1 rules
+   with an audited draft/edit/review workflow, caller-independent final-only inputs and
+   source/context freshness protection, optional version-bound AI suggestions requiring human
+   application, Summary of Findings table + CSV, and GRADE export (`src/lib/grade/`,
+   `src/server/services/grade/`, `src/components/analysis/`); starting level remains manual and
+   audited (`AnalysisRole.STUDY_DESIGN` deliberately unwired)
 7. Living-review surveillance (saved searches → new ImportBatches → triage queue)
 8. Multi-PICO projects (`picoQuestionId` FKs)
 9. ~~Cohort-overlap detection~~ ✅ 2026-07-16 (NBIB/RIS affiliation + registry-ID capture

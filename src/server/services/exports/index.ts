@@ -1,8 +1,8 @@
-// Exports (R1 gating): CITATIONS / PRISMA / ANALYSIS need export.create; SCREENING /
-// EXTRACTION / ROB / AUDIT / FULL additionally require project.edit (they can contain
-// blinded work products). ANALYSIS content is generated AS THE REQUESTER — the analysis
-// service applies the extraction blind to the requester's roles, so export.create is
-// sufficient gating for it.
+// Exports (R1 gating): CITATIONS / PRISMA / ANALYSIS / GRADE need export.create;
+// SCREENING / EXTRACTION / ROB / AUDIT / FULL additionally require project.edit (they can
+// contain blinded work products). ANALYSIS content is generated as the requester; GRADE
+// and SoF use the stricter caller-independent final-only seam. The RoB roll-up likewise
+// withholds provisional judgments, so export.create is sufficient gating for them.
 // MVP: content is generated on demand — the ExportJob row records the request (COMPLETED,
 // storageKey null) and download regenerates + streams after re-checking the same gating.
 
@@ -13,6 +13,7 @@ import { notFound, validationError } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { requirePermission, type Capability } from "@/server/permissions";
 import { computeOutcomeResults, listOutcomes } from "@/server/services/analysis";
+import { computeGradeSnapshot, GRADE_DOMAIN_ORDER } from "@/server/services/grade";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { computePrismaCounts } from "@/server/services/prisma-report";
@@ -28,6 +29,7 @@ export const createExportSchema = z.object({
     "AUDIT",
     "FULL",
     "ANALYSIS",
+    "GRADE",
   ]),
   format: z.enum(["CSV", "JSON"]),
 });
@@ -36,7 +38,7 @@ export type CreateExportInput = z.infer<typeof createExportSchema>;
 
 // R1: which capability unlocks each export kind.
 export function exportCapability(kind: ExportKind): Capability {
-  return kind === "CITATIONS" || kind === "PRISMA" || kind === "ANALYSIS"
+  return kind === "CITATIONS" || kind === "PRISMA" || kind === "ANALYSIS" || kind === "GRADE"
     ? "export.create"
     : "project.edit";
 }
@@ -45,10 +47,10 @@ const CSV_BOM = "\uFEFF";
 
 export async function createExport(ctx: Ctx, projectId: string, input: CreateExportInput) {
   await requirePermission(ctx, projectId, exportCapability(input.kind));
-  // ANALYSIS content is generated through the analysis service, which itself requires
+  // ANALYSIS/GRADE content is generated through services that themselves require
   // analysis.view — require it up front, or an export.create-only role (LIBRARIAN)
   // could create a job whose download can never succeed.
-  if (input.kind === "ANALYSIS") {
+  if (input.kind === "ANALYSIS" || input.kind === "GRADE") {
     await requirePermission(ctx, projectId, "analysis.view");
   }
   if (input.kind === "FULL" && input.format === "CSV") {
@@ -105,7 +107,7 @@ export async function downloadExport(
   if (!job) throw notFound("Export job");
   // R1: downloading re-checks the same gating as creation.
   await requirePermission(ctx, projectId, exportCapability(job.kind));
-  if (job.kind === "ANALYSIS") {
+  if (job.kind === "ANALYSIS" || job.kind === "GRADE") {
     await requirePermission(ctx, projectId, "analysis.view"); // mirrors createExport
   }
   if (job.kind === "FULL" && job.format === "CSV") {
@@ -488,6 +490,109 @@ async function analysisSections(ctx: Ctx, projectId: string): Promise<AnalysisSe
   return sections;
 }
 
+// GRADE: the summary of findings uses caller-independent final-only analysis resolution;
+// assessments/ratings are stored final-tier rows. Freshness fields ensure a saved certainty
+// is never exported as current after its pooled source changes or disappears.
+interface GradeSections {
+  sof: CsvRow[]; // one row per outcome
+  ratings: CsvRow[]; // one row per (outcome, domain)
+  assessments: CsvRow[]; // one row per assessed outcome
+  json: unknown; // structured payload incl. per-outcome footnotes
+}
+
+async function gradeSections(ctx: Ctx, projectId: string): Promise<GradeSections> {
+  const { sof, assessments } = await computeGradeSnapshot(ctx, projectId);
+  const domainIndex = (domain: string) => GRADE_DOMAIN_ORDER.indexOf(domain as never);
+  const orderedRatings = <T extends { domain: string }>(ratings: T[]): T[] =>
+    [...ratings].sort((a, b) => domainIndex(a.domain) - domainIndex(b.domain));
+  const sofByOutcomeId = new Map(sof.rows.map((row) => [row.outcomeId, row]));
+
+  return {
+    sof: sof.rows.map((r) => ({
+      outcome: r.name,
+      timepoint: r.timepoint,
+      measure: r.measure,
+      model: r.model,
+      k: r.k,
+      totalN: r.totalN,
+      relativeEstimate: r.relative?.estimate ?? null,
+      relativeCiLow: r.relative?.ciLow ?? null,
+      relativeCiHigh: r.relative?.ciHigh ?? null,
+      assumedPer1000: r.absolute?.assumedPer1000 ?? null,
+      correspondingPer1000: r.absolute?.correspondingPer1000 ?? null,
+      correspondingCiLowPer1000: r.absolute?.correspondingCiLowPer1000 ?? null,
+      correspondingCiHighPer1000: r.absolute?.correspondingCiHighPer1000 ?? null,
+      proportionPer1000Estimate: r.proportionPer1000?.estimate ?? null,
+      proportionPer1000CiLow: r.proportionPer1000?.ciLow ?? null,
+      proportionPer1000CiHigh: r.proportionPer1000?.ciHigh ?? null,
+      certainty: r.certainty?.level ?? null,
+      certaintyPoints: r.certainty?.points ?? null,
+      status: r.certainty?.stale ? "OUT_OF_DATE" : (r.certainty?.status ?? null),
+      certaintyOutOfDate: r.certainty?.stale ?? false,
+      sourceUnavailable: r.certainty?.sourceUnavailable ?? false,
+      startingLevel: r.certainty?.startingLevel ?? null,
+    })),
+    ratings: assessments.flatMap((a) =>
+      orderedRatings(a.ratings).map((r) => {
+        const outcome = sofByOutcomeId.get(a.analysisOutcomeId)!;
+        const live = outcome.certainty;
+        return {
+          outcome: outcome.name,
+          domain: r.domain,
+          judgment: r.judgment,
+          origin: r.origin,
+          requiresReview: r.requiresReview,
+          certaintyOutOfDate: live?.stale ?? false,
+          sourceUnavailable: live?.sourceUnavailable ?? false,
+          rationale: r.rationale,
+        };
+      }),
+    ),
+    assessments: assessments.map((a) => {
+      const outcome = sofByOutcomeId.get(a.analysisOutcomeId)!;
+      const live = outcome.certainty;
+      return {
+        outcome: outcome.name,
+        startingLevel: a.startingLevel,
+        certainty: a.certainty,
+        status: live?.stale ? "OUT_OF_DATE" : a.status,
+        certaintyOutOfDate: live?.stale ?? false,
+        sourceUnavailable: live?.sourceUnavailable ?? false,
+        generatedAt: a.generatedAt,
+        reviewedBy: a.reviewedBy?.name ?? null,
+        reviewedAt: a.reviewedAt,
+      };
+    }),
+    json: {
+      generatedAt: sof.generatedAt,
+      sof: sof.rows,
+      assessments: assessments.map((a) => {
+        const outcome = sofByOutcomeId.get(a.analysisOutcomeId)!;
+        const live = outcome.certainty;
+        return {
+          outcome: { name: outcome.name, timepoint: outcome.timepoint },
+          startingLevel: a.startingLevel,
+          certainty: a.certainty,
+          status: live?.stale ? "OUT_OF_DATE" : a.status,
+          certaintyOutOfDate: live?.stale ?? false,
+          sourceUnavailable: live?.sourceUnavailable ?? false,
+          generatedAt: a.generatedAt,
+          reviewedBy: a.reviewedBy?.name ?? null,
+          reviewedAt: a.reviewedAt,
+          ratings: orderedRatings(a.ratings).map((r) => ({
+            domain: r.domain,
+            judgment: r.judgment,
+            origin: r.origin,
+            requiresReview: r.requiresReview,
+            rationale: r.rationale,
+            metrics: r.metrics,
+          })),
+        };
+      }),
+    },
+  };
+}
+
 // Concatenate heterogeneous sections into one CSV with a leading recordType column.
 function sectionsToCsv(sections: Record<string, CsvRow[]>): string {
   const rows: CsvRow[] = [];
@@ -547,6 +652,16 @@ async function generateExportBody(
             outcome_summary: sections.outcomes,
           })
         : toJsonBody({ outcomes: sections.json });
+    }
+    case "GRADE": {
+      const sections = await gradeSections(ctx, projectId);
+      return format === "CSV"
+        ? sectionsToCsv({
+            sof_row: sections.sof,
+            grade_rating: sections.ratings,
+            grade_assessment: sections.assessments,
+          })
+        : toJsonBody(sections.json);
     }
     case "AUDIT": {
       const rows = await auditRows(projectId);

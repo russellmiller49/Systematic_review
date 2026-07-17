@@ -1,6 +1,7 @@
 // OpenAI provider. Batch scoring via the Batch API (JSONL file upload → /v1/chat/completions
-// lines); extraction via a chat completion with a base64 PDF file part. Structured output via
-// response_format json_schema strict on every request.
+// lines); extraction via a chat completion with a base64 PDF file part; text-only structured
+// completions via a plain chat completion. Structured output via response_format json_schema
+// strict on every request.
 
 import OpenAI, { toFile } from "openai";
 import type {
@@ -26,6 +27,20 @@ export function buildOpenAiScoringBody(model: string, prompt: BuiltPrompt) {
     response_format: {
       type: "json_schema" as const,
       json_schema: { name: "screening_result", strict: true, schema: prompt.jsonSchema },
+    },
+  };
+}
+
+export function buildOpenAiCompletionBody(model: string, prompt: BuiltPrompt) {
+  return {
+    model,
+    messages: [
+      { role: "system" as const, content: prompt.system },
+      { role: "user" as const, content: prompt.user },
+    ],
+    response_format: {
+      type: "json_schema" as const,
+      json_schema: { name: "structured_result", strict: true, schema: prompt.jsonSchema },
     },
   };
 }
@@ -189,6 +204,23 @@ export class OpenAiProvider implements AiProvider {
         req.pdf.bytes.toString("base64"),
         req.pdf.filename,
       ),
+    );
+    const message = completion.choices[0]?.message;
+    if (!message || message.refusal) {
+      throw new Error(message?.refusal ?? "The model returned no response");
+    }
+    const usage: UsageTotals | undefined = completion.usage
+      ? {
+          inputTokens: completion.usage.prompt_tokens,
+          outputTokens: completion.usage.completion_tokens,
+        }
+      : undefined;
+    return { json: JSON.parse(message.content ?? "") as unknown, usage };
+  }
+
+  async completeStructured(req: { model: string; prompt: BuiltPrompt }) {
+    const completion = await this.client.chat.completions.create(
+      buildOpenAiCompletionBody(req.model, req.prompt),
     );
     const message = completion.choices[0]?.message;
     if (!message || message.refusal) {

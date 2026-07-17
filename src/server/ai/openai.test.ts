@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildOpenAiBatchJsonl, buildOpenAiExtractionBody, buildOpenAiScoringBody } from "./openai";
+import {
+  buildOpenAiBatchJsonl,
+  buildOpenAiCompletionBody,
+  buildOpenAiExtractionBody,
+  buildOpenAiScoringBody,
+} from "./openai";
 import type { BuiltPrompt } from "./types";
 
 const PROMPT: BuiltPrompt = {
@@ -15,6 +20,21 @@ describe("buildOpenAiScoringBody", () => {
     expect(body.response_format).toEqual({
       type: "json_schema",
       json_schema: { name: "screening_result", strict: true, schema: PROMPT.jsonSchema },
+    });
+  });
+});
+
+describe("buildOpenAiCompletionBody", () => {
+  it("uses strict json_schema response format named structured_result", () => {
+    const body = buildOpenAiCompletionBody("gpt-5.1", PROMPT);
+    expect(body.model).toBe("gpt-5.1");
+    expect(body.messages).toEqual([
+      { role: "system", content: "system text" },
+      { role: "user", content: "user text" },
+    ]);
+    expect(body.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "structured_result", strict: true, schema: PROMPT.jsonSchema },
     });
   });
 });

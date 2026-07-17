@@ -189,6 +189,7 @@ enum ExportKind {
   AUDIT
   FULL
   ANALYSIS // per-outcome study effects + pooled results (phase B)
+  GRADE // summary of findings + per-domain certainty ratings (phase C)
 }
 
 enum ExportFormat {
@@ -302,6 +303,10 @@ model User {
   analysisOutcomes        AnalysisOutcome[]          @relation("AnalysisOutcomeCreator")
   analysisExclusions      AnalysisStudyExclusion[]   @relation("AnalysisExclusionCreator")
   cohortDecisions         CohortCandidate[]          @relation("CohortDecider")
+  gradeAssessments        GradeAssessment[]          @relation("GradeAssessmentCreator")
+  gradeReviews            GradeAssessment[]          @relation("GradeReviewer")
+  gradeRatingEdits        GradeDomainRating[]        @relation("GradeRatingEditor")
+  aiGradeRuns             AiGradeRun[]               @relation("AiGradeRunRequester")
 }
 
 model Organization {
@@ -369,6 +374,7 @@ model Project {
   aiScreeningRuns     AiScreeningRun[]
   aiExtractionRuns    AiExtractionRun[]
   aiRobRuns           AiRobRun[]
+  aiGradeRuns         AiGradeRun[]
   analysisOutcomes    AnalysisOutcome[]
   cohortCandidates    CohortCandidate[]
 
@@ -1298,8 +1304,11 @@ model AnalysisOutcome {
   outcomeDefinition OutcomeDefinition? @relation(fields: [outcomeDefinitionId], references: [id])
   createdBy         User               @relation("AnalysisOutcomeCreator", fields: [createdById], references: [id])
 
-  mappings   AnalysisFieldMap[]
-  exclusions AnalysisStudyExclusion[]
+  mappings         AnalysisFieldMap[]
+  exclusions       AnalysisStudyExclusion[]
+  gradeAssessment  GradeAssessment?
+  aiGradeRuns      AiGradeRun[]
+  gradeSuggestions GradeDomainSuggestion[]
 
   @@index([projectId, order])
 }
@@ -1334,6 +1343,140 @@ model AnalysisStudyExclusion {
   createdBy User            @relation("AnalysisExclusionCreator", fields: [createdById], references: [id])
 
   @@unique([analysisOutcomeId, studyId])
+}
+
+// --- GRADE (certainty of evidence, phase C) --------------------------------
+
+enum GradeDomain {
+  RISK_OF_BIAS
+  INCONSISTENCY
+  INDIRECTNESS
+  IMPRECISION
+  PUBLICATION_BIAS
+}
+
+enum GradeJudgment {
+  NOT_SERIOUS
+  SERIOUS
+  VERY_SERIOUS
+}
+
+enum GradeCertainty {
+  HIGH
+  MODERATE
+  LOW
+  VERY_LOW
+}
+
+enum GradeAssessmentStatus {
+  DRAFT
+  REVIEWED // any subsequent edit flips back to DRAFT (service-enforced)
+}
+
+enum GradeStartingLevel {
+  HIGH // randomized evidence — certainty arithmetic starts at 4 points
+  LOW // non-randomized/observational — starts at 2 points
+}
+
+enum GradeRatingOrigin {
+  AUTO // deterministic tier-1 draft (no AI, pure rules over pooled results)
+  HUMAN // manually set or edited by a person
+  AI_APPLIED // AI prose suggestion applied by a person
+}
+
+// One assessment per analysis outcome. `certainty` is stored (recomputed in the same tx as
+// every rating/starting-level change) so SoF/export reads are cheap and consistent.
+model GradeAssessment {
+  id                String                @id @default(cuid())
+  analysisOutcomeId String                @unique
+  status            GradeAssessmentStatus @default(DRAFT)
+  startingLevel     GradeStartingLevel    @default(HIGH)
+  certainty         GradeCertainty
+  generatedAt       DateTime // when the deterministic draft last (re)ran
+  sourceFingerprint String? // canonical final-only statistics + RoB + outcome/protocol context
+  reviewedById      String?
+  reviewedAt        DateTime?
+  createdById       String
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  outcome    AnalysisOutcome     @relation(fields: [analysisOutcomeId], references: [id])
+  reviewedBy User?               @relation("GradeReviewer", fields: [reviewedById], references: [id])
+  createdBy  User                @relation("GradeAssessmentCreator", fields: [createdById], references: [id])
+  ratings    GradeDomainRating[]
+}
+
+// `metrics` snapshots the numbers the auto rule used (rounded, JSON-safe) so the UI can
+// show provenance and detect staleness against a live recompute. Regeneration replaces
+// only origin=AUTO ratings; HUMAN/AI_APPLIED ratings are preserved.
+model GradeDomainRating {
+  id             String            @id @default(cuid())
+  assessmentId   String
+  domain         GradeDomain
+  judgment       GradeJudgment
+  rationale      String
+  origin         GradeRatingOrigin @default(AUTO)
+  requiresReview Boolean           @default(false) // auto-draft marks irreducibly-human domains
+  metrics        Json?
+  updatedById    String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  assessment GradeAssessment @relation(fields: [assessmentId], references: [id])
+  updatedBy  User?           @relation("GradeRatingEditor", fields: [updatedById], references: [id])
+
+  @@unique([assessmentId, domain])
+}
+
+// One synchronous text-only structured call per outcome drafts per-domain prose (no PDF —
+// inputs are the deterministic metrics + protocol PICO). Sync run: PENDING → COMPLETED|FAILED.
+model AiGradeRun {
+  id                String      @id @default(cuid())
+  projectId         String
+  analysisOutcomeId String
+  status            AiRunStatus @default(PENDING)
+  provider          String
+  model             String
+  promptVersion     String
+  totalDomains      Int         @default(0)
+  suggestedCount    Int         @default(0)
+  invalidCount      Int         @default(0)
+  error             String?
+  usage             Json?
+  requestedById     String
+  createdAt         DateTime    @default(now())
+  completedAt       DateTime?
+
+  project     Project                 @relation(fields: [projectId], references: [id])
+  outcome     AnalysisOutcome         @relation(fields: [analysisOutcomeId], references: [id])
+  requestedBy User                    @relation("AiGradeRunRequester", fields: [requestedById], references: [id])
+  suggestions GradeDomainSuggestion[]
+
+  @@index([analysisOutcomeId, createdAt(sort: Desc)])
+  @@index([projectId, status])
+}
+
+// Latest-wins full replace per outcome (deleteMany + createMany in the ingest tx). Display +
+// apply-source only — never read by the certainty computation; a human applies a suggestion
+// through updateDomainRating, which is the audited event (suggestion rows are unaudited).
+model GradeDomainSuggestion {
+  id                String        @id @default(cuid())
+  runId             String
+  analysisOutcomeId String
+  domain            GradeDomain
+  suggestedJudgment GradeJudgment
+  rationale         String
+  confidence        Float?
+  provider          String
+  model             String
+  promptVersion     String
+  createdAt         DateTime      @default(now())
+
+  run     AiGradeRun      @relation(fields: [runId], references: [id])
+  outcome AnalysisOutcome @relation(fields: [analysisOutcomeId], references: [id])
+
+  @@unique([analysisOutcomeId, domain])
+  @@index([runId])
 }
 
 // One synchronous provider call per (study, tool) reads the study's linked PDF and drafts,

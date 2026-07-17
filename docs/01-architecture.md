@@ -66,25 +66,24 @@ src/
 | 10. Data extraction | ✅ (template builder, forms, values, dual + conflicts) | `services/extraction` |
 | 11. Risk of bias | ✅ (custom tools + built-in generic, dual + conflicts) | `services/rob` |
 | 12. PRISMA reporting | ✅ (live counts, snapshots, CSV/JSON export) | `services/prisma-report` |
-| 13. Meta-analysis | ⛳ extension point | `Study`/`ExtractionValue` schema designed for outcome data; service slot reserved |
-| 14. GRADE | ⛳ extension point | `OutcomeDefinition` is the future anchor entity |
+| 13. Meta-analysis | ✅ phase A+B | `lib/stats`, `services/analysis`, live forest/funnel plots, ANALYSIS export |
+| 14. GRADE | ✅ full | deterministic five-domain rules, audited review lifecycle, SoF + GRADE export |
 | 15. Audit trail | ✅ full | `services/audit` (cross-cutting) |
 | 16. Notifications | ⛳ extension point | audit events are the future event source |
-| 17. Exports | ✅ (CSV/JSON of citations, decisions, extraction, PRISMA, audit) | `services/exports` |
-| 18. AI assistant layer | ⛳ extension point | see "AI seams" below |
+| 17. Exports | ✅ (CSV/JSON incl. analysis + GRADE) | `services/exports` |
+| 18. AI assistant layer | ✅ screening/extraction/RoB/GRADE suggestions | separate `*Suggestion` tables; human apply paths |
 
-## Extension seams for advanced features (designed now, built later)
+## Advanced-feature architecture and remaining seams
 
-- **AI-assisted screening/extraction**: every human decision table is human-only. AI output will
-  live in separate `*Suggestion` tables (`ScreeningSuggestion`, `ExtractionSuggestion`) keyed to
-  the same entities, with model/version/confidence columns. Nothing in the MVP reads or writes
-  merged human+AI state, so adding suggestion tables is purely additive.
-  `ExtractionValue.sourceAnchor` (JSON) already reserves the source-anchoring slot
-  (page/paragraph/table-cell coordinates into a `FullTextFile`).
-- **Meta-analysis / GRADE**: `Study` (not `Citation`) is the analysis unit; extraction values are
-  typed JSON keyed by field definitions, so outcome data can be assembled per
-  `OutcomeDefinition`. A future `analysis` service (or Python sidecar) consumes these tables
-  read-only.
+- **AI assistance**: human decision/rating tables remain human-only. Model output lives in
+  separate `*Suggestion` tables with model/version/confidence provenance and reaches human state
+  only through explicit, audited apply paths. Source-bound GRADE advice is invalidated when its
+  assessment/evidence context changes.
+- **Meta-analysis / GRADE**: `Study` (not `Citation`) is the analysis unit. `services/analysis`
+  consumes resolved extraction values read-only; shared GRADE/SoF/AI outputs use its
+  caller-independent final-only seam. `services/grade` snapshots deterministic source/context
+  freshness while preserving audited human judgments. `AnalysisRole.STUDY_DESIGN` remains
+  deliberately unwired, so GRADE starting level is manual.
 - **Cohort-overlap detection**: `Study` ↔ `StudyReportLink` ↔ `Citation` already models
   many-reports-per-study; overlap detection adds candidate links, reusing the dedup
   candidate/review pattern.
