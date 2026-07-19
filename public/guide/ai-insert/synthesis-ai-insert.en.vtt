@@ -1,0 +1,23 @@
+WEBVTT
+
+NOTE Natural-voice transcript cues for the Synthesis AI feature insert
+
+1
+00:00:00.080 --> 00:00:07.000
+AI assistance in Synthesis is optional, and it is designed as a second set of eyes—not an automated decision-maker.
+
+2
+00:00:07.000 --> 00:00:16.000
+During title-and-abstract screening, it can score and prioritize citations, then show reviewers a suggested decision and rationale.
+
+3
+00:00:16.000 --> 00:00:27.000
+For extraction and risk of bias, it can read the linked PDF, propose values or domain judgments, and surface supporting quotes with page references.
+
+4
+00:00:27.000 --> 00:00:34.000
+In GRADE, it can draft per-domain rationale from the current pooled results and protocol context.
+
+5
+00:00:34.000 --> 00:00:43.800
+Suggestions stay separate from the authoritative record. A reviewer chooses what to apply, existing work is protected, and accepted changes follow the normal audit trail.

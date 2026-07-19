@@ -1,0 +1,92 @@
+Welcome to Synthesis, a traceable workspace for systematic reviews and meta-analyses.
+
+This overview follows a review from its protocol through screening, synthesis, and reporting.
+
+What you see is the seeded demonstration project, using the same workflows your team will use.
+
+
+Start by creating a project and assigning team roles.
+
+In Protocol, record the review question, narrative and structured PICO, eligibility criteria, outcomes, search plan, exclusion reasons, and analysis plan.
+
+Publish a version before screening.
+
+Later edits require an amendment note, so the methods history remains visible.
+
+
+Add each database as a source, then upload RIS, BibTeX, CSV, or NBIB exports.
+
+Synthesis previews every record and preserves parse errors before you commit a batch.
+
+The project always knows where each citation came from.
+
+
+Run duplicate detection before screening.
+
+Exact DOI and PMID matches sit alongside title-based suggestions for human review.
+
+Merge a pair, reject it, or undo a merge later; the original provenance is retained.
+
+
+Assign title-and-abstract and full-text work to one or more reviewers.
+
+The queue is keyboard first: I includes, E excludes, M marks maybe, N opens a note, and J skips.
+
+When blinding is enabled, reviewers cannot see one another's decisions.
+
+Disagreements become conflicts for an adjudicator, while agreed decisions advance automatically.
+
+
+The full-text workspace tracks retrieval attempts, attached PDFs, and screening status together.
+
+Included reports advance to studies.
+
+A full-text exclusion must use a configured reason, keeping PRISMA counts and exclusion tables consistent.
+
+
+Build a typed, versioned extraction template, publish it, and assign extractors.
+
+The living table resolves values in a clear order: adjudicated first, then consensus, then a single completed value.
+
+Evidence anchors reopen the exact supporting page and quote, and CSV export is always close at hand.
+
+
+For risk of bias, clone a standard instrument or build your own.
+
+Synthesis includes RoB 2, ROBINS-I, QUADAS-2, Newcastle-Ottawa, JBI, and AMSTAR 2.
+
+Reviewers assess domains independently; the traffic-light summary shows agreement, disagreements, and adjudicated judgments.
+
+
+Map extraction fields to an outcome once, and pooled results refresh as finalized evidence changes.
+
+Fixed and random effects, forest plots, prediction intervals, funnel plots, and small-study diagnostics are generated from deterministic statistical code, with incomplete or excluded studies called out.
+
+
+On the GRADE tab, Synthesis drafts five certainty domains from the pooled evidence and risk-of-bias results.
+
+Every judgment and rationale stays human-editable.
+
+Mark an assessment reviewed only when the evidence is current; source changes flag it as stale.
+
+
+The Summary of Findings brings together study counts, participants, relative effects, anticipated absolute effects, and certainty.
+
+Download the table as CSV when it is ready for your report.
+
+
+PRISMA counts are computed live from the same decisions that drive the workflow.
+
+Save a frozen snapshot for a submission, and download the publication-ready flow diagram as SVG or PNG.
+
+
+Finally, the audit trail records who changed what, when, and why.
+
+Role-aware filtering preserves reviewer blinding.
+
+Together with capability-gated exports, it gives the review a defensible chain from source record to final conclusion.
+
+
+That is Synthesis: one connected workspace for planning, screening, extraction, risk assessment, synthesis, and reporting.
+
+Open the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.

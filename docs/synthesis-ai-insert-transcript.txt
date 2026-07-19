@@ -1,0 +1,9 @@
+AI assistance in Synthesis is optional, and it is designed as a second set of eyes—not an automated decision-maker.
+
+During title-and-abstract screening, it can score and prioritize citations, then show reviewers a suggested decision and rationale.
+
+For extraction and risk of bias, it can read the linked PDF, propose values or domain judgments, and surface supporting quotes with page references.
+
+In GRADE, it can draft per-domain rationale from the current pooled results and protocol context.
+
+Suggestions stay separate from the authoritative record. A reviewer chooses what to apply, existing work is protected, and accepted changes follow the normal audit trail.

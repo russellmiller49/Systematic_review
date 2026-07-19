@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { BookOpenCheck, GitBranch, ShieldCheck, Users } from "lucide-react";
+import { BookOpenCheck, GitBranch, PlayCircle, ShieldCheck, Users } from "lucide-react";
 import { auth } from "@/server/auth";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -23,7 +23,7 @@ export default async function LandingPage() {
           Protocols, screening, extraction, risk of bias, and PRISMA reporting — with every
           decision traceable back to the source evidence and the human judgment that produced it.
         </p>
-        <div className="flex gap-3 pt-2">
+        <div className="flex flex-wrap gap-3 pt-2">
           <Link href="/sign-up" className={cn(buttonVariants({ size: "lg" }), "px-6")}>
             Create an account
           </Link>
@@ -32,6 +32,12 @@ export default async function LandingPage() {
             className={cn(buttonVariants({ size: "lg", variant: "outline" }), "px-6")}
           >
             Sign in
+          </Link>
+          <Link
+            href="/guide#overview-video"
+            className={cn(buttonVariants({ size: "lg", variant: "ghost" }), "px-5")}
+          >
+            <PlayCircle /> Watch overview
           </Link>
         </div>
       </div>

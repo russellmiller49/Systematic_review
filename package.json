@@ -5,6 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:guide-video": "tsx scripts/build-guide-video.ts",
+    "build:guide-ai-insert": "tsx scripts/build-guide-ai-insert.ts",
+    "prepare:guide-ai-capture": "tsx scripts/prepare-guide-ai-capture.ts",
+    "stabilize:guide-overview": "tsx scripts/stabilize-updated-overview.ts",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:integration",

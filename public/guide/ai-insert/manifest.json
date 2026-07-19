@@ -1,0 +1,83 @@
+{
+  "title": "Synthesis AI feature insert",
+  "purpose": "Silent visual insert for a separately recorded natural voiceover",
+  "intendedInsertAt": "00:02:59.334",
+  "durationSeconds": 44,
+  "frameRate": 30,
+  "resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "video": {
+    "codec": "H.264",
+    "profile": "High",
+    "pixelFormat": "yuvj420p"
+  },
+  "audio": {
+    "codec": "AAC-LC",
+    "sampleRate": 48000,
+    "channels": 1,
+    "content": "silence"
+  },
+  "transcript": "docs/synthesis-ai-insert-transcript.txt",
+  "detailedScript": "docs/synthesis-ai-insert-script.md",
+  "output": {
+    "path": "public/guide/ai-insert/synthesis-ai-insert-silent.mp4",
+    "bytes": 5385513,
+    "sha256": "4be883396bbc271d419dca45001ca9f5fb37ce1ee3ac2b16481d631580966478",
+    "probedDurationSeconds": 44,
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "h264",
+        "profile": "High",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuvj420p",
+        "level": 40,
+        "r_frame_rate": "30/1"
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "profile": "LC",
+        "sample_rate": "48000",
+        "channels": 1,
+        "channel_layout": "mono",
+        "r_frame_rate": "0/0"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "path": "public/guide/captures/01-dashboard.jpg",
+      "sha256": "6961bbd5d5a6999a6bb772175111df6a3fe0657a04dfabb418c32acde67931bd",
+      "durationSeconds": 7
+    },
+    {
+      "path": "public/guide/ai-insert/captures/02-ai-screening.jpg",
+      "sha256": "94ab3f44ad4dc02f5bbe7fec7f348d6d90f9ad03e6e54d59350b4e9064632a7a",
+      "durationSeconds": 9
+    },
+    {
+      "path": "public/guide/ai-insert/captures/03-ai-extraction.jpg",
+      "sha256": "ce70f1a5f95718711daaf553e5f43cc53426ebeab8c39e517af42030397b79ee",
+      "durationSeconds": 5.5
+    },
+    {
+      "path": "public/guide/ai-insert/captures/04-ai-rob.jpg",
+      "sha256": "36614f0a96430bfd69c90c633e5b2e227c8f6d36e83fd9b1974aea49be3eae24",
+      "durationSeconds": 5.5
+    },
+    {
+      "path": "public/guide/ai-insert/captures/05-ai-grade.jpg",
+      "sha256": "fedbb83e48348cca4ce54a3e5da156b6d93e36a75a7cfa1145256f2f80ed1dfe",
+      "durationSeconds": 7
+    },
+    {
+      "path": "public/guide/ai-insert/captures/06-ai-audit.jpg",
+      "sha256": "1dc38d9fe5680067b385f04b5f2ac240fee824b5365b2d7b96a72c1a49d59c6c",
+      "durationSeconds": 10
+    }
+  ]
+}

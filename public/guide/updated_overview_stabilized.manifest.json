@@ -1,0 +1,281 @@
+{
+  "title": "Synthesis updated overview — stabilized",
+  "method": "Stable frame holds replace jittery zoom/pan motion; measured scene timing and the encoded narration are preserved.",
+  "source": {
+    "path": "public/guide/updated_overview.mp4",
+    "bytes": 90802360,
+    "sha256": "e032d56c1cd6ee64ea420454cec2ac39b47a2ec029672e48c06aed1100de80be",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "index": 0,
+          "codec_name": "h264",
+          "profile": "High",
+          "width": 1422,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "level": 32,
+          "r_frame_rate": "30/1",
+          "time_base": "1/15360",
+          "bit_rate": "2086249",
+          "nb_read_frames": "9359"
+        },
+        {
+          "index": 1,
+          "codec_name": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "r_frame_rate": "0/0",
+          "time_base": "1/48000",
+          "bit_rate": "233352",
+          "nb_read_frames": "14625"
+        }
+      ],
+      "format": {
+        "duration": "312.000000",
+        "size": "90802360",
+        "bit_rate": "2328265"
+      }
+    }
+  },
+  "output": {
+    "path": "public/guide/updated_overview_stabilized.mp4",
+    "bytes": 16413218,
+    "sha256": "aab68fc6d304fb2c239b9cadec88629a4ffda040888e0e8e1942b8ce4f1d15f0",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "index": 0,
+          "codec_name": "h264",
+          "profile": "High",
+          "width": 1422,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "level": 32,
+          "r_frame_rate": "30/1",
+          "time_base": "1/15360",
+          "bit_rate": "178649",
+          "nb_read_frames": "9360"
+        },
+        {
+          "index": 1,
+          "codec_name": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "r_frame_rate": "0/0",
+          "time_base": "1/48000",
+          "bit_rate": "233352",
+          "nb_read_frames": "14625"
+        }
+      ],
+      "format": {
+        "duration": "312.000000",
+        "size": "16413218",
+        "bit_rate": "420851"
+      }
+    }
+  },
+  "expectedFrames": 9360,
+  "fps": 30,
+  "audio": "AAC stream copied from the source without re-encoding",
+  "scenes": [
+    {
+      "label": "Overview",
+      "startFrame": 0,
+      "endFrame": 518,
+      "startSeconds": 0,
+      "endSeconds": 17.266666666666666,
+      "sampleFrame": 24,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Protocol",
+      "startFrame": 518,
+      "endFrame": 1201,
+      "startSeconds": 17.266666666666666,
+      "endSeconds": 40.03333333333333,
+      "sampleFrame": 542,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Import",
+      "startFrame": 1201,
+      "endFrame": 1767,
+      "startSeconds": 40.03333333333333,
+      "endSeconds": 58.9,
+      "sampleFrame": 1225,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Deduplication",
+      "startFrame": 1767,
+      "endFrame": 2259,
+      "startSeconds": 58.9,
+      "endSeconds": 75.3,
+      "sampleFrame": 1791,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Screening",
+      "startFrame": 2259,
+      "endFrame": 2998,
+      "startSeconds": 75.3,
+      "endSeconds": 99.93333333333334,
+      "sampleFrame": 2283,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Full text",
+      "startFrame": 2998,
+      "endFrame": 3557,
+      "startSeconds": 99.93333333333334,
+      "endSeconds": 118.56666666666666,
+      "sampleFrame": 3022,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Extraction",
+      "startFrame": 3557,
+      "endFrame": 4211,
+      "startSeconds": 118.56666666666666,
+      "endSeconds": 140.36666666666667,
+      "sampleFrame": 3581,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Risk of bias",
+      "startFrame": 4211,
+      "endFrame": 4873,
+      "startSeconds": 140.36666666666667,
+      "endSeconds": 162.43333333333334,
+      "sampleFrame": 4235,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Analysis",
+      "startFrame": 4873,
+      "endFrame": 5552,
+      "startSeconds": 162.43333333333334,
+      "endSeconds": 185.06666666666666,
+      "sampleFrame": 4897,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "GRADE",
+      "startFrame": 5552,
+      "endFrame": 6089,
+      "startSeconds": 185.06666666666666,
+      "endSeconds": 202.96666666666667,
+      "sampleFrame": 5576,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "AI assistance — principle",
+      "startFrame": 6089,
+      "endFrame": 6344,
+      "startSeconds": 202.96666666666667,
+      "endSeconds": 211.46666666666667,
+      "sampleFrame": 6113,
+      "fadeIn": true,
+      "fadeOut": false
+    },
+    {
+      "label": "AI assistance — screening",
+      "startFrame": 6344,
+      "endFrame": 6640,
+      "startSeconds": 211.46666666666667,
+      "endSeconds": 221.33333333333334,
+      "sampleFrame": 6353,
+      "fadeIn": false,
+      "fadeOut": false
+    },
+    {
+      "label": "AI assistance — extraction",
+      "startFrame": 6640,
+      "endFrame": 6955,
+      "startSeconds": 221.33333333333334,
+      "endSeconds": 231.83333333333334,
+      "sampleFrame": 6649,
+      "fadeIn": false,
+      "fadeOut": false
+    },
+    {
+      "label": "AI assistance — GRADE",
+      "startFrame": 6955,
+      "endFrame": 7162,
+      "startSeconds": 231.83333333333334,
+      "endSeconds": 238.73333333333332,
+      "sampleFrame": 6964,
+      "fadeIn": false,
+      "fadeOut": false
+    },
+    {
+      "label": "AI assistance — auditability",
+      "startFrame": 7162,
+      "endFrame": 7524,
+      "startSeconds": 238.73333333333332,
+      "endSeconds": 250.8,
+      "sampleFrame": 7171,
+      "fadeIn": false,
+      "fadeOut": true
+    },
+    {
+      "label": "Summary of Findings",
+      "startFrame": 7524,
+      "endFrame": 7939,
+      "startSeconds": 250.8,
+      "endSeconds": 264.6333333333333,
+      "sampleFrame": 7548,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "PRISMA",
+      "startFrame": 7939,
+      "endFrame": 8355,
+      "startSeconds": 264.6333333333333,
+      "endSeconds": 278.5,
+      "sampleFrame": 7963,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Audit trail",
+      "startFrame": 8355,
+      "endFrame": 8858,
+      "startSeconds": 278.5,
+      "endSeconds": 295.26666666666665,
+      "sampleFrame": 8379,
+      "fadeIn": true,
+      "fadeOut": true
+    },
+    {
+      "label": "Closing",
+      "startFrame": 8858,
+      "endFrame": 9360,
+      "startSeconds": 295.26666666666665,
+      "endSeconds": 312,
+      "sampleFrame": 8882,
+      "fadeIn": true,
+      "fadeOut": true
+    }
+  ]
+}

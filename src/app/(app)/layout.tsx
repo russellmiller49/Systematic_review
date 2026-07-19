@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { BookOpenCheck } from "lucide-react";
+import { BookOpenCheck, BookOpenText } from "lucide-react";
 import { auth } from "@/server/auth";
 import { UserMenu } from "@/components/layout/user-menu";
 
@@ -15,7 +15,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <BookOpenCheck className="h-5 w-5" />
           <span className="font-semibold tracking-tight">Synthesis</span>
         </Link>
-        <UserMenu name={session.user.name ?? ""} email={session.user.email ?? ""} />
+        <div className="flex items-center gap-1">
+          <Link
+            href="/guide"
+            className="inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <BookOpenText className="h-4 w-4" />
+            <span className="hidden sm:inline">User guide</span>
+          </Link>
+          <UserMenu name={session.user.name ?? ""} email={session.user.email ?? ""} />
+        </div>
       </header>
       <div className="flex flex-1">{children}</div>
     </div>

@@ -1,0 +1,163 @@
+WEBVTT
+
+NOTE Narration for the Synthesis product overview
+
+1.1
+00:00:00.080 --> 00:00:04.533
+Welcome to Synthesis, a traceable workspace for systematic reviews and meta-analyses.
+
+1.2
+00:00:04.533 --> 00:00:09.796
+This overview follows a review from its protocol through screening, synthesis, and reporting.
+
+1.3
+00:00:09.796 --> 00:00:16.274
+What you see is the seeded demonstration project, using the same workflows your team will use.
+
+2.1
+00:00:16.944 --> 00:00:21.050
+Start by creating a project and assigning team roles.
+
+2.2
+00:00:21.050 --> 00:00:30.176
+In Protocol, record the review question, narrative and structured PICO, eligibility criteria, outcomes, search plan, exclusion reasons, and analysis plan.
+
+2.3
+00:00:30.176 --> 00:00:32.458
+Publish a version before screening.
+
+2.4
+00:00:32.458 --> 00:00:37.933
+Later edits require an amendment note, so the methods history remains visible.
+
+3.1
+00:00:38.603 --> 00:00:44.438
+Add each database as a source, then upload RIS, BibTeX, CSV, or NBIB exports.
+
+3.2
+00:00:44.438 --> 00:00:49.856
+Synthesis previews every record and preserves parse errors before you commit a batch.
+
+3.3
+00:00:49.856 --> 00:00:53.607
+The project always knows where each citation came from.
+
+4.1
+00:00:54.277 --> 00:00:56.359
+Run duplicate detection before screening.
+
+4.2
+00:00:56.359 --> 00:01:01.354
+Exact DOI and PMID matches sit alongside title-based suggestions for human review.
+
+4.3
+00:01:01.354 --> 00:01:07.597
+Merge a pair, reject it, or undo a merge later; the original provenance is retained.
+
+5.1
+00:01:08.267 --> 00:01:12.462
+Assign title-and-abstract and full-text work to one or more reviewers.
+
+5.2
+00:01:12.462 --> 00:01:20.431
+The queue is keyboard first: I includes, E excludes, M marks maybe, N opens a note, and J skips.
+
+5.3
+00:01:20.431 --> 00:01:24.625
+When blinding is enabled, reviewers cannot see one another's decisions.
+
+5.4
+00:01:24.625 --> 00:01:29.239
+Disagreements become conflicts for an adjudicator, while agreed decisions advance automatically.
+
+6.1
+00:01:29.909 --> 00:01:35.581
+The full-text workspace tracks retrieval attempts, attached PDFs, and screening status together.
+
+6.2
+00:01:35.581 --> 00:01:37.944
+Included reports advance to studies.
+
+6.3
+00:01:37.944 --> 00:01:45.034
+A full-text exclusion must use a configured reason, keeping PRISMA counts and exclusion tables consistent.
+
+7.1
+00:01:45.704 --> 00:01:50.276
+Build a typed, versioned extraction template, publish it, and assign extractors.
+
+7.2
+00:01:50.276 --> 00:01:57.759
+The living table resolves values in a clear order: adjudicated first, then consensus, then a single completed value.
+
+7.3
+00:01:57.759 --> 00:02:04.826
+Evidence anchors reopen the exact supporting page and quote, and CSV export is always close at hand.
+
+8.1
+00:02:05.496 --> 00:02:11.737
+For risk of bias, clone a standard instrument or build your own.
+
+8.2
+00:02:11.737 --> 00:02:17.458
+Synthesis includes RoB 2, ROBINS-I, QUADAS-2, Newcastle-Ottawa, JBI, and AMSTAR 2.
+
+8.3
+00:02:17.458 --> 00:02:24.220
+Reviewers assess domains independently; the traffic-light summary shows agreement, disagreements, and adjudicated judgments.
+
+9.1
+00:02:24.890 --> 00:02:31.763
+Map extraction fields to an outcome once, and pooled results refresh as finalized evidence changes.
+
+9.2
+00:02:31.763 --> 00:02:43.675
+Fixed and random effects, forest plots, prediction intervals, funnel plots, and small-study diagnostics are generated from deterministic statistical code, with incomplete or excluded studies called out.
+
+10.1
+00:02:44.345 --> 00:02:50.408
+On the GRADE tab, Synthesis drafts five certainty domains from the pooled evidence and risk-of-bias results.
+
+10.2
+00:02:50.408 --> 00:02:52.681
+Every judgment and rationale stays human-editable.
+
+10.3
+00:02:52.681 --> 00:02:58.744
+Mark an assessment reviewed only when the evidence is current; source changes flag it as stale.
+
+11.1
+00:02:59.414 --> 00:03:06.385
+The Summary of Findings brings together study counts, participants, relative effects, anticipated absolute effects, and certainty.
+
+11.2
+00:03:06.385 --> 00:03:11.613
+Download the table as CSV when it is ready for your report.
+
+12.1
+00:03:12.283 --> 00:03:17.029
+PRISMA counts are computed live from the same decisions that drive the workflow.
+
+12.2
+00:03:17.029 --> 00:03:23.237
+Save a frozen snapshot for a submission, and download the publication-ready flow diagram as SVG or PNG.
+
+13.1
+00:03:23.907 --> 00:03:28.631
+Finally, the audit trail records who changed what, when, and why.
+
+13.2
+00:03:28.631 --> 00:03:30.778
+Role-aware filtering preserves reviewer blinding.
+
+13.3
+00:03:30.778 --> 00:03:38.080
+Together with capability-gated exports, it gives the review a defensible chain from source record to final conclusion.
+
+14.1
+00:03:38.750 --> 00:03:46.745
+That is Synthesis: one connected workspace for planning, screening, extraction, risk assessment, synthesis, and reporting.
+
+14.2
+00:03:46.745 --> 00:03:53.141
+Open the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.

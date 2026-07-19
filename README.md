@@ -8,6 +8,10 @@ a complete, blinding-aware audit trail at every step.
 Built with Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind v4 · Prisma ·
 PostgreSQL · Auth.js.
 
+The in-product [user guide](http://localhost:3000/guide) includes a searchable workflow,
+role guidance, screening shortcuts, troubleshooting, and a narrated captioned overview of the
+seeded demo project.
+
 ## What it does
 
 - **Organizations & projects** — multi-tenant workspaces with per-project role-based permissions

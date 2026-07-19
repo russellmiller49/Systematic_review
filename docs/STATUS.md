@@ -4,6 +4,47 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-18) — public guide, overview, and AI feature insert — DONE
+
+The application now includes a polished, public `/guide` experience and a narrated product
+overview that walk new users through the complete systematic-review workflow.
+
+### What landed
+
+- A responsive, searchable user guide covering protocol setup, importing, deduplication,
+  screening, full-text review, extraction, risk of bias, analysis, GRADE, Summary of Findings,
+  PRISMA reporting, team roles, keyboard shortcuts, quality checks, and common questions.
+- A 3:53 narrated MP4 built from 13 real seeded-workspace captures, with a poster image,
+  English WebVTT captions, chapter navigation, an on-page transcript, and an MP4 download.
+- Public entry points from the landing page plus a persistent `User guide` link in the signed-in
+  application header. The guide's `Open workspace` action continues through the existing auth
+  flow for signed-out visitors.
+- Reproducible video source in `scripts/build-guide-video.ts`; `npm run build:guide-video`
+  regenerates the checked-in deployment assets from `public/guide/captures`.
+- A separate 44-second AI feature insert uses real screens for assisted screening, extraction,
+  risk of bias, GRADE, and the audit trail. It includes a silent conforming audio track for a
+  natural voiceover, timed narration/captions, chapter cues, a poster, and an exact splice point
+  at `02:59.334` between GRADE and Summary of Findings.
+- Reproducible AI capture and render sources in `scripts/prepare-guide-ai-capture.ts` and
+  `scripts/build-guide-ai-insert.ts`. The capture fixture is hard-guarded to the isolated
+  `srb_video` database and never calls an external model; the output manifest records hashes for
+  every preserved source screen and the rendered MP4.
+
+### Verification
+
+- Browser-checked `/guide` at 1280×720 and 390×844, including search filtering and responsive
+  layout. The video reached ready state with the expected 233.817-second duration and both
+  caption and chapter tracks attached.
+- Full MP4 decode completed with no FFmpeg errors. HTTP checks return `video/mp4`,
+  `text/vtt; charset=UTF-8`, and `image/jpeg`, all with byte-range support.
+- The AI insert decodes cleanly and contains exactly 1,320 frames / 44.000 seconds at 1920×1080
+  and 30 fps. Its H.264 High level 4.0 video, full-range 4:2:0 pixel format, 1/15360 time base,
+  and AAC-LC 48 kHz mono track match the existing overview. Audio analysis confirms the track is
+  silent (`-91.0 dB`), and a six-frame contact-sheet review confirmed every scene and label.
+- `npm run typecheck` and `npm run build` are clean; `/guide` is statically prerendered.
+- `npm run test:unit` — **558 passed / 48 files**.
+- `npm run test:integration` — **255 passed / 22 files**.
+
 ## Current state (2026-07-16) — roadmap Wave 4 (GRADE + Summary of Findings) — DONE
 
 Wave 4 is built, adversarially reviewed, and fully verified. This completes the four-wave
