@@ -10,10 +10,11 @@
 - **Multiple roles per member** (`ProjectMember.roles: ProjectRole[]`): effective capabilities =
   union. A removed member (`status=REMOVED`) has **no** capabilities but their historical work
   remains attributed.
-- Org roles are simpler: `OWNER|ADMIN` manage org + create projects; `MEMBER` sees org and their
-  projects. Org OWNER/ADMIN do **not** implicitly bypass project permissions (a librarian-run org
-  must not let org admins alter screening data); they can add themselves to a project as OWNER —
-  which is itself audited.
+- Org roles are simpler: every ACTIVE `OWNER|ADMIN|MEMBER` may create organizations and projects;
+  a project creator becomes that project's `OWNER`. `OWNER|ADMIN` additionally manage the
+  organization's members and invitations. Org OWNER/ADMIN do **not** implicitly bypass project
+  permissions (a librarian-run org must not let org admins alter screening data); access to an
+  existing project still requires explicit project membership.
 
 ## Capability matrix
 

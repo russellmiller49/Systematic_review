@@ -26,19 +26,26 @@ async function requirePilotSignupAccess(email: string) {
   const allowlist = parsePilotEmailAllowlist(process.env.PILOT_EMAIL_ALLOWLIST);
   if (allowlist.size === 0 || allowlist.has(email)) return;
 
-  // Once the pilot owner creates an invitation, that email may register without a deploy-time
-  // allowlist change. The one-time token is still required to join the project.
-  const invitation = await prisma.projectInvitation.findFirst({
-    where: {
-      email,
-      acceptedAt: null,
-      revokedAt: null,
-      expiresAt: { gt: new Date() },
-    },
-    select: { id: true },
-  });
-  if (!invitation) {
-    throw forbidden("This pilot is invitation-only. Ask the project owner for access.");
+  // Once an owner creates an organization or project invitation, that email may register
+  // without a deploy-time allowlist change. The token is still required to join its target.
+  const activeInvitationWhere = {
+    email,
+    acceptedAt: null,
+    revokedAt: null,
+    expiresAt: { gt: new Date() },
+  };
+  const [organizationInvitation, projectInvitation] = await Promise.all([
+    prisma.organizationInvitation.findFirst({
+      where: activeInvitationWhere,
+      select: { id: true },
+    }),
+    prisma.projectInvitation.findFirst({
+      where: activeInvitationWhere,
+      select: { id: true },
+    }),
+  ]);
+  if (!organizationInvitation && !projectInvitation) {
+    throw forbidden("This pilot is invitation-only. Ask a workspace or project owner for access.");
   }
 }
 

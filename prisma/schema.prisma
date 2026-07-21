@@ -276,6 +276,7 @@ model User {
   createdOrgs             Organization[]             @relation("OrgCreator")
   createdProjects         Project[]                  @relation("ProjectCreator")
   sentInvitations         ProjectInvitation[]        @relation("InvitationSender")
+  sentOrgInvitations      OrganizationInvitation[]   @relation("OrganizationInvitationSender")
   protocolVersions        ProtocolVersion[]          @relation("ProtocolVersionAuthor")
   protocolAmendments      ProtocolAmendment[]        @relation("AmendmentAuthor")
   importBatches           ImportBatch[]              @relation("ImportCreator")
@@ -317,9 +318,10 @@ model Organization {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  createdBy User                 @relation("OrgCreator", fields: [createdById], references: [id])
-  members   OrganizationMember[]
-  projects  Project[]
+  createdBy   User                     @relation("OrgCreator", fields: [createdById], references: [id])
+  members     OrganizationMember[]
+  invitations OrganizationInvitation[]
+  projects    Project[]
 }
 
 model OrganizationMember {
@@ -335,6 +337,25 @@ model OrganizationMember {
   user User         @relation(fields: [userId], references: [id])
 
   @@unique([orgId, userId])
+}
+
+model OrganizationInvitation {
+  id          String    @id @default(cuid())
+  orgId       String
+  email       String // lowercased
+  role        OrgRole
+  token       String    @unique // crypto.randomBytes(32) base64url; returned only at creation
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id])
+  invitedBy    User         @relation("OrganizationInvitationSender", fields: [invitedById], references: [id])
+
+  @@index([orgId])
+  @@index([email])
 }
 
 model Project {

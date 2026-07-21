@@ -4,6 +4,38 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-20) — organization invitations + beta-tester onboarding — DONE
+
+- Owners/Admins can create, list, and revoke 14-day organization invitation links from the
+  organization dashboard. Tokens are exact-email, one-time, returned only on creation, and
+  never exposed by list responses or audit payloads.
+- Active organization invitations now unlock the pilot signup gate. The acceptance flow creates
+  or reactivates organization membership and redirects the invitee into the workspace.
+- The dashboard offers **Member / beta tester**, **Workspace admin**, and **Workspace owner**
+  access levels. Any active member can create a project and becomes that project's full-access
+  Owner; organization roles do not silently grant access to other teams' existing projects.
+- Migration: `20260720120000_organization_invitations`. New service coverage verifies signup,
+  exact-email/expiry/revocation guards, tenant scoping, token secrecy, auditing, and beta-tester
+  project ownership. A Playwright flow covers invite creation through signup, acceptance, and
+  creating a first project.
+- Verification: Prisma schema valid, typecheck and production build clean, **558 unit**, **260
+  integration**, and **10 E2E** tests pass.
+
+## Current state (2026-07-19) — updated natural-voice overview wired into guide — DONE
+
+- The public `/guide` player and MP4 download now use the stabilized 5:12 overview with the
+  updated natural narration and the integrated AI-assistance section.
+- The player matches the replacement video's native 1422×720 aspect ratio and uses a poster
+  extracted from that render instead of the previous 16:9 overview poster.
+- English captions were retimed against the updated narration, chapter navigation now covers
+  all 15 sections through the 312-second endpoint, and the on-page transcript includes the AI
+  segment with the downstream chapters renumbered.
+- The previous overview remains preserved as a build artifact; the guide no longer references
+  it. The stabilized render remains reproducible with `npm run stabilize:guide-overview`.
+- Verification: full MP4 decode is clean; production-mode HTTP checks returned byte-range MP4,
+  `text/vtt` caption/chapter tracks, and the matching JPEG poster; `npm run typecheck`, the
+  production build, 558 unit tests, and 255 integration tests all pass.
+
 ## Current state (2026-07-18) — public guide, overview, and AI feature insert — DONE
 
 The application now includes a polished, public `/guide` experience and a narrated product

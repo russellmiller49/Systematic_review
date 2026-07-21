@@ -21,7 +21,9 @@
    `tests/integration/*.test.ts`, run serially (`fileParallelism: false`), per-suite truncation.
    - Auth/authz: sign-up, session, 401s; 403 for every capability a role lacks (spot-matrix).
    - Project lifecycle: create → defaults (stages, exclusion reasons) exist; member add/role
-     change/soft-remove keeps decisions attributed; invitation accept.
+     change/soft-remove keeps decisions attributed; project invitation accept.
+   - Organization onboarding: invitation create/list/revoke/accept, exact-email and expiry
+     guards, signup-gate access, and invited MEMBER creates a project as its OWNER.
    - Protocol: edit before screening = no amendment; edit after first decision without reason →
      422; with reason → amendment + version increment.
    - Import: RIS/BibTeX/CSV upload → preview rows (incl. row errors) → commit → citations +

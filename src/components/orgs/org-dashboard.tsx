@@ -2,26 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { FolderKanban, Plus, UserPlus } from "lucide-react";
+import { FolderKanban } from "lucide-react";
 import { toast } from "sonner";
-import { api, apiPost, ApiError } from "@/lib/api";
-import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
+import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
+import {
+  OrganizationInvitationsSection,
+  organizationRoleLabel,
+} from "@/components/orgs/organization-invitations-section";
 
 interface OrgDetail {
   id: string;
@@ -59,34 +51,20 @@ export function OrgDashboard({ orgId }: { orgId: string }) {
   const [org, setOrg] = useState<OrgDetail | null>(null);
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("MEMBER");
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    api<OrgDetail>(`/api/orgs/${orgId}`).then(setOrg).catch(() => toast.error("Failed to load organization"));
-    api<ProjectRow[]>(`/api/orgs/${orgId}/projects`).then(setProjects).catch(() => setProjects([]));
-    api<MemberRow[]>(`/api/orgs/${orgId}/members`).then(setMembers).catch(() => setMembers([]));
+    api<OrgDetail>(`/api/orgs/${orgId}`)
+      .then(setOrg)
+      .catch(() => toast.error("Failed to load organization"));
+    api<ProjectRow[]>(`/api/orgs/${orgId}/projects`)
+      .then(setProjects)
+      .catch(() => setProjects([]));
+    api<MemberRow[]>(`/api/orgs/${orgId}/members`)
+      .then(setMembers)
+      .catch(() => setMembers([]));
   }, [orgId]);
 
   useEffect(load, [load]);
-
-  async function addMember(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      await apiPost(`/api/orgs/${orgId}/members`, { email: inviteEmail, role: inviteRole });
-      toast.success("Member added");
-      setInviteOpen(false);
-      setInviteEmail("");
-      load();
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to add member");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const canManage = org?.myRole === "OWNER" || org?.myRole === "ADMIN";
 
@@ -99,7 +77,9 @@ export function OrgDashboard({ orgId }: { orgId: string }) {
           ) : (
             <Skeleton className="h-8 w-56" />
           )}
-          <p className="text-sm text-muted-foreground">Projects and team for this workspace.</p>
+          <p className="text-sm text-muted-foreground">
+            Projects and team for this workspace. Every member can create and own projects.
+          </p>
         </div>
         <NewProjectDialog orgId={orgId} onCreated={load} />
       </div>
@@ -140,49 +120,10 @@ export function OrgDashboard({ orgId }: { orgId: string }) {
         )}
       </section>
 
+      {canManage && <OrganizationInvitationsSection orgId={orgId} />}
+
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">Members</h2>
-          {canManage && (
-            <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <UserPlus /> Add member
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Add member by email</DialogTitle>
-                </DialogHeader>
-                <form onSubmit={addMember} className="space-y-4">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="m-email">Email (existing account)</Label>
-                    <Input
-                      id="m-email"
-                      type="email"
-                      required
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="m-role">Role</Label>
-                    <Select id="m-role" value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
-                      <option value="MEMBER">Member</option>
-                      <option value="ADMIN">Admin</option>
-                      <option value="OWNER">Owner</option>
-                    </Select>
-                  </div>
-                  <DialogFooter>
-                    <Button type="submit" disabled={busy}>
-                      {busy && <Spinner />} Add
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
-          )}
-        </div>
+        <h2 className="text-lg font-medium">Members</h2>
         {members === null ? (
           <Skeleton className="h-32" />
         ) : (
@@ -201,7 +142,7 @@ export function OrgDashboard({ orgId }: { orgId: string }) {
                   <TableCell className="font-medium">{m.user.name}</TableCell>
                   <TableCell className="text-muted-foreground">{m.user.email}</TableCell>
                   <TableCell>
-                    <Badge variant="secondary">{m.role.toLowerCase()}</Badge>
+                    <Badge variant="secondary">{organizationRoleLabel(m.role)}</Badge>
                   </TableCell>
                   <TableCell>
                     <Badge variant={m.status === "ACTIVE" ? "include" : "muted"}>

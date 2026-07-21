@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
-import { guideFaqs, guideRoles, guideSteps, videoChapters } from "@/content/user-guide";
+import { guideFaqs, guideRoles, guideSteps, updatedVideoChapters } from "@/content/user-guide";
 
 const PHASE_STYLES: Record<string, string> = {
   Plan: "bg-indigo-50 text-indigo-700 ring-indigo-200",
@@ -195,11 +195,11 @@ export function UserGuide() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-300">Video overview</p>
                 <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
-                  See the complete review in under four minutes.
+                  See the complete review in about five minutes.
                 </h2>
                 <p className="mt-4 leading-7 text-slate-300">
                   A narrated tour of the real seeded workspace—from a versioned protocol to
-                  PRISMA, GRADE, and the audit trail.
+                  PRISMA, GRADE, optional AI assistance, and the audit trail.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-2 text-xs text-slate-300">
                   <span className="rounded-full border border-slate-700 px-3 py-1.5">English captions</span>
@@ -209,21 +209,26 @@ export function UserGuide() {
               </div>
               <div className="overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl shadow-black/30">
                 <video
-                  className="aspect-video w-full bg-black"
+                  className="aspect-[79/40] w-full bg-black object-contain"
                   controls
                   preload="metadata"
-                  poster="/guide/overview-poster.jpg"
+                  poster="/guide/updated_overview_stabilized-poster.jpg"
                   aria-label="Synthesis systematic review software overview"
                 >
-                  <source src="/guide/synthesis-overview.mp4" type="video/mp4" />
+                  <source src="/guide/updated_overview_stabilized.mp4" type="video/mp4" />
                   <track
                     kind="captions"
-                    src="/guide/synthesis-overview.en.vtt"
+                    src="/guide/updated_overview_stabilized.en.vtt"
                     srcLang="en"
                     label="English"
                     default
                   />
-                  <track kind="chapters" src="/guide/synthesis-overview.chapters.vtt" srcLang="en" label="Chapters" />
+                  <track
+                    kind="chapters"
+                    src="/guide/updated_overview_stabilized.chapters.vtt"
+                    srcLang="en"
+                    label="Chapters"
+                  />
                   Your browser does not support embedded video. You can download the overview below.
                 </video>
               </div>
@@ -231,7 +236,7 @@ export function UserGuide() {
             <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 pt-6">
               <p className="text-sm text-slate-400">Prefer to watch offline?</p>
               <a
-                href="/guide/synthesis-overview.mp4"
+                href="/guide/updated_overview_stabilized.mp4"
                 download
                 className="inline-flex items-center gap-2 text-sm font-medium text-indigo-300 hover:text-indigo-200"
               >
@@ -241,7 +246,7 @@ export function UserGuide() {
             <details className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
               <summary className="cursor-pointer font-medium text-slate-100">Read the video transcript</summary>
               <div className="mt-5 grid gap-5 text-sm leading-7 text-slate-300 md:grid-cols-2">
-                {videoChapters.map((chapter) => (
+                {updatedVideoChapters.map((chapter) => (
                   <div key={`${chapter.label}-${chapter.title}`}>
                     <p className="text-xs font-semibold uppercase tracking-[0.15em] text-indigo-300">{chapter.label}</p>
                     <p className="mt-1 font-medium text-white">{chapter.title}</p>

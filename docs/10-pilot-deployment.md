@@ -113,9 +113,12 @@ Then complete this browser smoke test:
 2. Create the organization and pilot project.
 3. Import a tiny citation file, create assignments, and make one screening decision.
 4. Upload and reopen a small PDF to prove the `/data` volume is working.
-5. In Project Settings, create an invitation and copy the generated link.
-6. Open the link in a private browser, create the collaborator account with the invited email,
-   accept the invitation, and confirm that the assigned project role is enforced.
+5. On the organization dashboard, create a **Member / beta tester** invitation and copy the
+   generated link.
+6. Open the link in a private browser, create the tester account with the invited email, accept
+   the invitation, create a project, and confirm the tester is that project's Owner.
+7. In Project Settings, create a project invitation for another role and confirm that accepting
+   it grants only the assigned project access.
 
 ## 5. Pilot operations
 
@@ -123,10 +126,11 @@ Then complete this browser smoke test:
   service's **Backups** tab. Take a manual backup before schema changes.
 - Keep one web replica while using local-volume storage.
 - Set a Railway usage limit/alert and review memory, CPU, disk, and egress after the first week.
-- Use the Project Settings invitation link for each collaborator. The link is shown only once;
-  share it privately.
+- Use an organization invitation for independent beta testers who should create their own
+  projects. Use a Project Settings invitation for collaborators joining a specific review.
+  Both links are shown only once; share them privately.
 - To disable new account creation after everyone has joined, keep `PILOT_EMAIL_ALLOWLIST` set to
-  the owner's email and revoke unused project invitations.
+  the owner's email and revoke unused organization and project invitations.
 - Leave real patient data and other regulated data out of this pilot. This MVP has not been
   established as a HIPAA-compliant deployment.
 

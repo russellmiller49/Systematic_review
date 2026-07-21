@@ -97,10 +97,13 @@ project access while preserving their attributed work. Test: org-REMOVED user wi
 project-ACTIVE row → 403.
 
 ### R11. Invitations
-Token = `crypto.randomBytes(32)` base64url, returned only in the create response, never in
-lists. Accept requires: session user's email === invitation.email (lowercased), not expired,
-not accepted, not revoked — checked and consumed atomically. `DELETE
-/invitations/[id]` (project route) revokes (`revokedAt`, audited `invitation.revoked`).
+Project and organization invitation tokens use `crypto.randomBytes(32)` base64url and are
+returned only in the create response, never in lists. Accept requires: session user's email ===
+invitation.email (lowercased), not expired, not accepted, not revoked — checked and consumed
+atomically. Project invitations grant the assigned project roles and ensure an ACTIVE org
+membership; organization invitations grant the selected `OrgRole`. An active organization or
+project invitation also permits that email through the pilot signup gate. Tenant-scoped DELETE
+routes revoke invitations (`revokedAt`, audited `invitation.revoked`).
 
 ### R12. Auth hardening (MVP stance)
 Password ≥ 10 chars, bcrypt cost 12. `User.passwordChangedAt` invalidates older JWTs via the

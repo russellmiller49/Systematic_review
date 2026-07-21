@@ -11,13 +11,15 @@ tenancy filtering and indexing.
   the user row.
 - `Organization` / `OrganizationMember(role: OWNER|ADMIN|MEMBER)` — workspaces. Projects belong
   to an organization.
+- `OrganizationInvitation` — email, organization role, one-time token, expiry, acceptance, and
+  revocation state. It lets a new user pass the pilot signup gate before joining the workspace.
 - `Project` — title, reviewType (7 supported types), researchQuestion, description, status,
   registrationPlatform/registrationId, and screening config lives on `ScreeningStage` rows (not
   on Project) so title/abstract and full-text stages can differ.
 - `ProjectMember` — `roles ProjectRole[]` (a person is often both REVIEWER and ADJUDICATOR),
   `status: ACTIVE|REMOVED`. **Removal is a status flip**; every decision table references
   `userId` directly, so removing a collaborator never orphans or deletes their work.
-- `ProjectInvitation` — email, roles, token, expiresAt, acceptedAt.
+- `ProjectInvitation` — email, project roles, token, expiry, acceptance, and revocation state.
 
 Project roles: `OWNER, ADMIN, REVIEWER, ADJUDICATOR, EXTRACTOR, STATISTICIAN, LIBRARIAN,
 PANEL_MEMBER, TRAINEE, OBSERVER` (capability matrix in `05-permissions.md`).

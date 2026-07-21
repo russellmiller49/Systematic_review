@@ -28,6 +28,9 @@ All routes are Next.js Route Handlers under `src/app/api/`. Conventions:
 | GET/PATCH | `/api/orgs/[orgId]` | Read/update org |
 | GET/POST | `/api/orgs/[orgId]/members` | List / add member by email |
 | PATCH/DELETE | `/api/orgs/[orgId]/members/[userId]` | Change role / remove |
+| GET/POST | `/api/orgs/[orgId]/invitations` | List / create organization invitation |
+| DELETE | `/api/orgs/[orgId]/invitations/[invitationId]` | Revoke organization invitation |
+| POST | `/api/organization-invitations/[token]/accept` | Accept organization invitation |
 
 ## Projects & membership
 
@@ -38,6 +41,7 @@ All routes are Next.js Route Handlers under `src/app/api/`. Conventions:
 | GET/POST | `/api/projects/[projectId]/members` | List / add member (existing user) |
 | PATCH/DELETE | `/api/projects/[projectId]/members/[userId]` | Update roles / soft-remove |
 | GET/POST | `/api/projects/[projectId]/invitations` | List / create invitation |
+| DELETE | `/api/projects/[projectId]/invitations/[invitationId]` | Revoke project invitation |
 | POST | `/api/invitations/[token]/accept` | Accept invitation |
 
 ## Protocol

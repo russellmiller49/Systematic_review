@@ -1,8 +1,11 @@
 # Synthesis product overview — voiceover script
 
-This is the exact narration used by the current 3:53 product overview. The chapter boundaries
-match `public/guide/synthesis-overview.chapters.vtt`, and the spoken copy matches the English
-captions in `public/guide/synthesis-overview.en.vtt`.
+This is the base narration used by the original 3:53 product overview. The public guide now uses
+the stabilized 5:12 natural-voice recording in
+`public/guide/updated_overview_stabilized.mp4`, with the AI-assistance narration inserted after
+GRADE. Its current timings live in `updated_overview_stabilized.en.vtt` and
+`updated_overview_stabilized.chapters.vtt`; the timings below preserve the original recording
+reference.
 
 ## Voice direction
 

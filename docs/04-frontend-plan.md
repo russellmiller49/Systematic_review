@@ -6,7 +6,8 @@
 /                                  Landing (marketing-lite) → redirects to /orgs when signed in
 /sign-in, /sign-up                 Auth pages
 /orgs                              Organization switcher / dashboard (projects across my orgs)
-/orgs/[orgId]                      Org dashboard: projects grid, members, "new project" wizard
+/orgs/[orgId]                      Org dashboard: projects, members, org invitations, project wizard
+/organization-invitations/[token]  Accept organization invitation
 /projects/[projectId]              PROJECT DASHBOARD (stats, progress bars, recent activity)
 /projects/[projectId]/protocol     Protocol editor (sectioned form + criteria/outcomes/PICO editors,
                                    versions & amendments tab)

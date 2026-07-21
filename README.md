@@ -140,7 +140,7 @@ e2e/                   Playwright specs
 | `AUTH_SECRET` | Auth.js JWT secret — generate with `openssl rand -base64 32` |
 | `AUTH_TRUST_HOST` | `true` for local development |
 | `STORAGE_DIR` | Local directory for uploaded full-text PDFs |
-| `PILOT_EMAIL_ALLOWLIST` | Optional comma-separated signup allowlist; active project invitations are also accepted |
+| `PILOT_EMAIL_ALLOWLIST` | Optional comma-separated signup allowlist; active organization or project invitations are also accepted |
 | `AI_PROVIDER` + provider key | Optional AI prescreening/extraction provider; no key disables AI features |
 
 ## Pilot deployment

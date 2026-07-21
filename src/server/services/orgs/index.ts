@@ -5,13 +5,18 @@
 //   - audit.record(tx, ...) in the SAME transaction as every mutation
 //   - by-id loads scoped to the tenant (R9 in docs/09) → notFound on mismatch
 
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
-import { conflict, notFound, invalidState } from "@/server/errors";
+import { conflict, forbidden, notFound, invalidState } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { getOrgMembership, requireOrgRole } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
+
+const ORGANIZATION_INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const orgRoleEnum = z.enum(["OWNER", "ADMIN", "MEMBER"]);
 
 export const createOrgSchema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -23,12 +28,31 @@ export const updateOrgSchema = z.object({
 
 export const addOrgMemberSchema = z.object({
   email: z.string().email(),
-  role: z.enum(["OWNER", "ADMIN", "MEMBER"]),
+  role: orgRoleEnum,
 });
 
 export const updateOrgMemberSchema = z.object({
-  role: z.enum(["OWNER", "ADMIN", "MEMBER"]),
+  role: orgRoleEnum,
 });
+
+export const createOrganizationInvitationSchema = z.object({
+  email: z.string().email(),
+  role: orgRoleEnum,
+});
+
+// Everything except `token`: the secret is returned only by createOrganizationInvitation.
+const organizationInvitationPublicSelect = {
+  id: true,
+  orgId: true,
+  email: true,
+  role: true,
+  invitedById: true,
+  expiresAt: true,
+  acceptedAt: true,
+  revokedAt: true,
+  createdAt: true,
+  invitedBy: { select: { id: true, name: true, email: true } },
+} satisfies Prisma.OrganizationInvitationSelect;
 
 function slugify(name: string): string {
   const base = name
@@ -204,5 +228,157 @@ export async function removeOrgMember(ctx: Ctx, orgId: string, targetUserId: str
       newValue: { status: "REMOVED" },
     });
     return updated;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Organization invitations
+// ---------------------------------------------------------------------------
+
+export async function createOrganizationInvitation(
+  ctx: Ctx,
+  orgId: string,
+  input: z.infer<typeof createOrganizationInvitationSchema>,
+) {
+  await requireOrgRole(ctx, orgId, ["OWNER", "ADMIN"]);
+  const email = input.email.toLowerCase().trim();
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + ORGANIZATION_INVITATION_TTL_MS);
+
+  return prisma.$transaction(async (tx) => {
+    const existingUser = await tx.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    if (existingUser) {
+      const existingMember = await tx.organizationMember.findUnique({
+        where: { orgId_userId: { orgId, userId: existingUser.id } },
+      });
+      if (existingMember?.status === "ACTIVE") {
+        throw conflict("This person is already a member of the organization");
+      }
+    }
+
+    const invitation = await tx.organizationInvitation.create({
+      data: {
+        orgId,
+        email,
+        role: input.role,
+        token,
+        invitedById: ctx.userId,
+        expiresAt,
+      },
+    });
+    await audit.record(tx, {
+      userId: ctx.userId,
+      entityType: "OrganizationInvitation",
+      entityId: invitation.id,
+      action: AuditActions.INVITATION_CREATED,
+      newValue: { orgId, email, role: input.role, expiresAt },
+    });
+    return invitation;
+  });
+}
+
+export async function listOrganizationInvitations(ctx: Ctx, orgId: string) {
+  await requireOrgRole(ctx, orgId, ["OWNER", "ADMIN"]);
+  return prisma.organizationInvitation.findMany({
+    where: { orgId },
+    select: organizationInvitationPublicSelect,
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function revokeOrganizationInvitation(
+  ctx: Ctx,
+  orgId: string,
+  invitationId: string,
+) {
+  await requireOrgRole(ctx, orgId, ["OWNER", "ADMIN"]);
+  return prisma.$transaction(async (tx) => {
+    const invitation = await tx.organizationInvitation.findFirst({
+      where: { id: invitationId, orgId },
+    });
+    if (!invitation) throw notFound("Invitation");
+    if (invitation.acceptedAt) throw invalidState("Invitation has already been accepted");
+    if (invitation.revokedAt) throw invalidState("Invitation has already been revoked");
+
+    const updated = await tx.organizationInvitation.update({
+      where: { id: invitation.id },
+      data: { revokedAt: new Date() },
+      select: organizationInvitationPublicSelect,
+    });
+    await audit.record(tx, {
+      userId: ctx.userId,
+      entityType: "OrganizationInvitation",
+      entityId: invitation.id,
+      action: AuditActions.INVITATION_REVOKED,
+      previousValue: { orgId, email: invitation.email, role: invitation.role },
+    });
+    return updated;
+  });
+}
+
+export async function acceptOrganizationInvitation(ctx: Ctx, token: string) {
+  return prisma.$transaction(async (tx) => {
+    const invitation = await tx.organizationInvitation.findUnique({
+      where: { token },
+      include: { organization: { select: { id: true, name: true, slug: true } } },
+    });
+    if (!invitation) throw notFound("Invitation");
+
+    const user = await tx.user.findUniqueOrThrow({ where: { id: ctx.userId } });
+    if (user.email.toLowerCase() !== invitation.email.toLowerCase()) {
+      throw forbidden("This invitation was issued to a different email address");
+    }
+    if (invitation.revokedAt) throw invalidState("Invitation has been revoked");
+    if (invitation.acceptedAt) throw invalidState("Invitation has already been used");
+
+    const now = new Date();
+    if (invitation.expiresAt.getTime() < now.getTime()) {
+      throw invalidState("Invitation has expired");
+    }
+
+    // Consume and validate expiry atomically so concurrent accepts cannot both succeed.
+    const consumed = await tx.organizationInvitation.updateMany({
+      where: {
+        id: invitation.id,
+        acceptedAt: null,
+        revokedAt: null,
+        expiresAt: { gt: now },
+      },
+      data: { acceptedAt: now },
+    });
+    if (consumed.count === 0) throw invalidState("Invitation is no longer valid");
+
+    const existing = await tx.organizationMember.findUnique({
+      where: { orgId_userId: { orgId: invitation.orgId, userId: ctx.userId } },
+    });
+    const membership =
+      existing === null
+        ? await tx.organizationMember.create({
+            data: { orgId: invitation.orgId, userId: ctx.userId, role: invitation.role },
+          })
+        : existing.status === "ACTIVE"
+          ? existing
+          : await tx.organizationMember.update({
+              where: { id: existing.id },
+              data: { status: "ACTIVE", role: invitation.role },
+            });
+
+    await audit.record(tx, {
+      userId: ctx.userId,
+      entityType: "OrganizationInvitation",
+      entityId: invitation.id,
+      action: AuditActions.INVITATION_ACCEPTED,
+      newValue: {
+        orgId: invitation.orgId,
+        email: invitation.email,
+        role: invitation.role,
+      },
+      metadata: { membershipReactivated: existing?.status === "REMOVED" },
+    });
+
+    return { organization: invitation.organization, membership };
   });
 }

@@ -360,6 +360,24 @@ export const videoChapters: VideoChapter[] = [
   },
 ];
 
+const aiOverviewChapter: VideoChapter = {
+  image: "../ai-insert/captures/02-ai-screening.jpg",
+  label: "10 · Assist",
+  title: "Optional AI, with people in control",
+  subtitle: "Separate suggestions, source-linked evidence, and an auditable apply step",
+  narration:
+    "AI assistance in Synthesis is optional, and it is designed as a second set of eyes—not an automated decision-maker. During title-and-abstract screening, it can score and prioritize citations, then show reviewers a suggested decision and rationale. For extraction and risk of bias, it can read the linked PDF, propose values or domain judgments, and surface supporting quotes with page references. In GRADE, it can draft per-domain rationale from the current pooled results and protocol context. Suggestions stay separate from the authoritative record. A reviewer chooses what to apply, existing work is protected, and accepted changes follow the normal audit trail.",
+};
+
+export const updatedVideoChapters: VideoChapter[] = [
+  ...videoChapters.slice(0, 10),
+  aiOverviewChapter,
+  { ...videoChapters[10]!, label: "11 · Synthesize" },
+  { ...videoChapters[11]!, label: "12 · Report" },
+  { ...videoChapters[12]!, label: "13 · Govern" },
+  videoChapters[13]!,
+];
+
 export const guideFaqs = [
   {
     question: "Why can I see a page but not its edit controls?",
