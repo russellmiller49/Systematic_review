@@ -69,7 +69,7 @@ src/
 | 13. Meta-analysis | ✅ phase A+B | `lib/stats`, `services/analysis`, live forest/funnel plots, ANALYSIS export |
 | 14. GRADE | ✅ full | deterministic five-domain rules, audited review lifecycle, SoF + GRADE export |
 | 15. Audit trail | ✅ full | `services/audit` (cross-cutting) |
-| 16. Notifications | ⛳ extension point | audit events are the future event source |
+| 16. Notifications | ✅ full (2026-07-21) | `services/notifications` — direct same-transaction emit (supersedes "audit events as source", see docs/06); header bell + inbox; consumed by chat + manuscript |
 | 17. Exports | ✅ (CSV/JSON incl. analysis + GRADE) | `services/exports` |
 | 18. AI assistant layer | ✅ screening/extraction/RoB/GRADE suggestions | separate `*Suggestion` tables; human apply paths |
 

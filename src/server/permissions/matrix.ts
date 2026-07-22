@@ -25,6 +25,15 @@ export const CAPABILITIES = [
   "prisma.snapshot",
   "audit.view",
   "export.create",
+  "references.view",
+  "references.manage",
+  "manuscript.view",
+  "manuscript.edit",
+  "manuscript.comment",
+  "manuscript.manage",
+  "chat.participate",
+  "chat.manage",
+  "chat.assign",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -37,7 +46,20 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
   // A plain reviewer can make screening decisions only through the assignment-gated
   // screening service. Full-text administration belongs to admins/librarians or an
   // explicitly combined role.
-  REVIEWER: ["project.view", "screening.decide", "audit.view"],
+  // manuscript.view is universal; manuscript.edit (any section) belongs to senior
+  // drafting roles — everyone else edits only sections ASSIGNED to them (the service's
+  // canEditSection helper, mirroring assignment-gated screening). manuscript.comment is
+  // everyone except OBSERVER. manuscript.manage (structure/assignment/approval) is
+  // OWNER/ADMIN only (via ALL).
+  REVIEWER: [
+    "project.view",
+    "screening.decide",
+    "audit.view",
+    "references.view",
+    "manuscript.view",
+    "manuscript.comment",
+    "chat.participate",
+  ],
   ADJUDICATOR: [
     "project.view",
     "screening.decide",
@@ -47,8 +69,23 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
     "rob.adjudicate",
     "analysis.view",
     "audit.view",
+    "references.view",
+    "manuscript.view",
+    "manuscript.edit",
+    "manuscript.comment",
+    "chat.participate",
   ],
-  EXTRACTOR: ["project.view", "fulltext.manage", "extraction.perform", "rob.assess", "audit.view"],
+  EXTRACTOR: [
+    "project.view",
+    "fulltext.manage",
+    "extraction.perform",
+    "rob.assess",
+    "audit.view",
+    "references.view",
+    "manuscript.view",
+    "manuscript.comment",
+    "chat.participate",
+  ],
   STATISTICIAN: [
     "project.view",
     "extraction.templates",
@@ -60,6 +97,12 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
     "prisma.snapshot",
     "audit.view",
     "export.create",
+    "references.view",
+    "references.manage",
+    "manuscript.view",
+    "manuscript.edit",
+    "manuscript.comment",
+    "chat.participate",
   ],
   LIBRARIAN: [
     "project.view",
@@ -70,16 +113,41 @@ const MATRIX: Record<ProjectRole, readonly Capability[]> = {
     "prisma.snapshot",
     "audit.view",
     "export.create",
+    "references.view",
+    "references.manage",
+    "manuscript.view",
+    "manuscript.edit",
+    "manuscript.comment",
+    "chat.participate",
   ],
-  PANEL_MEMBER: ["project.view", "analysis.view", "audit.view"],
+  PANEL_MEMBER: [
+    "project.view",
+    "analysis.view",
+    "audit.view",
+    "references.view",
+    "manuscript.view",
+    "manuscript.comment",
+    "chat.participate",
+  ],
   TRAINEE: [
     "project.view",
     "screening.decide",
     "fulltext.manage",
     "extraction.perform",
     "rob.assess",
+    "references.view",
+    "manuscript.view",
+    "manuscript.comment",
+    "chat.participate",
   ],
-  OBSERVER: ["project.view", "analysis.view", "audit.view"],
+  OBSERVER: [
+    "project.view",
+    "analysis.view",
+    "audit.view",
+    "references.view",
+    "manuscript.view",
+    "chat.participate",
+  ],
 };
 
 const ROLE_SETS = Object.fromEntries(

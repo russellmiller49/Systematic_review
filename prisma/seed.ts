@@ -29,6 +29,10 @@ import * as rob from "@/server/services/rob";
 import { ensureBuiltinGenericTool } from "@/server/services/rob/builtin";
 import { ensureBuiltinStandardTools } from "@/server/services/rob/standard-tools";
 import * as prismaReport from "@/server/services/prisma-report";
+import * as referencesService from "@/server/services/references";
+import * as manuscriptService from "@/server/services/manuscript";
+import * as chatService from "@/server/services/chat";
+import { insertMention } from "@/lib/chat/mentions";
 
 const PASSWORD = "demo-password-123";
 
@@ -529,6 +533,11 @@ async function main() {
   await orgs.addOrgMember(ownerCtx, org.id, { email: reviewer1.email, role: "MEMBER" });
   await orgs.addOrgMember(ownerCtx, org.id, { email: reviewer2.email, role: "MEMBER" });
   await orgs.addOrgMember(ownerCtx, org.id, { email: adjudicator.email, role: "MEMBER" });
+  await orgs.updateLibrarySettings(ownerCtx, org.id, {
+    institutionName: "Demo University Library",
+    ezproxyBaseUrl: "https://login.ezproxy.demo-university.example/login?url=",
+    openUrlBaseUrl: "https://demo-university.example/openurl",
+  });
 
   // 3. Project (dual, blinded) — auto-creates T/A + FULL_TEXT stages and a draft protocol ----
   console.log("Creating project…");
@@ -1123,6 +1132,147 @@ async function main() {
   await prismaReport.createPrismaSnapshot(ownerCtx, projectId, {
     label: "Initial submission snapshot",
   });
+
+  // 14. Reference library ------------------------------------------------------------------
+  console.log("Building the reference library…");
+  await referencesService.addFromCitations(ownerCtx, projectId, {});
+  await referencesService.createReference(ownerCtx, projectId, {
+    csl: {
+      type: "article-journal",
+      title:
+        "The PRISMA 2020 statement: an updated guideline for reporting systematic reviews",
+      author: [
+        { family: "Page", given: "Matthew J" },
+        { family: "McKenzie", given: "Joanne E" },
+        { family: "Bossuyt", given: "Patrick M" },
+      ],
+      issued: { "date-parts": [[2021]] },
+      "container-title": "BMJ",
+      volume: "372",
+      page: "n71",
+      DOI: "10.1136/bmj.n71",
+    },
+    tags: ["methods"],
+    notes: "Reporting guideline followed by this review.",
+  });
+  await referencesService.createReference(ownerCtx, projectId, {
+    csl: {
+      type: "article-journal",
+      title:
+        "GRADE guidelines: 1. Introduction—GRADE evidence profiles and summary of findings tables",
+      author: [
+        { family: "Guyatt", given: "Gordon" },
+        { family: "Oxman", given: "Andrew D" },
+      ],
+      issued: { "date-parts": [[2011]] },
+      "container-title": "Journal of Clinical Epidemiology",
+      volume: "64",
+      issue: "4",
+      page: "383-394",
+      DOI: "10.1016/j.jclinepi.2010.04.026",
+    },
+    tags: ["methods", "background"],
+  });
+
+  // 15. Manuscript --------------------------------------------------------------------------
+  console.log("Drafting the manuscript…");
+  const para = (text: string) => ({
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  });
+  const ms = await manuscriptService.getManuscript(ownerCtx, projectId);
+  const msSection = (kind: string) => ms.sections.find((s) => s.kind === kind)!;
+
+  // Owner drafts Introduction + Methods through real lock sessions (genuine versions).
+  let msLock = await manuscriptService.acquireLock(ownerCtx, projectId, msSection("INTRODUCTION").id, {});
+  await manuscriptService.saveSectionContent(ownerCtx, projectId, msSection("INTRODUCTION").id, {
+    content: para(
+      "Severe emphysema causes progressive hyperinflation and disabling breathlessness. Bronchoscopic lung volume reduction with one-way endobronchial valves offers a less invasive alternative to surgery for carefully selected patients.",
+    ),
+    baseVersion: msLock.version,
+  });
+  await manuscriptService.releaseLock(ownerCtx, projectId, msSection("INTRODUCTION").id);
+  await manuscriptService.createVersion(ownerCtx, projectId, msSection("INTRODUCTION").id, {
+    note: "First complete draft",
+  });
+
+  msLock = await manuscriptService.acquireLock(ownerCtx, projectId, msSection("METHODS").id, {});
+  await manuscriptService.saveSectionContent(ownerCtx, projectId, msSection("METHODS").id, {
+    content: para(
+      "We conducted this systematic review and meta-analysis following the published protocol and report it per PRISMA 2020. Paired reviewers screened records in duplicate, blinded to each other's decisions.",
+    ),
+    baseVersion: msLock.version,
+  });
+  await manuscriptService.releaseLock(ownerCtx, projectId, msSection("METHODS").id);
+
+  // Results is assigned to reviewer1, who drafts a stub.
+  await manuscriptService.assignSection(ownerCtx, projectId, msSection("RESULTS").id, {
+    assigneeId: reviewer1.id,
+  });
+  msLock = await manuscriptService.acquireLock(r1Ctx, projectId, msSection("RESULTS").id, {});
+  await manuscriptService.saveSectionContent(r1Ctx, projectId, msSection("RESULTS").id, {
+    content: para(
+      "Seven reports met eligibility at full text; five contributed to the quantitative synthesis of FEV1 change at 12 months.",
+    ),
+    baseVersion: msLock.version,
+  });
+  await manuscriptService.releaseLock(r1Ctx, projectId, msSection("RESULTS").id);
+
+  // A comment thread with a mention (drives the notification bell in the demo).
+  const msComment = await manuscriptService.createComment(r1Ctx, projectId, msSection("METHODS").id, {
+    body: "Do we describe the cohort-overlap (Companions) handling here or in the appendix?",
+    mentions: [owner.id],
+    quotedText: "screened records in duplicate",
+  });
+  await manuscriptService.createComment(ownerCtx, projectId, msSection("METHODS").id, {
+    body: "Here, briefly — one sentence pointing at the companions table.",
+    parentId: msComment.id,
+  });
+  await manuscriptService.setSectionStatus(ownerCtx, projectId, msSection("INTRODUCTION").id, {
+    status: "IN_REVIEW",
+  });
+
+  // 16. Team chat ---------------------------------------------------------------------------
+  console.log("Seeding team chat…");
+  const chatChannels = await chatService.listChannels(ownerCtx, projectId); // materializes #general
+  const generalChannel = chatChannels.find((c) => c.kind === "GENERAL")!;
+  await chatService.postMessage(ownerCtx, projectId, generalChannel.id, {
+    body:
+      insertMention("Welcome to the project channel!", "Ravi Reviewer", reviewer1.id).trimEnd() +
+      " and " +
+      insertMention("", "Rosa Reviewer", reviewer2.id).trim() +
+      " — screening instructions live in the protocol; ask questions here so everyone benefits.",
+  });
+  const questionsChannel = await chatService.createTopicChannel(ownerCtx, projectId, {
+    name: "screening-questions",
+  });
+  const seededQuestion = await chatService.postMessage(r1Ctx, projectId, questionsChannel.id, {
+    body: "If an abstract only reports 6-month FEV1, do we include at title/abstract and settle it at full text?",
+  });
+  await chatService.postMessage(ownerCtx, projectId, questionsChannel.id, {
+    body: "Yes — include at T/A whenever the timepoint is ambiguous; full text decides.",
+    parentId: seededQuestion.id,
+  });
+  const dmChannel = await chatService.openDirectChannel(ownerCtx, projectId, {
+    participantIds: [reviewer2.id],
+  });
+  await chatService.postMessage(ownerCtx, projectId, dmChannel.id, {
+    body: "Rosa — can you double-check the LIBERATE 24-month follow-up companions link when you get a chance?",
+  });
+  await chatService.postMessage(r2Ctx, projectId, dmChannel.id, {
+    body: "On it — will confirm against the registry ID this afternoon.",
+  });
+  const chatAssignment = await chatService.postMessage(ownerCtx, projectId, generalChannel.id, {
+    body: "@channel Please finish your remaining full-text decisions this week.",
+    assignment: { dueAt: new Date(Date.now() + 7 * 24 * 3600 * 1000) },
+  });
+  const r2Task = (await chatService.listAssignments(r2Ctx, projectId, { mine: true })).find(
+    (t) => t.message.id === chatAssignment.id,
+  );
+  if (r2Task) await chatService.completeAssignmentTask(r2Ctx, projectId, r2Task.id);
+  // reviewer2 + adjudicator are caught up; reviewer1 keeps unread badges for the demo.
+  await chatService.markRead(r2Ctx, projectId, generalChannel.id, { at: new Date() });
+  await chatService.markRead(adjCtx, projectId, generalChannel.id, { at: new Date() });
 
   console.log("\n✅ Seed complete.");
   console.log(`   Org:     ${org.name}`);

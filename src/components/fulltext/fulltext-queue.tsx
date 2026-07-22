@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PageHeader, StatCard } from "@/components/layout/page-header";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
+import { AutofetchPanel } from "@/components/fulltext/autofetch-panel";
 import { FullTextRow } from "@/components/fulltext/fulltext-row";
 import type {
   ExclusionReason,
@@ -108,6 +109,8 @@ export function FullTextQueueClient({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
+
+      {canManageFullText && <AutofetchPanel projectId={projectId} onChanged={loadQueue} />}
 
       {items !== null && items.length > 0 && (
         <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2">

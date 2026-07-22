@@ -14,6 +14,7 @@ import { can } from "@/server/permissions/matrix";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { getStorage } from "@/server/storage";
+import { buildLibraryLinks } from "@/lib/library-links";
 
 export const MAX_PDF_BYTES = 50 * 1024 * 1024; // R13: 50 MB cap
 const PDF_MAGIC = "%PDF-";
@@ -260,6 +261,15 @@ export async function getFullTextQueue(
     where: { projectId, type: "TITLE_ABSTRACT" },
   });
   if (!taStage) return [];
+
+  // Institutional library links: one settings lookup for the whole queue.
+  const project = await prisma.project.findUniqueOrThrow({
+    where: { id: projectId },
+    select: { orgId: true },
+  });
+  const librarySettings = await prisma.organizationLibrarySettings.findUnique({
+    where: { orgId: project.orgId },
+  });
   const ftStage = await prisma.screeningStage.findFirst({
     where: { projectId, type: "FULL_TEXT" },
   });
@@ -351,6 +361,22 @@ export async function getFullTextQueue(
         : null,
       fullTextDecisionCount: c._count.decisions,
       myAssignmentStatus: c.assignments[0]?.status ?? null,
+      libraryLinks: librarySettings
+        ? buildLibraryLinks(
+            {
+              title: c.title,
+              authors: c.authors,
+              year: c.year,
+              journal: c.journal,
+              volume: c.volume,
+              issue: c.issue,
+              pages: c.pages,
+              doi: c.doi,
+              pmid: c.pmid,
+            },
+            librarySettings,
+          )
+        : null,
     };
   });
 

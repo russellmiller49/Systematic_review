@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { BookOpenCheck, BookOpenText } from "lucide-react";
 import { auth } from "@/server/auth";
 import { UserMenu } from "@/components/layout/user-menu";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
@@ -23,6 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <BookOpenText className="h-4 w-4" />
             <span className="hidden sm:inline">User guide</span>
           </Link>
+          <NotificationBell />
           <UserMenu name={session.user.name ?? ""} email={session.user.email ?? ""} />
         </div>
       </header>

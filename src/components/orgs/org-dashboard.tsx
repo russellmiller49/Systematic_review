@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
+import { LibrarySettingsSection } from "@/components/orgs/library-settings-section";
 import {
   OrganizationInvitationsSection,
   organizationRoleLabel,
@@ -121,6 +122,8 @@ export function OrgDashboard({ orgId }: { orgId: string }) {
       </section>
 
       {canManage && <OrganizationInvitationsSection orgId={orgId} />}
+
+      {org && <LibrarySettingsSection orgId={orgId} canManage={canManage} />}
 
       <section className="space-y-3">
         <h2 className="text-lg font-medium">Members</h2>

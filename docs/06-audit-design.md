@@ -55,9 +55,29 @@ the log human-readable and diffable in the UI.
 | Extraction | `extraction.template.{created,updated,published}`, `extraction.field.{created,updated,deleted}`, `extraction.form.{started,completed}`, `extraction.value.{created,updated}`, `extraction.conflict.{opened,adjudicated}` |
 | RoB | `rob.tool.{created,updated}`, `rob.assessment.{started,completed}`, `rob.judgment.{created,updated}`, `rob.conflict.{opened,adjudicated}` |
 | PRISMA/exports | `prisma.snapshot.created`, `export.created` |
+| Library/OA fetch | `org.library_settings.updated`, `fulltext.autofetch.{started,completed,failed,canceled}` (run-level; engine-created retrieval-attempt rows are unaudited machine output — AI-suggestion precedent) |
+| References | `reference.{created,updated,deleted,imported,exported}` (bibliography formatting is an unaudited read) |
+| Manuscript | `manuscript.{created,updated,exported}`, `manuscript.section.{created,updated,deleted,assigned,status_changed}`, `manuscript.sections.reordered`, `manuscript.section.version.{created,restored}`, `manuscript.section.lock.taken_over`, `manuscript.comment.{created,resolved,reopened,deleted}` |
+| Team chat | `chat.channel.{created,archived}`, `chat.message.deleted`, `chat.assignment.{created,completed,voided}` |
 
 Action strings are constants in `src/server/services/audit/actions.ts` (typo-proof, greppable,
 and the audit UI derives its filter dropdown from the same constant list).
+
+### Deliberate high-frequency exemptions (2026-07-21)
+
+Two collaboration features deviate from "every mutation audits", by design:
+
+- **Manuscript autosaves + lock coordination** are unaudited — a 2s-debounced autosave would
+  flood the append-only log, and the durable `ManuscriptSectionVersion` rows cut at every
+  session boundary ARE the audited record (`manuscript.section.version.created`). Lock
+  TAKEOVER is audited because it overrides another user.
+- **Chat message post/edit and read-state upserts** are unaudited — messages are their own
+  durable attributed record (author, timestamps, edit marks, soft-delete tombstones), and
+  auditing every post would duplicate the `ChatMessage` table into `AuditEvent`. Structural
+  events (channels, assignment lifecycle, deletes with a 200-char snippet) are audited, and
+  `tests/integration/chat.test.ts` pins the policy by asserting no other `chat.*` actions
+  appear. DM-channel creation audits reveal the participant list to `audit.view` holders
+  (accepted: governance-first tool); DM *content* never enters the log.
 
 ## Query & UI
 
@@ -71,6 +91,10 @@ and the audit UI derives its filter dropdown from the same constant list).
 
 ## Future-proofing
 
-- The event stream is the natural source for notifications (domain 16) and living-review
-  triage feeds: a consumer table can tail `AuditEvent.id`.
+- ~~The event stream is the natural source for notifications (domain 16)~~ — superseded
+  2026-07-21: notifications are emitted DIRECTLY by services inside the same transaction as
+  the mutation (`src/server/services/notifications`), which gives the same atomicity with no
+  recipient-resolution machinery, and works for chat messages (which are deliberately not
+  audited). Audit remains the compliance record; notifications are the delivery substrate.
+  Living-review triage feeds can still tail `AuditEvent.id`.
 - If volume demands it, partition by `projectId`/month — the API surface is unchanged.

@@ -4,6 +4,77 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-21) — collaboration suite: library access, references, manuscript, team chat — DONE
+
+Four features landed as one wave (plan: `~/.claude/plans/can-we-add-a-replicated-ullman.md`),
+plus two shared substrates:
+
+- **Shared substrates.** `src/server/http/client.ts` is the ONLY outbound-HTTP seam for
+  scholarly APIs (lazy singleton + `setHttpClientForTests`, politeness User-Agent from the new
+  `CONTACT_EMAIL` env var; fake in `tests/fake-http-client.ts`). In-app **notifications**
+  (`Notification` model + `src/server/services/notifications`) are emitted DIRECTLY inside the
+  emitting service's transaction — a conscious amendment to docs/01 §16's "audit events as the
+  future event source" (simpler, atomic, and chat messages are deliberately unaudited). Bell +
+  inbox in the app header (`src/components/notifications/`), 60s poll.
+- **Institutional library access.** Org OWNER/ADMIN configure `OrganizationLibrarySettings`
+  (institution name, https-only EZProxy prefix, OpenURL resolver) on the org dashboard; every
+  full-text queue row grows "Library (DOI/PubMed)" + Z39.88 "Find via <library>" links
+  (`src/lib/library-links.ts` — no credentials ever stored). Open-access auto-fetch pulls
+  legal PDFs via Unpaywall (disabled without `CONTACT_EMAIL`) + Europe PMC through the
+  EXISTING `uploadFullText` path (sha256 dedup, `%PDF-` magic, 50 MB cap) and logs
+  `FullTextRetrievalAttempt` rows (engine rows unaudited per-row — AI-suggestion precedent);
+  bulk runs use a `FullTextRetrievalRun` advanced by client polling with chunk claiming +
+  stale-claim recovery (`src/server/services/fulltext-retrieval/`, panel mirrors
+  prescreen-panel at 3s). Rides `fulltext.manage`; org settings ride org roles.
+- **Reference manager.** `ReferenceEntry` (CSL-JSON source of truth + denormalized columns,
+  `@@unique([projectId, doi])`) with a References sidebar page: add by DOI (Crossref) / PMID
+  (NCBI esummary) / RIS-BibTeX paste (reuses import parsers) / manual form / "Import included
+  studies" (FT-included citations mirrored with `citationId`). Formatting via vendored
+  citeproc styles (`src/server/csl/` — Vancouver/AMA/APA/NLM + en-US locale, fetched once by
+  `scripts/fetch-csl-styles.ts`); `formatBibliography` honors caller-supplied first-use order
+  for numeric styles and never throws. Exports: RIS/BibTeX writers ROUND-TRIP-TESTED against
+  our own parsers (Word interop via Zotero/EndNote/Mendeley), CSL-JSON, and formatted-.txt.
+  New capabilities `references.view` (everyone) / `references.manage` (LIBRARIAN,
+  STATISTICIAN + admins). Office.js Word add-in deliberately deferred.
+- **Manuscript drafting.** One auto-created manuscript per project (8 IMRaD sections) at
+  `/manuscript`: TipTap v3 editor (dynamic ssr:false), SECTION LOCKS (30s heartbeat / 90s
+  stale / audited takeover with a pre-image version attributed to the previous holder),
+  autosave with `version` optimistic concurrency (409 recovery), append-only
+  `ManuscriptSectionVersion` snapshots cut at session boundaries (idempotent via
+  `capturedVersion`), one-level comment threads with validated @mentions → notifications,
+  section assignment (assignee may edit ONLY their section — assignment-gated like REVIEWER
+  screening), DRAFT/IN_REVIEW/APPROVED workflow (APPROVED freezes content), inline `citation`
+  atom nodes rendered from a cite-map (`references.formatBibliography` — screen matches
+  export), virtual auto-generated References section, and DOCX export (`docx` pkg; pure IR in
+  `src/lib/manuscript/docx-map.ts`; per-list numbering restart). Capabilities:
+  `manuscript.view` (all), `.comment` (all but OBSERVER), `.edit` (ADJUDICATOR/STATISTICIAN/
+  LIBRARIAN + admins), `.manage` (admins). DELIBERATE audit deviation: autosaves + lock
+  coordination unaudited (version cuts are the audited record; takeover audited).
+- **Team chat.** `/chat` right under Dashboard with a live unread badge: lazy #general, topic
+  channels (chat.manage), DMs deduped by sorted-participant `dedupeKey` (same 3 people →
+  same conversation, existence never leaks to non-participants), one-level threads,
+  `@[Name](id)` + `@channel` mentions (`src/lib/chat/mentions.ts`), and ASSIGNMENT messages
+  fanning out per-assignee `ChatAssignmentTask` rows (whole-team default, due dates, "Mark
+  done", admin everyone-view, voided on message delete). Delivery = polling per the app
+  convention: open channel 4s incremental `updatedAt` cursor with 5s overlap, unread badges
+  30s, bell 60s. Read state is a forward-only watermark; unread math excludes own + deleted
+  messages via one groupBy. DELIBERATE audit deviation (docs/06): message post/edit and
+  read-state are unaudited — structural events (channel create/archive, assignment
+  create/complete/void, deletes with 200-char snippet) are audited, and an integration test
+  pins the policy. `chat.participate` for every role incl. OBSERVER; `chat.manage`/`chat.assign`
+  admins-only.
+- Migrations (5): `20260721235459_notifications`,
+  `20260722000038_org_library_settings_fulltext_retrieval`, `20260722001714_reference_library`,
+  `20260722003808_manuscript`, `20260722005559_team_chat` (timestamps as generated). New deps:
+  `citeproc`, `@tiptap/react` + `@tiptap/starter-kit` + `@tiptap/pm`, `docx`.
+- Ops note: restart the dev server after running `prisma migrate dev` (the running process
+  keeps the stale generated client) and never run `next build` while the dev server is up
+  (it clobbers `.next`).
+- Verification: Prisma schema valid, typecheck and production build clean, **611 unit**,
+  **290 integration**, and **14 E2E** tests pass (new two-browser-context specs cover
+  lock/presence handoff, comment mentions → bell, and cross-session chat delivery +
+  assignment completion); seeded demo exercised in-browser end to end.
+
 ## Current state (2026-07-20) — organization invitations + beta-tester onboarding — DONE
 
 - Owners/Admins can create, list, and revoke 14-day organization invitation links from the

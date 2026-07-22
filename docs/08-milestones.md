@@ -67,3 +67,20 @@ history → export. Each maps to at least one integration or E2E test.
     coverage report — `src/server/services/fulltext-pages/`, `src/types/source-anchor.ts`)
 13. PRISMA 2020 completeness polish (registers/"other methods" arms, awaiting-classification
     bucket) — counts themselves are already fully automatic
+14. ~~Institutional library access + OA PDF auto-fetch~~ ✅ 2026-07-21 — org-level
+    EZProxy/OpenURL settings → per-row library links (`src/lib/library-links.ts`), plus
+    Unpaywall/Europe PMC auto-fetch runs feeding `uploadFullText`
+    (`src/server/services/fulltext-retrieval/`; shared HTTP seam `src/server/http/client.ts`)
+15. ~~Reference library + CSL bibliographies~~ ✅ 2026-07-21 — CSL-JSON `ReferenceEntry` with
+    DOI/PMID lookup, RIS/BibTeX import + round-trip writers, vendored citeproc styles, and
+    Word interop via RIS/BibTeX/CSL-JSON exports (`src/server/services/references/`,
+    `src/server/csl/`); Office.js Word add-in still open
+16. ~~Modular manuscript drafting~~ ✅ 2026-07-21 — TipTap sections with locks + versions +
+    comments/@mentions + assignment-gated editing, inline citations from the reference
+    library, and DOCX export (`src/server/services/manuscript/`, `src/components/manuscript/`,
+    `src/lib/manuscript/`); closes the "manuscript generation" line from item 9
+17. ~~Team chat + in-app notifications~~ ✅ 2026-07-21 — #general/topic/DM channels, threads,
+    mentions, assignment messages with per-assignee tracking, polling delivery + unread
+    badges, and the shared `Notification` substrate + header bell
+    (`src/server/services/chat/`, `src/server/services/notifications/`,
+    `src/components/chat/`); closes the "notifications" line from item 9

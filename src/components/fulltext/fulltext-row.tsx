@@ -5,11 +5,13 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  DownloadCloud,
   Eye,
   ExternalLink,
   FileText,
   FileX2,
   History,
+  Landmark,
   Upload,
   X,
 } from "lucide-react";
@@ -42,11 +44,13 @@ import {
 import type {
   DecisionResponse,
   ExclusionReason,
+  FindPdfResult,
   FullTextQueueItem,
   QueueFileRef,
   RetrievalAttempt,
   RetrievalOutcome,
 } from "@/components/fulltext/types";
+import { Spinner } from "@/components/ui/misc";
 
 const RETRIEVAL_LABELS: Record<RetrievalOutcome, string> = {
   PENDING: "Awaiting retrieval",
@@ -83,6 +87,7 @@ export function FullTextRow({
   const [excludeOpen, setExcludeOpen] = useState(false);
   const [preview, setPreview] = useState<QueueFileRef | null>(null);
   const [deciding, setDeciding] = useState(false);
+  const [findingPdf, setFindingPdf] = useState(false);
 
   const loadAttempts = useCallback(() => {
     api<RetrievalAttempt[]>(
@@ -106,6 +111,29 @@ export function FullTextRow({
   function handleAttemptSaved() {
     onChanged();
     if (attempts !== null) loadAttempts();
+  }
+
+  async function findPdf() {
+    setFindingPdf(true);
+    try {
+      const res = await apiPost<FindPdfResult>(
+        `/api/projects/${projectId}/fulltext/citations/${citation.id}/find-pdf`,
+      );
+      if (res.outcome === "RETRIEVED") {
+        toast.success(`Open-access PDF found via ${res.source ?? "OA sources"}`);
+        onChanged();
+      } else if (res.outcome === "SKIPPED") {
+        toast.info(res.notes);
+      } else {
+        toast.info("No open-access copy found — try the library links or upload manually.");
+        onChanged(); // a NOT_RETRIEVED attempt was recorded
+      }
+      if (attempts !== null) loadAttempts();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "PDF lookup failed");
+    } finally {
+      setFindingPdf(false);
+    }
   }
 
   async function includeCitation() {
@@ -149,8 +177,8 @@ export function FullTextRow({
             {formatAuthors(citation.authors)}
             {meta && <span> · {meta}</span>}
           </p>
-          {(citation.doi || citation.pmid) && (
-            <p className="mt-1 flex flex-wrap gap-x-3 text-xs">
+          {(citation.doi || citation.pmid || item.libraryLinks) && (
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
               {citation.doi && (
                 <a
                   href={`https://doi.org/${citation.doi}`}
@@ -169,6 +197,40 @@ export function FullTextRow({
                   className="text-primary hover:underline"
                 >
                   PMID {citation.pmid}
+                </a>
+              )}
+              {item.libraryLinks?.proxiedDoiUrl && (
+                <a
+                  href={item.libraryLinks.proxiedDoiUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                  title="Opens the DOI through your institution's proxy — sign in with your library account"
+                >
+                  <Landmark className="h-3 w-3" /> Library (DOI)
+                </a>
+              )}
+              {item.libraryLinks?.proxiedPubMedUrl && (
+                <a
+                  href={item.libraryLinks.proxiedPubMedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                  title="Opens PubMed through your institution's proxy"
+                >
+                  <Landmark className="h-3 w-3" /> Library (PubMed)
+                </a>
+              )}
+              {item.libraryLinks?.openUrlLink && (
+                <a
+                  href={item.libraryLinks.openUrlLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                  title="Looks the article up in your institution's link resolver"
+                >
+                  <Landmark className="h-3 w-3" />
+                  Find via {item.libraryLinks.institutionName ?? "your library"}
                 </a>
               )}
             </p>
@@ -240,6 +302,17 @@ export function FullTextRow({
         <div className="flex flex-wrap items-center gap-2">
           {canManageFullText && (
             <>
+              {item.files.length === 0 && (citation.doi || citation.pmid) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={findingPdf}
+                  onClick={() => void findPdf()}
+                  title="Search Unpaywall and Europe PMC for a legal open-access PDF"
+                >
+                  {findingPdf ? <Spinner className="h-3.5 w-3.5" /> : <DownloadCloud />} Find PDF
+                </Button>
+              )}
               <Button variant="outline" size="sm" onClick={() => setUploadOpen(true)}>
                 <Upload /> Upload PDF
               </Button>

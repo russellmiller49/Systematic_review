@@ -35,11 +35,20 @@ export interface QueueCitation {
   pmid?: string | null;
 }
 
+// Institutional library links built server-side from OrganizationLibrarySettings.
+export interface LibraryLinks {
+  institutionName: string | null;
+  proxiedDoiUrl?: string;
+  proxiedPubMedUrl?: string;
+  openUrlLink?: string;
+}
+
 export interface FullTextQueueItem {
   citation: QueueCitation;
   files: QueueFileRef[];
   latestRetrievalAttempt: RetrievalAttempt | null;
   retrievalStatus: RetrievalOutcome;
+  libraryLinks: LibraryLinks | null;
   // Materialized full-text stage result; null until the citation settles at FT.
   fullTextResult: {
     outcome: FtOutcome;
@@ -71,4 +80,30 @@ export interface DecisionResponse {
 export interface UploadResult {
   reused: boolean;
   linkCreated: boolean;
+}
+
+// OA auto-fetch runs (GET/POST /fulltext/retrieval-runs).
+export type RetrievalRunStatus = "RUNNING" | "COMPLETED" | "FAILED" | "CANCELED";
+
+export interface RetrievalRun {
+  id: string;
+  status: RetrievalRunStatus;
+  totalCount: number;
+  processedCount: number;
+  retrievedCount: number;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface RetrievalRunListResponse {
+  runs: (RetrievalRun & { requestedBy: { id: string; name: string } })[];
+  eligible: number;
+}
+
+// POST /fulltext/citations/[citationId]/find-pdf response.
+export interface FindPdfResult {
+  outcome: "RETRIEVED" | "NOT_RETRIEVED" | "SKIPPED";
+  source?: string;
+  notes: string;
 }

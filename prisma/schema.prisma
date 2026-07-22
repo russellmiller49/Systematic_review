@@ -308,6 +308,23 @@ model User {
   gradeReviews            GradeAssessment[]          @relation("GradeReviewer")
   gradeRatingEdits        GradeDomainRating[]        @relation("GradeRatingEditor")
   aiGradeRuns             AiGradeRun[]               @relation("AiGradeRunRequester")
+  notifications           Notification[]             @relation("NotificationRecipient")
+  notificationsActed      Notification[]             @relation("NotificationActor")
+  librarySettingsUpdates  OrganizationLibrarySettings[] @relation("LibrarySettingsUpdater")
+  fullTextRetrievalRuns   FullTextRetrievalRun[]     @relation("FullTextRetrievalRunRequester")
+  referenceEntries        ReferenceEntry[]           @relation("ReferenceAdder")
+  manuscriptsCreated      Manuscript[]               @relation("ManuscriptCreator")
+  manuscriptAssignments   ManuscriptSection[]        @relation("ManuscriptSectionAssignee")
+  manuscriptLocks         ManuscriptSection[]        @relation("ManuscriptSectionLockHolder")
+  manuscriptVersions      ManuscriptSectionVersion[] @relation("ManuscriptVersionAuthor")
+  manuscriptComments      ManuscriptComment[]        @relation("ManuscriptCommentAuthor")
+  manuscriptResolved      ManuscriptComment[]        @relation("ManuscriptCommentResolver")
+  chatChannelsCreated     ChatChannel[]              @relation("ChatChannelCreator")
+  chatParticipations      ChatChannelParticipant[]   @relation("ChatParticipant")
+  chatMessages            ChatMessage[]              @relation("ChatMessageAuthor")
+  chatMessagesDeleted     ChatMessage[]              @relation("ChatMessageDeleter")
+  chatAssignmentTasks     ChatAssignmentTask[]       @relation("ChatAssignee")
+  chatReadStates          ChatReadState[]            @relation("ChatReader")
 }
 
 model Organization {
@@ -318,10 +335,11 @@ model Organization {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  createdBy   User                     @relation("OrgCreator", fields: [createdById], references: [id])
-  members     OrganizationMember[]
-  invitations OrganizationInvitation[]
-  projects    Project[]
+  createdBy       User                         @relation("OrgCreator", fields: [createdById], references: [id])
+  members         OrganizationMember[]
+  invitations     OrganizationInvitation[]
+  projects        Project[]
+  librarySettings OrganizationLibrarySettings?
 }
 
 model OrganizationMember {
@@ -356,6 +374,23 @@ model OrganizationInvitation {
 
   @@index([orgId])
   @@index([email])
+}
+
+// Institutional library access (docs/09 posture: links out through the member's own
+// browser session — the app never stores institutional credentials). Upserted 1:1 by
+// org OWNER/ADMIN; consumed read-only by the full-text queue to build library links.
+model OrganizationLibrarySettings {
+  id              String   @id @default(cuid())
+  orgId           String   @unique
+  institutionName String? // "Find via <name>" button label
+  ezproxyBaseUrl  String? // https-only prefix, e.g. https://login.ezproxy.myuni.edu/login?url=
+  openUrlBaseUrl  String? // https-only Z39.88 OpenURL resolver base
+  updatedById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  org       Organization @relation(fields: [orgId], references: [id])
+  updatedBy User         @relation("LibrarySettingsUpdater", fields: [updatedById], references: [id])
 }
 
 model Project {
@@ -398,6 +433,12 @@ model Project {
   aiGradeRuns         AiGradeRun[]
   analysisOutcomes    AnalysisOutcome[]
   cohortCandidates    CohortCandidate[]
+  notifications       Notification[]
+  fullTextRetrievalRuns FullTextRetrievalRun[]
+  referenceEntries    ReferenceEntry[]
+  manuscript          Manuscript?
+  chatChannels        ChatChannel[]
+  chatAssignmentTasks ChatAssignmentTask[]
 
   @@index([orgId])
 }
@@ -657,6 +698,7 @@ model Citation {
   dedupCandidatesAsB  DeduplicationCandidate[]   @relation("DedupCitationB")
   cohortCandidatesAsA CohortCandidate[]          @relation("CohortCitationA")
   cohortCandidatesAsB CohortCandidate[]          @relation("CohortCitationB")
+  referenceEntries    ReferenceEntry[]
 
   @@index([projectId, status])
   @@index([projectId, normalizedTitle])
@@ -1029,6 +1071,38 @@ model FullTextRetrievalAttempt {
   recordedBy User     @relation("RetrievalRecorder", fields: [recordedById], references: [id])
 
   @@index([citationId])
+}
+
+// Open-access auto-fetch runs (Unpaywall + Europe PMC). No background worker exists —
+// a run advances only while a client polls (same lifecycle as AiScreeningRun), so status
+// starts at RUNNING (there is no provider handoff step).
+enum RetrievalRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+model FullTextRetrievalRun {
+  id             String             @id @default(cuid())
+  projectId      String
+  status         RetrievalRunStatus @default(RUNNING)
+  citationIds    Json // snapshot of eligible citation ids at start, in processing order
+  totalCount     Int                @default(0)
+  claimedCount   Int                @default(0) // chunk-claim cursor (concurrent-poll guard)
+  processedCount Int                @default(0)
+  retrievedCount Int                @default(0)
+  error          String?
+  requestedById  String
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  completedAt    DateTime?
+
+  project     Project @relation(fields: [projectId], references: [id])
+  requestedBy User    @relation("FullTextRetrievalRunRequester", fields: [requestedById], references: [id])
+
+  @@index([projectId, status])
+  @@index([projectId, createdAt(sort: Desc)])
 }
 
 // ---------------------------------------------------------------------------
@@ -1808,4 +1882,314 @@ model ExportJob {
   requestedBy User    @relation("ExportRequester", fields: [requestedById], references: [id])
 
   @@index([projectId])
+}
+
+// ---------------------------------------------------------------------------
+// Reference library (citation manager for the manuscript)
+// ---------------------------------------------------------------------------
+
+// Project-scoped bibliography for the PAPER — methods papers, background refs, and
+// mirrors of included studies. Distinct from Citation (the screening corpus): entries
+// here are curated writing material, not evidence-trail records, so deletes are hard.
+// `csl` (a CSL-JSON item) is the source of truth for formatting/export; the scalar
+// columns are denormalized for search and dedupe.
+model ReferenceEntry {
+  id          String   @id @default(cuid())
+  projectId   String
+  csl         Json
+  title       String
+  firstAuthor String?
+  year        Int?
+  doi         String? // normalized: lowercase, no resolver prefix
+  pmid        String? // normalized: digits only
+  tags        String[]
+  notes       String?
+  citationId  String? // set when this entry mirrors a screening Citation
+  addedById   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id])
+  citation Citation? @relation(fields: [citationId], references: [id])
+  addedBy  User      @relation("ReferenceAdder", fields: [addedById], references: [id])
+
+  @@unique([projectId, doi]) // Postgres: NULL dois unconstrained
+  @@unique([projectId, citationId]) // a screening citation mirrors at most once
+  @@index([projectId, title])
+  @@index([projectId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Manuscript drafting (modular sections, locks + versions, comments)
+// ---------------------------------------------------------------------------
+
+enum ManuscriptSectionKind {
+  TITLE_PAGE
+  ABSTRACT
+  INTRODUCTION
+  METHODS
+  RESULTS
+  DISCUSSION
+  CONCLUSION
+  ACKNOWLEDGMENTS
+  CUSTOM
+}
+
+enum ManuscriptSectionStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+}
+
+enum ManuscriptVersionOrigin {
+  EXPLICIT // "Save version" button (note allowed)
+  LOCK_RELEASE // cut automatically when an editing session ends with unsaved-to-version changes
+  TAKEOVER // pre-image cut on stale-lock takeover, attributed to the previous holder
+  RESTORE // pre-image cut immediately before a restore
+}
+
+enum ManuscriptCommentStatus {
+  OPEN
+  RESOLVED
+}
+
+// One default manuscript per project (v1); drop the unique to allow multiple later.
+model Manuscript {
+  id              String   @id @default(cuid())
+  projectId       String   @unique
+  title           String   @default("Manuscript")
+  citationStyleId String? // CSL style id (src/server/csl/engine.ts); null = default
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project   Project             @relation(fields: [projectId], references: [id])
+  createdBy User                @relation("ManuscriptCreator", fields: [createdById], references: [id])
+  sections  ManuscriptSection[]
+}
+
+// Concurrency model: soft lock (one editor per section; heartbeat 30s, stale at 90s,
+// takeover allowed when stale) + `version` optimistic-concurrency counter on content
+// writes. Autosaves overwrite `content` in place (unaudited); durable snapshots live in
+// ManuscriptSectionVersion, cut at session boundaries.
+model ManuscriptSection {
+  id              String                  @id @default(cuid())
+  manuscriptId    String
+  title           String
+  kind            ManuscriptSectionKind   @default(CUSTOM)
+  order           Int // 0-based; service rewrites 0..n-1 on reorder
+  content         Json // TipTap doc JSON; initialized to {"type":"doc","content":[]}
+  contentText     String                  @default("") // server-derived plain text
+  wordCount       Int                     @default(0)
+  status          ManuscriptSectionStatus @default(DRAFT)
+  assigneeId      String? // assignee may edit this section even without manuscript.edit
+  lockedById      String?
+  lockAcquiredAt  DateTime?
+  lockHeartbeatAt DateTime?
+  version         Int                     @default(0) // ++ on every content write
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  manuscript Manuscript                 @relation(fields: [manuscriptId], references: [id])
+  assignee   User?                      @relation("ManuscriptSectionAssignee", fields: [assigneeId], references: [id])
+  lockedBy   User?                      @relation("ManuscriptSectionLockHolder", fields: [lockedById], references: [id])
+  versions   ManuscriptSectionVersion[]
+  comments   ManuscriptComment[]
+
+  @@index([manuscriptId, order])
+  @@index([assigneeId])
+}
+
+// Immutable snapshot rows (append-only, like ProtocolVersion).
+model ManuscriptSectionVersion {
+  id              String                  @id @default(cuid())
+  sectionId       String
+  versionNumber   Int // 1..n per section
+  capturedVersion Int // ManuscriptSection.version at snapshot time — makes "cut if dirty" idempotent
+  origin          ManuscriptVersionOrigin
+  content         Json
+  contentText     String
+  wordCount       Int
+  note            String?
+  savedById       String // TAKEOVER rows are attributed to the PREVIOUS lock holder
+  createdAt       DateTime                @default(now())
+
+  section ManuscriptSection @relation(fields: [sectionId], references: [id])
+  savedBy User              @relation("ManuscriptVersionAuthor", fields: [savedById], references: [id])
+
+  @@unique([sectionId, versionNumber])
+  @@index([sectionId])
+}
+
+model ManuscriptComment {
+  id           String                  @id @default(cuid())
+  sectionId    String
+  authorId     String
+  parentId     String? // one-level threads: parent must be a root comment in the same section
+  body         String
+  quotedText   String? // optional excerpt the comment refers to
+  status       ManuscriptCommentStatus @default(OPEN)
+  resolvedById String?
+  resolvedAt   DateTime?
+  mentions     String[] // user ids chosen in the composer; validated ⊆ ACTIVE project members
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  section    ManuscriptSection   @relation(fields: [sectionId], references: [id])
+  author     User                @relation("ManuscriptCommentAuthor", fields: [authorId], references: [id])
+  resolvedBy User?               @relation("ManuscriptCommentResolver", fields: [resolvedById], references: [id])
+  parent     ManuscriptComment?  @relation("ManuscriptCommentThread", fields: [parentId], references: [id])
+  replies    ManuscriptComment[] @relation("ManuscriptCommentThread")
+
+  @@index([sectionId, status])
+  @@index([parentId])
+}
+
+// ---------------------------------------------------------------------------
+// Team chat (channels, DMs, threads, assignment messages)
+// ---------------------------------------------------------------------------
+
+enum ChatChannelKind {
+  GENERAL // one per project, lazily created
+  TOPIC // named, public to all active members
+  DIRECT // fixed explicit participant set (1:1 and small groups)
+}
+
+enum ChatMessageKind {
+  MESSAGE
+  ASSIGNMENT // carries ChatAssignmentTask rows (per-assignee done-tracking)
+}
+
+model ChatChannel {
+  id            String          @id @default(cuid())
+  projectId     String
+  kind          ChatChannelKind
+  name          String? // TOPIC only
+  // GENERAL: "general"; DIRECT: "dm:" + sorted participant userIds joined ":"; TOPIC:
+  // null (Postgres treats NULLs as distinct). One unique gives race-safe lazy #general
+  // creation AND direct-message dedupe by participant set.
+  dedupeKey     String?
+  archivedAt    DateTime? // TOPIC only (service-enforced); archived = read-only
+  lastMessageAt DateTime? // denorm set in postMessage tx — channel-list sort without groupBy
+  createdById   String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  project      Project                  @relation(fields: [projectId], references: [id])
+  createdBy    User                     @relation("ChatChannelCreator", fields: [createdById], references: [id])
+  participants ChatChannelParticipant[]
+  messages     ChatMessage[]
+  readStates   ChatReadState[]
+
+  @@unique([projectId, dedupeKey])
+  @@index([projectId, kind])
+}
+
+// DIRECT channels only. GENERAL/TOPIC membership is implicit (all ACTIVE project members).
+model ChatChannelParticipant {
+  id        String   @id @default(cuid())
+  channelId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  channel ChatChannel @relation(fields: [channelId], references: [id])
+  user    User        @relation("ChatParticipant", fields: [userId], references: [id])
+
+  @@unique([channelId, userId])
+  @@index([userId])
+}
+
+// AUDIT POLICY (deliberate deviation, docs/06): message post/edit and read-state upserts
+// are NOT audited — chat is high-frequency conversational data and messages are their own
+// durable attributed record (authorId/createdAt/editedAt/tombstones). Structural events
+// (channel create/archive, assignment lifecycle, deletes) ARE audited.
+model ChatMessage {
+  id          String          @id @default(cuid())
+  channelId   String
+  authorId    String
+  parentId    String? // ONE-level threads: parent must itself be a root (service-enforced)
+  kind        ChatMessageKind @default(MESSAGE)
+  body        String // plain text ≤8000; mention tokens @[Name](userId) + literal @channel
+  mentions    String[] // userIds extracted + validated server-side (ACTIVE members only)
+  replyCount  Int             @default(0) // non-deleted replies, maintained in the same tx
+  editedAt    DateTime?
+  deletedAt   DateTime? // soft delete — tombstone rendered, body withheld from payloads
+  deletedById String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  channel         ChatChannel          @relation(fields: [channelId], references: [id])
+  author          User                 @relation("ChatMessageAuthor", fields: [authorId], references: [id])
+  deletedBy       User?                @relation("ChatMessageDeleter", fields: [deletedById], references: [id])
+  parent          ChatMessage?         @relation("ChatThread", fields: [parentId], references: [id])
+  replies         ChatMessage[]        @relation("ChatThread")
+  assignmentTasks ChatAssignmentTask[]
+
+  @@index([channelId, createdAt]) // history pagination + unread range counts
+  @@index([channelId, updatedAt]) // incremental poll cursor (new + edited + tombstoned)
+  @@index([parentId])
+}
+
+// One row per assignee of an ASSIGNMENT message — each assignee marks done independently.
+// Mirrors ScreeningAssignment/ExtractionAssignment ([assigneeId, status] queue index).
+model ChatAssignmentTask {
+  id          String           @id @default(cuid())
+  messageId   String
+  projectId   String // denorm — "my assignments" without joining message→channel→project
+  assigneeId  String
+  dueAt       DateTime?
+  status      AssignmentStatus @default(PENDING) // VOIDED when the message is deleted
+  completedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  message  ChatMessage @relation(fields: [messageId], references: [id])
+  project  Project     @relation(fields: [projectId], references: [id])
+  assignee User        @relation("ChatAssignee", fields: [assigneeId], references: [id])
+
+  @@unique([messageId, assigneeId])
+  @@index([assigneeId, status])
+  @@index([projectId, status])
+}
+
+model ChatReadState {
+  id         String   @id @default(cuid())
+  channelId  String
+  userId     String
+  lastReadAt DateTime // forward-only watermark (service clamps: max(existing, min(input, now)))
+  updatedAt  DateTime @updatedAt
+
+  channel ChatChannel @relation(fields: [channelId], references: [id])
+  user    User        @relation("ChatReader", fields: [userId], references: [id])
+
+  @@unique([channelId, userId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (in-app delivery substrate)
+// ---------------------------------------------------------------------------
+
+// `type` is a string validated against the NotificationTypes catalog in
+// src/server/services/notifications/index.ts — not a Prisma enum, so features add
+// types without a migration (same convention as AuditEvent.action). Rows are created
+// by notifications.emit() INSIDE the emitting service's transaction, so a notification
+// can never exist without its triggering domain row. Deliberately unaudited: a
+// notification is a derived delivery artifact, not a domain mutation.
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String // recipient
+  projectId String
+  type      String
+  actorId   String?
+  payload   Json // entity ids + short snippet; enough to render the row + build its href
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user    User    @relation("NotificationRecipient", fields: [userId], references: [id])
+  actor   User?   @relation("NotificationActor", fields: [actorId], references: [id])
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, readAt])
 }

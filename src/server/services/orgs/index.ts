@@ -40,6 +40,19 @@ export const createOrganizationInvitationSchema = z.object({
   role: orgRoleEnum,
 });
 
+const httpsUrl = z
+  .string()
+  .trim()
+  .url()
+  .max(500)
+  .refine((u) => u.startsWith("https://"), "Must be an https:// URL");
+
+export const updateLibrarySettingsSchema = z.object({
+  institutionName: z.string().trim().min(2).max(200).nullable().optional(),
+  ezproxyBaseUrl: httpsUrl.nullable().optional(),
+  openUrlBaseUrl: httpsUrl.nullable().optional(),
+});
+
 // Everything except `token`: the secret is returned only by createOrganizationInvitation.
 const organizationInvitationPublicSelect = {
   id: true,
@@ -119,6 +132,73 @@ export async function updateOrg(ctx: Ctx, orgId: string, input: z.infer<typeof u
       newValue: { name: org.name },
     });
     return org;
+  });
+}
+
+// Any ACTIVE org member may read the settings (they power everyone's library links);
+// only OWNER/ADMIN may change them. Returns null fields when nothing is configured.
+export async function getLibrarySettings(ctx: Ctx, orgId: string) {
+  const membership = await getOrgMembership(ctx.userId, orgId);
+  if (!membership) throw notFound("Organization");
+  const settings = await prisma.organizationLibrarySettings.findUnique({ where: { orgId } });
+  return {
+    institutionName: settings?.institutionName ?? null,
+    ezproxyBaseUrl: settings?.ezproxyBaseUrl ?? null,
+    openUrlBaseUrl: settings?.openUrlBaseUrl ?? null,
+    updatedAt: settings?.updatedAt ?? null,
+  };
+}
+
+export async function updateLibrarySettings(
+  ctx: Ctx,
+  orgId: string,
+  input: z.infer<typeof updateLibrarySettingsSchema>,
+) {
+  await requireOrgRole(ctx, orgId, ["OWNER", "ADMIN"]);
+  return prisma.$transaction(async (tx) => {
+    const before = await tx.organizationLibrarySettings.findUnique({ where: { orgId } });
+    const data = {
+      institutionName: input.institutionName !== undefined ? input.institutionName : undefined,
+      ezproxyBaseUrl: input.ezproxyBaseUrl !== undefined ? input.ezproxyBaseUrl : undefined,
+      openUrlBaseUrl: input.openUrlBaseUrl !== undefined ? input.openUrlBaseUrl : undefined,
+      updatedById: ctx.userId,
+    };
+    const settings = await tx.organizationLibrarySettings.upsert({
+      where: { orgId },
+      create: {
+        orgId,
+        institutionName: input.institutionName ?? null,
+        ezproxyBaseUrl: input.ezproxyBaseUrl ?? null,
+        openUrlBaseUrl: input.openUrlBaseUrl ?? null,
+        updatedById: ctx.userId,
+      },
+      update: data,
+    });
+    await audit.record(tx, {
+      userId: ctx.userId,
+      entityType: "OrganizationLibrarySettings",
+      entityId: settings.id,
+      action: AuditActions.ORG_LIBRARY_SETTINGS_UPDATED,
+      previousValue: before
+        ? {
+            institutionName: before.institutionName,
+            ezproxyBaseUrl: before.ezproxyBaseUrl,
+            openUrlBaseUrl: before.openUrlBaseUrl,
+          }
+        : undefined,
+      newValue: {
+        institutionName: settings.institutionName,
+        ezproxyBaseUrl: settings.ezproxyBaseUrl,
+        openUrlBaseUrl: settings.openUrlBaseUrl,
+      },
+      metadata: { orgId },
+    });
+    return {
+      institutionName: settings.institutionName,
+      ezproxyBaseUrl: settings.ezproxyBaseUrl,
+      openUrlBaseUrl: settings.openUrlBaseUrl,
+      updatedAt: settings.updatedAt,
+    };
   });
 }
 

@@ -6,6 +6,7 @@ import { signIn, openDemoProject, expectNoErrorOverlay, DEMO } from "./helpers";
 // exercising each page's data-loading paths on realistic state.
 const NAV = [
   "Dashboard",
+  "Team chat",
   "Protocol",
   "Import",
   "Deduplication",
@@ -16,6 +17,8 @@ const NAV = [
   "Risk of bias",
   "Analysis",
   "PRISMA",
+  "Manuscript",
+  "References",
   "Audit trail",
   "Settings",
 ];

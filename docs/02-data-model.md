@@ -163,6 +163,24 @@ newValue Json?, reason?, metadata Json?, createdAt)` — see `06-audit-design.md
 `ExportJob` — project, requestedBy, kind (CITATIONS|SCREENING|EXTRACTION|ROB|PRISMA|AUDIT|FULL),
 format (CSV|JSON), status, storageKey. Export generation itself is audited.
 
+## Collaboration suite (2026-07-21)
+
+One line each — field detail lives in `prisma/schema.prisma` (inline-commented):
+
+- `OrganizationLibrarySettings` — 1:1 org EZProxy/OpenURL config powering library links.
+- `FullTextRetrievalRun` — client-poll-driven OA auto-fetch run (chunk-claim cursor).
+- `ReferenceEntry` — project reference library; CSL-JSON source of truth + denormalized
+  search columns; `@@unique([projectId, doi])`, optional mirror link to a screening `Citation`.
+- `Manuscript` / `ManuscriptSection` / `ManuscriptSectionVersion` / `ManuscriptComment` —
+  one manuscript per project; sections carry soft-lock fields + an optimistic `version`
+  counter; versions are append-only snapshots; comments are one-level threads with mentions.
+- `ChatChannel` / `ChatChannelParticipant` / `ChatMessage` / `ChatAssignmentTask` /
+  `ChatReadState` — GENERAL/TOPIC/DIRECT channels (DM dedupe via `[projectId, dedupeKey]`),
+  soft-deleted messages with a `[channelId, updatedAt]` poll-cursor index, per-assignee
+  assignment tasks (reuses `AssignmentStatus`), forward-only read watermarks.
+- `Notification` — per-recipient inbox rows; `type` is a string against the TS catalog in
+  `services/notifications` (AuditEvent.action convention), emitted in-transaction.
+
 ## Deliberate deviations from the spec's entity list
 
 | Spec entity | Implemented as | Why |

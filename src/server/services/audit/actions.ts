@@ -63,6 +63,15 @@ export const AuditActions = {
   FULLTEXT_RETRIEVAL_RECORDED: "fulltext.retrieval.recorded",
   FULLTEXT_TEXT_EXTRACTED: "fulltext.text.extracted",
 
+  // institutional library / OA auto-fetch (run-level only — engine-created retrieval
+  // attempt rows are machine output, unaudited per-row like AI suggestion rows; PDF
+  // stores still audit via fulltext.file.uploaded because uploadFullText is reused)
+  ORG_LIBRARY_SETTINGS_UPDATED: "org.library_settings.updated",
+  FULLTEXT_AUTOFETCH_STARTED: "fulltext.autofetch.started",
+  FULLTEXT_AUTOFETCH_COMPLETED: "fulltext.autofetch.completed",
+  FULLTEXT_AUTOFETCH_FAILED: "fulltext.autofetch.failed",
+  FULLTEXT_AUTOFETCH_CANCELED: "fulltext.autofetch.canceled",
+
   // studies
   STUDY_CREATED: "study.created",
   STUDY_UPDATED: "study.updated",
@@ -118,6 +127,47 @@ export const AuditActions = {
   GRADE_ASSESSMENT_UPDATED: "grade.assessment.updated",
   GRADE_ASSESSMENT_REVIEWED: "grade.assessment.reviewed",
   GRADE_RATING_UPDATED: "grade.rating.updated",
+
+  // team chat — STRUCTURAL events only. Deliberately unaudited: message post/edit and
+  // read-state upserts (chat is high-frequency conversational data; messages are their
+  // own durable attributed record — authorId/createdAt/editedAt/tombstones — and auditing
+  // every post would duplicate the ChatMessage table into the append-only log). Deletes
+  // audit a 200-char snippet so moderation stays accountable.
+  CHAT_CHANNEL_CREATED: "chat.channel.created",
+  CHAT_CHANNEL_ARCHIVED: "chat.channel.archived",
+  CHAT_MESSAGE_DELETED: "chat.message.deleted",
+  CHAT_ASSIGNMENT_CREATED: "chat.assignment.created",
+  CHAT_ASSIGNMENT_COMPLETED: "chat.assignment.completed",
+  CHAT_ASSIGNMENT_VOIDED: "chat.assignment.voided",
+
+  // manuscript drafting. Deliberately unaudited: per-keystroke autosave content saves
+  // (the durable version rows ARE the audited record — a 2s debounce would flood the
+  // log) and lock acquire/heartbeat/release (transient coordination state). Takeover IS
+  // audited because it overrides another user.
+  MANUSCRIPT_CREATED: "manuscript.created",
+  MANUSCRIPT_UPDATED: "manuscript.updated",
+  MANUSCRIPT_SECTION_CREATED: "manuscript.section.created",
+  MANUSCRIPT_SECTION_UPDATED: "manuscript.section.updated",
+  MANUSCRIPT_SECTION_DELETED: "manuscript.section.deleted",
+  MANUSCRIPT_SECTIONS_REORDERED: "manuscript.sections.reordered",
+  MANUSCRIPT_SECTION_ASSIGNED: "manuscript.section.assigned",
+  MANUSCRIPT_SECTION_STATUS_CHANGED: "manuscript.section.status_changed",
+  MANUSCRIPT_VERSION_CREATED: "manuscript.section.version.created",
+  MANUSCRIPT_VERSION_RESTORED: "manuscript.section.version.restored",
+  MANUSCRIPT_LOCK_TAKEN_OVER: "manuscript.section.lock.taken_over",
+  MANUSCRIPT_COMMENT_CREATED: "manuscript.comment.created",
+  MANUSCRIPT_COMMENT_RESOLVED: "manuscript.comment.resolved",
+  MANUSCRIPT_COMMENT_REOPENED: "manuscript.comment.reopened",
+  MANUSCRIPT_COMMENT_DELETED: "manuscript.comment.deleted",
+  MANUSCRIPT_EXPORTED: "manuscript.exported",
+
+  // reference library (citation manager; bibliography formatting is an unaudited read —
+  // precedent: live PRISMA counts)
+  REFERENCE_CREATED: "reference.created",
+  REFERENCE_UPDATED: "reference.updated",
+  REFERENCE_DELETED: "reference.deleted",
+  REFERENCES_IMPORTED: "reference.imported",
+  REFERENCE_EXPORTED: "reference.exported",
 
   // prisma / exports
   PRISMA_SNAPSHOT_CREATED: "prisma.snapshot.created",
