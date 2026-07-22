@@ -4,7 +4,9 @@ buildCommand = "npm run build"
 
 [deploy]
 preDeployCommand = ["npm run db:deploy && npm run db:bootstrap"]
-startCommand = "npm run start"
+# Run Next directly (no npm wrapper): npm swallows SIGTERM during rollouts, exits
+# non-zero, and Railway then reports the replaced deployment as "Crashed".
+startCommand = "next start"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
