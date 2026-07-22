@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isLockStale, LOCK_STALE_MS } from "./lock-rules";
 import { collectCitationRefs, countWords, extractDocText, validateDoc } from "./doc-text";
 import { formatCiteMarker } from "./cite-format";
-import { docToBlocks } from "./docx-map";
+import { docToBlocks, offsetNumberingGroups } from "./docx-map";
 
 const DOC = {
   type: "doc",
@@ -153,5 +153,23 @@ describe("docx-map", () => {
     expect(blocks.some((b) => b.kind === "blockquote" && b.runs[0]!.text === "Quoted line")).toBe(true);
     expect(blocks.some((b) => b.kind === "hr")).toBe(true);
     expect(docToBlocks({ type: "nope" }, () => "")).toEqual([]);
+  });
+
+  it("offsets numbering groups so lists from different sections never share a group", () => {
+    const numbered = (group: number) => ({
+      kind: "numbered" as const,
+      runs: [{ text: "item" }],
+      numberingGroup: group,
+    });
+    const plain = { kind: "paragraph" as const, runs: [{ text: "prose" }] };
+    // Two sections whose docToBlocks calls each restarted their counter at 1.
+    const [a, b, c] = offsetNumberingGroups([
+      [numbered(1), plain, numbered(2)],
+      [numbered(1)],
+      [plain],
+    ]);
+    expect(a!.map((blk) => blk.numberingGroup)).toEqual([1, undefined, 2]);
+    expect(b![0]!.numberingGroup).toBe(3); // shifted past section A's max group
+    expect(c![0]!.numberingGroup).toBeUndefined();
   });
 });

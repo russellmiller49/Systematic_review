@@ -21,7 +21,7 @@ import {
   validationError,
 } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
-import { can, requirePermission } from "@/server/permissions";
+import { can, getMembership, requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import * as notifications from "@/server/services/notifications";
@@ -35,7 +35,7 @@ import {
   validateDoc,
 } from "@/lib/manuscript/doc-text";
 import { isLockStale } from "@/lib/manuscript/lock-rules";
-import { DEFAULT_SECTIONS } from "./default-sections";
+import { DEFAULT_SECTIONS, PICO_SECTIONS } from "./default-sections";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -135,13 +135,20 @@ function lockView(
 async function getOrCreateManuscript(ctx: Ctx, projectId: string) {
   const existing = await prisma.manuscript.findUnique({ where: { projectId } });
   if (existing) return existing;
+  // PICO sub-projects seed question-specific sections; the general IMRaD sections
+  // belong to the parent guideline's manuscript.
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { parentProjectId: true },
+  });
+  const defaults = project?.parentProjectId ? PICO_SECTIONS : DEFAULT_SECTIONS;
   try {
     return await prisma.$transaction(async (tx) => {
       const manuscript = await tx.manuscript.create({
         data: { projectId, createdById: ctx.userId },
       });
       await tx.manuscriptSection.createMany({
-        data: DEFAULT_SECTIONS.map((s, order) => ({
+        data: defaults.map((s, order) => ({
           manuscriptId: manuscript.id,
           title: s.title,
           kind: s.kind,
@@ -155,7 +162,7 @@ async function getOrCreateManuscript(ctx: Ctx, projectId: string) {
         entityType: "Manuscript",
         entityId: manuscript.id,
         action: AuditActions.MANUSCRIPT_CREATED,
-        metadata: { sectionCount: DEFAULT_SECTIONS.length },
+        metadata: { sectionCount: defaults.length },
       });
       return manuscript;
     });
@@ -978,19 +985,21 @@ export async function deleteComment(
 // Citations (cite-map) — delegates formatting to the reference library
 // ---------------------------------------------------------------------------
 
-export async function getCiteMap(ctx: Ctx, projectId: string) {
-  await requirePermission(ctx, projectId, "manuscript.view");
-  const manuscript = await getOrCreateManuscript(ctx, projectId);
-  const sections = await prisma.manuscriptSection.findMany({
-    where: { manuscriptId: manuscript.id },
-    select: { content: true },
-    orderBy: { order: "asc" },
-  });
-  const orderedIds = collectCitationRefs(sections.map((s) => s.content));
+// Shared cite-map assembly for one or many manuscripts' section contents. `projectId`
+// is the project whose reference library scope formats the bibliography — for guideline
+// families every project resolves to the same shared root pool, so reference ids are
+// interchangeable across the family's manuscripts.
+async function buildCiteMap(
+  ctx: Ctx,
+  projectId: string,
+  citationStyleId: string | null,
+  contents: unknown[],
+) {
+  const orderedIds = collectCitationRefs(contents);
   // The stored citationStyleId is a plain string; fall back to the default when it is
   // absent or no longer a known style.
   const styleParse = references.bibliographySchema.shape.styleId.safeParse(
-    manuscript.citationStyleId ?? undefined,
+    citationStyleId ?? undefined,
   );
   const bib = await references.formatBibliography(ctx, projectId, {
     styleId: styleParse.success ? styleParse.data : undefined,
@@ -1016,6 +1025,17 @@ export async function getCiteMap(ctx: Ctx, projectId: string) {
   };
 }
 
+export async function getCiteMap(ctx: Ctx, projectId: string) {
+  await requirePermission(ctx, projectId, "manuscript.view");
+  const manuscript = await getOrCreateManuscript(ctx, projectId);
+  const sections = await prisma.manuscriptSection.findMany({
+    where: { manuscriptId: manuscript.id },
+    select: { content: true },
+    orderBy: { order: "asc" },
+  });
+  return buildCiteMap(ctx, projectId, manuscript.citationStyleId, sections.map((s) => s.content));
+}
+
 // ---------------------------------------------------------------------------
 // DOCX export
 // ---------------------------------------------------------------------------
@@ -1039,17 +1059,20 @@ export async function exportDocx(
     getCiteMap(ctx, projectId),
   ]);
 
-  const { docToBlocks } = await import("@/lib/manuscript/docx-map");
+  const { docToBlocks, offsetNumberingGroups } = await import("@/lib/manuscript/docx-map");
   const { formatCiteMarker } = await import("@/lib/manuscript/cite-format");
   const { buildManuscriptDocx } = await import("./docx");
 
+  const sectionBlocks = offsetNumberingGroups(
+    sections.map((s) => docToBlocks(s.content, (ids) => formatCiteMarker(ids, citeMap))),
+  );
   const buffer = await buildManuscriptDocx({
     projectTitle: project.title,
     manuscriptTitle: manuscript.title === "Manuscript" ? project.title : manuscript.title,
-    sections: sections.map((s) => ({
+    sections: sections.map((s, i) => ({
       title: s.title,
       kind: s.kind,
-      blocks: docToBlocks(s.content, (ids) => formatCiteMarker(ids, citeMap)),
+      blocks: sectionBlocks[i] ?? [],
     })),
     bibliography: citeMap.bibliography.map((e) => ({ index: e.index, text: e.text })),
     numericStyle: citeMap.numeric,
@@ -1072,6 +1095,184 @@ export async function exportDocx(
       metadata: {
         sectionCount: sections.length,
         wordCount: sections.reduce((sum, s) => sum + s.wordCount, 0),
+        referenceCount: citeMap.bibliography.length,
+      },
+    });
+  });
+  return { filename, buffer };
+}
+
+// ---------------------------------------------------------------------------
+// Compiled guideline (parent's general sections + every PICO's sections)
+// ---------------------------------------------------------------------------
+
+interface GuidelinePart {
+  project: { id: string; title: string; researchQuestion: string | null };
+  isParent: boolean;
+  manuscript: { id: string; title: string; citationStyleId: string | null };
+  sections: ManuscriptSection[];
+}
+
+// Loads the parent manuscript plus each sub-project manuscript the caller may view.
+// Per-sub access follows the caller's OWN membership in that sub-project — being able
+// to read the guideline does not grant its PICO manuscripts. Inaccessible subs come
+// back in `skipped` (their titles are already org-visible via the project list).
+async function loadGuidelineParts(ctx: Ctx, projectId: string) {
+  await requirePermission(ctx, projectId, "manuscript.view");
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: {
+      id: true,
+      title: true,
+      researchQuestion: true,
+      isGuideline: true,
+      subProjects: {
+        select: { id: true, title: true, researchQuestion: true },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
+  if (!project) throw notFound("Project");
+  if (!project.isGuideline) {
+    throw invalidState("Only guideline projects have a compiled guideline document");
+  }
+
+  const accessible: typeof project.subProjects = [];
+  const skipped: { projectId: string; projectTitle: string }[] = [];
+  for (const sub of project.subProjects) {
+    const membership = await getMembership(ctx.userId, sub.id);
+    if (membership && can(membership.roles, "manuscript.view")) accessible.push(sub);
+    else skipped.push({ projectId: sub.id, projectTitle: sub.title });
+  }
+
+  const loadPart = async (
+    source: { id: string; title: string; researchQuestion: string | null },
+    isParent: boolean,
+  ): Promise<GuidelinePart> => {
+    const manuscript = await getOrCreateManuscript(ctx, source.id);
+    const sections = await prisma.manuscriptSection.findMany({
+      where: { manuscriptId: manuscript.id },
+      orderBy: { order: "asc" },
+    });
+    return {
+      project: { id: source.id, title: source.title, researchQuestion: source.researchQuestion },
+      isParent,
+      manuscript: {
+        id: manuscript.id,
+        title: manuscript.title,
+        citationStyleId: manuscript.citationStyleId,
+      },
+      sections,
+    };
+  };
+
+  const parent = await loadPart(project, true);
+  const subParts: GuidelinePart[] = [];
+  for (const sub of accessible) subParts.push(await loadPart(sub, false));
+  return { project, parent, parts: [parent, ...subParts], skipped };
+}
+
+// Structural outline of the full guideline document for the compile panel.
+export async function getCompiledGuideline(ctx: Ctx, projectId: string) {
+  const { project, parent, parts, skipped } = await loadGuidelineParts(ctx, projectId);
+  return {
+    title: parent.manuscript.title === "Manuscript" ? project.title : parent.manuscript.title,
+    citationStyleId: parent.manuscript.citationStyleId,
+    canExportAll: skipped.length === 0,
+    parts: parts.map((part, index) => ({
+      projectId: part.project.id,
+      projectTitle: part.project.title,
+      researchQuestion: part.project.researchQuestion,
+      isParent: part.isParent,
+      picoNumber: part.isParent ? null : index, // parts[0] is the parent
+      sections: part.sections.map((s) => ({
+        id: s.id,
+        title: s.title,
+        kind: s.kind,
+        status: s.status,
+        wordCount: s.wordCount,
+      })),
+    })),
+    skipped,
+    totalWordCount: parts.reduce(
+      (sum, part) => sum + part.sections.reduce((inner, s) => inner + s.wordCount, 0),
+      0,
+    ),
+  };
+}
+
+// One DOCX for the whole guideline: the parent's general sections first, then each
+// PICO sub-project as its own numbered part, with ONE bibliography numbered across the
+// entire document (possible because the family shares a single reference library).
+// Requires manuscript access to EVERY sub-project — a partial guideline export would
+// silently misrepresent the document, so missing access is a hard error instead.
+export async function exportGuidelineDocx(
+  ctx: Ctx,
+  projectId: string,
+): Promise<{ filename: string; buffer: Uint8Array }> {
+  const { project, parent, parts, skipped } = await loadGuidelineParts(ctx, projectId);
+  if (skipped.length > 0) {
+    throw forbidden(
+      `Exporting the full guideline needs manuscript access to every PICO sub-project. Missing: ${skipped
+        .map((s) => s.projectTitle)
+        .join(", ")}`,
+    );
+  }
+
+  const citeMap = await buildCiteMap(
+    ctx,
+    projectId,
+    parent.manuscript.citationStyleId,
+    parts.flatMap((part) => part.sections.map((s) => s.content)),
+  );
+
+  const { docToBlocks, offsetNumberingGroups } = await import("@/lib/manuscript/docx-map");
+  const { formatCiteMarker } = await import("@/lib/manuscript/cite-format");
+  const { buildGuidelineDocx } = await import("./docx");
+
+  const flatSections = parts.flatMap((part) => part.sections);
+  const flatBlocks = offsetNumberingGroups(
+    flatSections.map((s) => docToBlocks(s.content, (ids) => formatCiteMarker(ids, citeMap))),
+  );
+  let cursor = 0;
+  const docParts = parts.map((part, index) => ({
+    heading: part.isParent ? null : `PICO ${index}. ${part.project.title}`,
+    subtitle: part.isParent ? null : part.project.researchQuestion,
+    sections: part.sections.map((s) => ({
+      title: s.title,
+      kind: s.kind,
+      blocks: flatBlocks[cursor++] ?? [],
+    })),
+  }));
+
+  const title = parent.manuscript.title === "Manuscript" ? project.title : parent.manuscript.title;
+  const buffer = await buildGuidelineDocx({
+    projectTitle: project.title,
+    manuscriptTitle: title,
+    parts: docParts,
+    bibliography: citeMap.bibliography.map((e) => ({ index: e.index, text: e.text })),
+    numericStyle: citeMap.numeric,
+  });
+
+  const slug = project.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  const filename = `${slug || "guideline"}-guideline.docx`;
+
+  await prisma.$transaction(async (tx) => {
+    await audit.record(tx, {
+      projectId,
+      userId: ctx.userId,
+      entityType: "Manuscript",
+      entityId: parent.manuscript.id,
+      action: AuditActions.MANUSCRIPT_EXPORTED,
+      metadata: {
+        compiledGuideline: true,
+        projectCount: parts.length,
+        sectionCount: flatSections.length,
+        wordCount: flatSections.reduce((sum, s) => sum + s.wordCount, 0),
         referenceCount: citeMap.bibliography.length,
       },
     });

@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, ProjectRole } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
@@ -65,6 +65,20 @@ export const createProjectSchema = z.object({
   dualScreening: z.boolean().default(true),
   reviewersPerCitation: z.number().int().min(1).max(3).default(2),
   blindedScreening: z.boolean().default(true),
+  // Guideline hub: holds the shared reference library + general manuscript sections;
+  // PICO questions are added afterwards as sub-projects via createSubProject.
+  isGuideline: z.boolean().default(false),
+});
+
+// PICO sub-project creation. reviewType is inherited from the guideline; screening
+// settings default to the parent's title/abstract stage configuration.
+export const createSubProjectSchema = z.object({
+  title: z.string().trim().min(2).max(300),
+  researchQuestion: z.string().trim().min(5).max(2000), // the PICO question itself
+  description: z.string().trim().max(5000).optional(),
+  dualScreening: z.boolean().optional(),
+  reviewersPerCitation: z.number().int().min(1).max(3).optional(),
+  blindedScreening: z.boolean().optional(),
 });
 
 export const updateProjectSchema = z.object({
@@ -132,6 +146,7 @@ export async function createProject(
         status: input.status,
         registrationPlatform: input.registrationPlatform ?? null,
         registrationId: input.registrationId ?? null,
+        isGuideline: input.isGuideline,
         createdById: ctx.userId,
       },
     });
@@ -161,12 +176,136 @@ export async function createProject(
         title: project.title,
         reviewType: project.reviewType,
         status: project.status,
+        isGuideline: project.isGuideline,
         dualScreening: input.dualScreening,
         reviewersPerCitation,
         blindedScreening: input.blindedScreening,
       },
     });
     return { ...project, screeningStages: [titleAbstract, fullText] };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Guideline sub-projects (one full review project per PICO question)
+// ---------------------------------------------------------------------------
+
+// Creates a PICO sub-project under a guideline. The sub-project is a complete review
+// project (own protocol, screening stages, extraction, analysis, manuscript) that shares
+// the guideline's reference library. The parent's ACTIVE members are copied in with
+// their roles so the team keeps working without re-inviting; membership is managed
+// independently per project afterwards.
+export async function createSubProject(
+  ctx: Ctx,
+  parentProjectId: string,
+  rawInput: z.input<typeof createSubProjectSchema>,
+) {
+  await requirePermission(ctx, parentProjectId, "project.edit");
+  const input = createSubProjectSchema.parse(rawInput);
+
+  const parent = await prisma.project.findUnique({
+    where: { id: parentProjectId },
+    include: {
+      screeningStages: { where: { type: "TITLE_ABSTRACT" } },
+      members: { where: { status: "ACTIVE" } },
+    },
+  });
+  if (!parent) throw notFound("Project");
+  if (!parent.isGuideline) {
+    throw invalidState("Only guideline projects can contain PICO sub-projects");
+  }
+  if (parent.parentProjectId) {
+    throw invalidState("A sub-project cannot contain its own sub-projects");
+  }
+
+  const parentStage = parent.screeningStages[0];
+  const dualScreening = input.dualScreening ?? (parentStage ? parentStage.reviewersPerCitation > 1 : true);
+  const reviewersPerCitation = dualScreening
+    ? (input.reviewersPerCitation ?? (parentStage && parentStage.reviewersPerCitation > 1 ? parentStage.reviewersPerCitation : 2))
+    : 1;
+  const blinded = input.blindedScreening ?? parentStage?.blinded ?? true;
+
+  return prisma.$transaction(async (tx) => {
+    const project = await tx.project.create({
+      data: {
+        orgId: parent.orgId,
+        title: input.title,
+        reviewType: parent.reviewType,
+        researchQuestion: input.researchQuestion,
+        description: input.description ?? null,
+        parentProjectId: parent.id,
+        createdById: ctx.userId,
+      },
+    });
+    // Copy the guideline team: every ACTIVE parent member keeps their roles; the
+    // creator additionally becomes an OWNER of the sub-project.
+    await tx.projectMember.createMany({
+      data: parent.members.map((m) => ({
+        projectId: project.id,
+        userId: m.userId,
+        roles:
+          m.userId === ctx.userId
+            ? [...new Set<ProjectRole>(["OWNER", ...m.roles])]
+            : m.roles,
+      })),
+    });
+    const stageConfig = { reviewersPerCitation, blinded, maybeGeneratesConflict: true };
+    const titleAbstract = await tx.screeningStage.create({
+      data: { projectId: project.id, type: "TITLE_ABSTRACT", ...stageConfig },
+    });
+    const fullText = await tx.screeningStage.create({
+      data: { projectId: project.id, type: "FULL_TEXT", ...stageConfig },
+    });
+    // The PICO question is the sub-project's review question from day one.
+    await tx.protocol.create({
+      data: { projectId: project.id, reviewQuestion: input.researchQuestion },
+    });
+    await audit.record(tx, {
+      projectId: project.id,
+      userId: ctx.userId,
+      entityType: "Project",
+      entityId: project.id,
+      action: AuditActions.PROJECT_CREATED,
+      newValue: {
+        orgId: parent.orgId,
+        title: project.title,
+        reviewType: project.reviewType,
+        status: project.status,
+        parentProjectId: parent.id,
+        dualScreening,
+        reviewersPerCitation,
+        blindedScreening: blinded,
+        copiedMembers: parent.members.length,
+      },
+    });
+    // Also visible in the guideline's own audit trail.
+    await audit.record(tx, {
+      projectId: parent.id,
+      userId: ctx.userId,
+      entityType: "Project",
+      entityId: project.id,
+      action: AuditActions.PROJECT_SUBPROJECT_CREATED,
+      newValue: { title: project.title, researchQuestion: input.researchQuestion },
+    });
+    return { ...project, screeningStages: [titleAbstract, fullText] };
+  });
+}
+
+// PICO sub-projects of a guideline, with headline counts for the dashboard panel.
+export async function listSubProjects(ctx: Ctx, parentProjectId: string) {
+  await requirePermission(ctx, parentProjectId, "project.view");
+  return prisma.project.findMany({
+    where: { parentProjectId },
+    include: {
+      _count: {
+        select: {
+          citations: true,
+          studies: true,
+          members: { where: { status: "ACTIVE" } },
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
   });
 }
 
@@ -195,6 +334,11 @@ export async function getProject(ctx: Ctx, projectId: string) {
     include: {
       org: { select: { id: true, name: true, slug: true } },
       screeningStages: { orderBy: { type: "asc" } },
+      parentProject: { select: { id: true, title: true } },
+      subProjects: {
+        select: { id: true, title: true, status: true, researchQuestion: true },
+        orderBy: { createdAt: "asc" },
+      },
       _count: {
         select: {
           citations: true,

@@ -113,6 +113,38 @@ async function loadReference(tx: Tx, projectId: string, referenceId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Guideline-shared scope
+// ---------------------------------------------------------------------------
+
+// A PICO sub-project shares its guideline parent's reference library: permission is
+// checked against the project the caller is working in (sub or parent — done by each
+// public function BEFORE calling this), while rows are stored on the FAMILY ROOT so the
+// pool, DOI/PMID dedupe, and bibliography numbering are family-wide. For standalone
+// projects the scope is the project itself, which keeps existing behavior unchanged.
+async function resolveReferenceScope(projectId: string): Promise<string> {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { parentProjectId: true },
+  });
+  return project?.parentProjectId ?? projectId;
+}
+
+// The family root plus all of its PICO sub-projects (⊇ [scopeProjectId]).
+async function familyProjectIds(scopeProjectId: string): Promise<string[]> {
+  const subs = await prisma.project.findMany({
+    where: { parentProjectId: scopeProjectId },
+    select: { id: true },
+  });
+  return [scopeProjectId, ...subs.map((s) => s.id)];
+}
+
+// Reference mutations audit to the root (where the rows live — ONE coherent library
+// history); when the caller worked through a sub-project the event records it.
+function viaMetadata(scopeProjectId: string, viaProjectId: string) {
+  return scopeProjectId === viaProjectId ? undefined : { viaProjectId };
+}
+
+// ---------------------------------------------------------------------------
 // CRUD
 // ---------------------------------------------------------------------------
 
@@ -122,9 +154,10 @@ export async function listReferences(
   filter: z.infer<typeof listReferencesSchema> = {},
 ) {
   await requirePermission(ctx, projectId, "references.view");
+  const scopeId = await resolveReferenceScope(projectId);
   return prisma.referenceEntry.findMany({
     where: {
-      projectId,
+      projectId: scopeId,
       ...(filter.tag ? { tags: { has: filter.tag } } : {}),
       ...(filter.search
         ? {
@@ -147,26 +180,28 @@ export async function createReference(
   input: z.infer<typeof createReferenceSchema>,
 ) {
   await requirePermission(ctx, projectId, "references.manage");
+  const scopeId = await resolveReferenceScope(projectId);
   const csl = input.csl as CslItemInput;
   const denorm = denormalizeCsl(csl);
 
   if (denorm.doi) {
     const dupe = await prisma.referenceEntry.findFirst({
-      where: { projectId, doi: denorm.doi },
+      where: { projectId: scopeId, doi: denorm.doi },
       select: { id: true, title: true },
     });
     if (dupe) throw conflict(`A reference with this DOI already exists: “${dupe.title}”`);
   }
   if (denorm.pmid) {
     const dupe = await prisma.referenceEntry.findFirst({
-      where: { projectId, pmid: denorm.pmid },
+      where: { projectId: scopeId, pmid: denorm.pmid },
       select: { id: true, title: true },
     });
     if (dupe) throw conflict(`A reference with this PMID already exists: “${dupe.title}”`);
   }
   if (input.citationId) {
+    // A mirrored citation may come from anywhere in the guideline family.
     const citation = await prisma.citation.findFirst({
-      where: { id: input.citationId, projectId },
+      where: { id: input.citationId, projectId: { in: await familyProjectIds(scopeId) } },
     });
     if (!citation) throw notFound("Citation");
   }
@@ -174,7 +209,7 @@ export async function createReference(
   return prisma.$transaction(async (tx) => {
     const entry = await tx.referenceEntry.create({
       data: {
-        projectId,
+        projectId: scopeId,
         csl: toJson(csl),
         ...denorm,
         tags: input.tags ?? [],
@@ -190,12 +225,13 @@ export async function createReference(
       select: referenceSelect,
     });
     await audit.record(tx, {
-      projectId,
+      projectId: scopeId,
       userId: ctx.userId,
       entityType: "ReferenceEntry",
       entityId: entry.id,
       action: AuditActions.REFERENCE_CREATED,
       newValue: { title: denorm.title, doi: denorm.doi, pmid: denorm.pmid },
+      metadata: viaMetadata(scopeId, projectId),
     });
     return withId;
   });
@@ -208,13 +244,14 @@ export async function updateReference(
   input: z.infer<typeof updateReferenceSchema>,
 ) {
   await requirePermission(ctx, projectId, "references.manage");
-  const before = await loadReference(prisma, projectId, referenceId);
+  const scopeId = await resolveReferenceScope(projectId);
+  const before = await loadReference(prisma, scopeId, referenceId);
 
   const csl = input.csl !== undefined ? (input.csl as CslItemInput) : undefined;
   const denorm = csl ? denormalizeCsl(csl) : null;
   if (denorm?.doi && denorm.doi !== before.doi) {
     const dupe = await prisma.referenceEntry.findFirst({
-      where: { projectId, doi: denorm.doi, id: { not: referenceId } },
+      where: { projectId: scopeId, doi: denorm.doi, id: { not: referenceId } },
     });
     if (dupe) throw conflict("Another reference already has this DOI");
   }
@@ -230,13 +267,14 @@ export async function updateReference(
       select: referenceSelect,
     });
     await audit.record(tx, {
-      projectId,
+      projectId: scopeId,
       userId: ctx.userId,
       entityType: "ReferenceEntry",
       entityId: before.id,
       action: AuditActions.REFERENCE_UPDATED,
       previousValue: { title: before.title, tags: before.tags, notes: before.notes },
       newValue: { title: entry.title, tags: entry.tags, notes: entry.notes },
+      metadata: viaMetadata(scopeId, projectId),
     });
     return entry;
   });
@@ -244,16 +282,18 @@ export async function updateReference(
 
 export async function deleteReference(ctx: Ctx, projectId: string, referenceId: string) {
   await requirePermission(ctx, projectId, "references.manage");
-  const before = await loadReference(prisma, projectId, referenceId);
+  const scopeId = await resolveReferenceScope(projectId);
+  const before = await loadReference(prisma, scopeId, referenceId);
   return prisma.$transaction(async (tx) => {
     await tx.referenceEntry.delete({ where: { id: before.id } });
     await audit.record(tx, {
-      projectId,
+      projectId: scopeId,
       userId: ctx.userId,
       entityType: "ReferenceEntry",
       entityId: before.id,
       action: AuditActions.REFERENCE_DELETED,
       previousValue: { title: before.title, doi: before.doi, pmid: before.pmid },
+      metadata: viaMetadata(scopeId, projectId),
     });
     return { deleted: true };
   });
@@ -271,11 +311,12 @@ export async function lookupReference(
   input: z.infer<typeof lookupReferenceSchema>,
 ) {
   await requirePermission(ctx, projectId, "references.manage");
+  const scopeId = await resolveReferenceScope(projectId);
   const csl = input.kind === "doi" ? await lookupDoi(input.value) : await lookupPmid(input.value);
   const denorm = denormalizeCsl(csl);
   const existing = await prisma.referenceEntry.findFirst({
     where: {
-      projectId,
+      projectId: scopeId,
       OR: [
         ...(denorm.doi ? [{ doi: denorm.doi }] : []),
         ...(denorm.pmid ? [{ pmid: denorm.pmid }] : []),
@@ -292,6 +333,7 @@ export async function importReferences(
   input: z.infer<typeof importReferencesSchema>,
 ) {
   await requirePermission(ctx, projectId, "references.manage");
+  const scopeId = await resolveReferenceScope(projectId);
   const { records, errors } =
     input.format === "RIS" ? parseRis(input.content) : parseBibtex(input.content);
   if (records.length === 0) {
@@ -299,7 +341,7 @@ export async function importReferences(
   }
 
   const existing = await prisma.referenceEntry.findMany({
-    where: { projectId },
+    where: { projectId: scopeId },
     select: { doi: true, pmid: true },
   });
   const seenDois = new Set(existing.map((e) => e.doi).filter(Boolean));
@@ -323,7 +365,7 @@ export async function importReferences(
       }
       const entry = await tx.referenceEntry.create({
         data: {
-          projectId,
+          projectId: scopeId,
           csl: toJson(csl),
           ...denorm,
           tags: [],
@@ -339,58 +381,76 @@ export async function importReferences(
       added += 1;
     }
     await audit.record(tx, {
-      projectId,
+      projectId: scopeId,
       userId: ctx.userId,
       entityType: "Project",
-      entityId: projectId,
+      entityId: scopeId,
       action: AuditActions.REFERENCES_IMPORTED,
-      metadata: { format: input.format, added, skipped, parseErrors: errors.length },
+      metadata: {
+        format: input.format,
+        added,
+        skipped,
+        parseErrors: errors.length,
+        ...viaMetadata(scopeId, projectId),
+      },
     });
   });
   return { added, skipped, parseErrors: errors.length };
 }
 
 // Mirror screening citations into the library. Default set = citations with a FULL_TEXT
-// INCLUDE result (the studies that will actually be cited in the paper).
+// INCLUDE result (the studies that will actually be cited in the paper). In a PICO
+// sub-project that means the sub-project's own included studies; on a guideline it
+// aggregates the included studies of every PICO sub-project.
 export async function addFromCitations(
   ctx: Ctx,
   projectId: string,
   input: z.infer<typeof addFromCitationsSchema>,
 ) {
   await requirePermission(ctx, projectId, "references.manage");
+  const scopeId = await resolveReferenceScope(projectId);
+  const sourceProjectIds =
+    projectId === scopeId ? await familyProjectIds(scopeId) : [projectId];
 
   let citations;
   if (input.citationIds && input.citationIds.length > 0) {
     citations = await prisma.citation.findMany({
-      where: { id: { in: input.citationIds }, projectId, status: "ACTIVE" },
+      where: {
+        id: { in: input.citationIds },
+        projectId: { in: await familyProjectIds(scopeId) },
+        status: "ACTIVE",
+      },
     });
   } else {
-    const ftStage = await prisma.screeningStage.findFirst({
-      where: { projectId, type: "FULL_TEXT" },
+    const ftStages = await prisma.screeningStage.findMany({
+      where: { projectId: { in: sourceProjectIds }, type: "FULL_TEXT" },
     });
-    citations = ftStage
-      ? await prisma.citation.findMany({
-          where: {
-            projectId,
-            status: "ACTIVE",
-            stageResults: { some: { stageId: ftStage.id, outcome: "INCLUDE" } },
-          },
-          orderBy: { createdAt: "asc" },
-        })
-      : [];
+    citations =
+      ftStages.length > 0
+        ? await prisma.citation.findMany({
+            where: {
+              projectId: { in: sourceProjectIds },
+              status: "ACTIVE",
+              stageResults: {
+                some: { stageId: { in: ftStages.map((s) => s.id) }, outcome: "INCLUDE" },
+              },
+            },
+            orderBy: { createdAt: "asc" },
+          })
+        : [];
   }
 
   const mirrored = new Set(
     (
       await prisma.referenceEntry.findMany({
-        where: { projectId, citationId: { not: null } },
+        where: { projectId: scopeId, citationId: { not: null } },
         select: { citationId: true },
       })
     ).map((e) => e.citationId),
   );
   const existingDois = new Set(
     (
-      await prisma.referenceEntry.findMany({ where: { projectId }, select: { doi: true } })
+      await prisma.referenceEntry.findMany({ where: { projectId: scopeId }, select: { doi: true } })
     )
       .map((e) => e.doi)
       .filter(Boolean),
@@ -414,7 +474,7 @@ export async function addFromCitations(
       const denorm = denormalizeCsl(csl);
       const entry = await tx.referenceEntry.create({
         data: {
-          projectId,
+          projectId: scopeId,
           csl: toJson(csl),
           ...denorm,
           tags: ["included-study"],
@@ -431,12 +491,12 @@ export async function addFromCitations(
     }
     if (added > 0 || citations.length > 0) {
       await audit.record(tx, {
-        projectId,
+        projectId: scopeId,
         userId: ctx.userId,
         entityType: "Project",
-        entityId: projectId,
+        entityId: scopeId,
         action: AuditActions.REFERENCES_IMPORTED,
-        metadata: { source: "included_studies", added, skipped },
+        metadata: { source: "included_studies", added, skipped, ...viaMetadata(scopeId, projectId) },
       });
     }
   });
@@ -460,10 +520,11 @@ export async function formatBibliography(
   input: z.infer<typeof bibliographySchema>,
 ): Promise<{ styleId: CslStyleId; numeric: boolean; entries: FormattedReference[] }> {
   await requirePermission(ctx, projectId, "references.view");
+  const scopeId = await resolveReferenceScope(projectId);
   const styleId = input.styleId ?? DEFAULT_STYLE_ID;
   const entries = await prisma.referenceEntry.findMany({
     where: {
-      projectId,
+      projectId: scopeId,
       ...(input.referenceIds && input.referenceIds.length > 0
         ? { id: { in: input.referenceIds } }
         : {}),
@@ -482,8 +543,9 @@ export async function exportReferences(
   query: z.infer<typeof exportReferencesSchema>,
 ): Promise<{ filename: string; contentType: string; body: string }> {
   await requirePermission(ctx, projectId, "references.view");
+  const scopeId = await resolveReferenceScope(projectId);
   const entries = await prisma.referenceEntry.findMany({
-    where: { projectId },
+    where: { projectId: scopeId },
     select: { id: true, csl: true },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
@@ -516,12 +578,17 @@ export async function exportReferences(
 
   await prisma.$transaction(async (tx) => {
     await audit.record(tx, {
-      projectId,
+      projectId: scopeId,
       userId: ctx.userId,
       entityType: "Project",
-      entityId: projectId,
+      entityId: scopeId,
       action: AuditActions.REFERENCE_EXPORTED,
-      metadata: { format: query.format, styleId: query.styleId ?? null, count: items.length },
+      metadata: {
+        format: query.format,
+        styleId: query.styleId ?? null,
+        count: items.length,
+        ...viaMetadata(scopeId, projectId),
+      },
     });
   });
   return { filename, contentType, body };

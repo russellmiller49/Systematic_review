@@ -4,13 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   BarChart3,
+  BookMarked,
   ClipboardList,
   FileSearch,
   FileUp,
   GitMerge,
   History,
   ListChecks,
+  ListTree,
+  MessagesSquare,
+  PenLine,
   Scale,
+  Settings,
   Swords,
   Table2,
   type LucideIcon,
@@ -18,8 +23,9 @@ import {
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { StatCard } from "@/components/layout/page-header";
+import { NewSubProjectDialog } from "@/components/projects/new-subproject-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, EmptyState, Progress, Skeleton } from "@/components/ui/misc";
 
 interface StageStats {
@@ -36,6 +42,20 @@ interface ActivityRow {
   action: string;
   createdAt: string;
   actor: { id: string; name: string };
+}
+
+interface ProjectFamily {
+  isGuideline: boolean;
+  parentProject: { id: string; title: string } | null;
+  capabilities: string[];
+}
+
+interface SubProjectRow {
+  id: string;
+  title: string;
+  status: string;
+  researchQuestion: string | null;
+  _count: { citations: number; studies: number; members: number };
 }
 
 interface DashboardData {
@@ -132,6 +152,47 @@ const QUICK_LINKS: { slug: string; label: string; description: string; icon: Luc
   },
 ];
 
+// Workspace links shown on a guideline hub: the guideline itself carries the shared
+// writing surfaces; screening/extraction/analysis happen inside each PICO sub-project.
+const GUIDELINE_QUICK_LINKS: { slug: string; label: string; description: string; icon: LucideIcon }[] = [
+  {
+    slug: "protocol",
+    label: "Protocol",
+    description: "Guideline-wide scope, methods, and eligibility framework.",
+    icon: ClipboardList,
+  },
+  {
+    slug: "manuscript",
+    label: "Manuscript",
+    description: "General sections — introduction, methods, conclusions — plus the compiled guideline.",
+    icon: PenLine,
+  },
+  {
+    slug: "references",
+    label: "References",
+    description: "The shared library used by the guideline and every PICO sub-project.",
+    icon: BookMarked,
+  },
+  {
+    slug: "chat",
+    label: "Team chat",
+    description: "Coordinate the guideline panel and question teams.",
+    icon: MessagesSquare,
+  },
+  {
+    slug: "audit",
+    label: "Audit trail",
+    description: "Every guideline-level change, including the shared library.",
+    icon: History,
+  },
+  {
+    slug: "settings",
+    label: "Settings",
+    description: "Guideline details, members, and invitations.",
+    icon: Settings,
+  },
+];
+
 function stageLabel(type: string): string {
   return STAGE_LABELS[type] ?? type.replace(/_/g, " ").toLowerCase();
 }
@@ -166,6 +227,8 @@ function ProgressRow({
 
 export function ProjectDashboard({ projectId }: { projectId: string }) {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [family, setFamily] = useState<ProjectFamily | null>(null);
+  const [subProjects, setSubProjects] = useState<SubProjectRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -179,9 +242,21 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
         setError(message);
         toast.error(message);
       });
+    api<ProjectFamily>(`/api/projects/${projectId}`)
+      .then((p) => {
+        setFamily(p);
+        if (p.isGuideline) {
+          api<SubProjectRow[]>(`/api/projects/${projectId}/subprojects`)
+            .then(setSubProjects)
+            .catch(() => setSubProjects([]));
+        }
+      })
+      .catch(() => setFamily(null));
   }, [projectId]);
 
   useEffect(load, [load]);
+
+  const isGuideline = family?.isGuideline ?? false;
 
   const stats = data?.stats;
   const openConflicts = stats
@@ -201,10 +276,27 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
               <Badge variant={STATUS_VARIANTS[data.project.status] ?? "muted"}>
                 {data.project.status.toLowerCase()}
               </Badge>
+              {isGuideline && (
+                <Badge variant="secondary">
+                  <ListTree className="mr-1 h-3 w-3" /> Guideline
+                </Badge>
+              )}
             </div>
             <p className="mt-0.5 text-sm text-muted-foreground">
               {REVIEW_TYPE_LABELS[data.project.reviewType] ?? data.project.reviewType}
             </p>
+            {family?.parentProject && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Part of guideline{" "}
+                <Link
+                  href={`/projects/${family.parentProject.id}`}
+                  className="font-medium text-primary hover:underline"
+                >
+                  {family.parentProject.title}
+                </Link>
+                {" — "}the reference library is shared across the guideline.
+              </p>
+            )}
           </>
         ) : error ? (
           <h1 className="text-2xl font-semibold tracking-tight">Project dashboard</h1>
@@ -218,8 +310,64 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
 
       {error && <Alert variant="error">{error}</Alert>}
 
+      {/* PICO questions (guideline hub) */}
+      {!error && isGuideline && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-medium">PICO questions</h2>
+              <p className="text-sm text-muted-foreground">
+                Each question is a full review sub-project; its manuscript sections feed the
+                compiled guideline.
+              </p>
+            </div>
+            {family?.capabilities.includes("project.edit") && (
+              <NewSubProjectDialog projectId={projectId} onCreated={load} />
+            )}
+          </div>
+          {subProjects === null ? (
+            <Skeleton className="h-32" />
+          ) : subProjects.length === 0 ? (
+            <EmptyState
+              icon={ListTree}
+              title="No PICO questions yet"
+              description="Add the guideline's first PICO question to start its evidence review."
+            />
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {subProjects.map((sub, i) => (
+                <Link key={sub.id} href={`/projects/${sub.id}`}>
+                  <Card className="h-full transition-shadow hover:shadow-md">
+                    <CardHeader>
+                      <div className="flex items-start justify-between gap-2">
+                        <CardTitle className="text-base leading-snug">
+                          <span className="mr-2 text-muted-foreground/70">#{i + 1}</span>
+                          {sub.title}
+                        </CardTitle>
+                        <Badge variant={STATUS_VARIANTS[sub.status] ?? "muted"}>
+                          {sub.status.toLowerCase()}
+                        </Badge>
+                      </div>
+                      {sub.researchQuestion && (
+                        <CardDescription className="line-clamp-2">
+                          {sub.researchQuestion}
+                        </CardDescription>
+                      )}
+                    </CardHeader>
+                    <CardContent className="text-sm text-muted-foreground">
+                      {sub._count.citations} citations · {sub._count.studies} studies ·{" "}
+                      {sub._count.members} members
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Stats */}
-      {!error && (
+      {!error && !isGuideline && (
         <section className="space-y-3">
           <h2 className="text-lg font-medium">At a glance</h2>
           {stats === undefined ? (
@@ -274,7 +422,7 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
       )}
 
       {/* Pipeline progress */}
-      {!error && (
+      {!error && !isGuideline && (
         <section className="space-y-3">
           <h2 className="text-lg font-medium">Pipeline progress</h2>
           {stats === undefined ? (
@@ -351,7 +499,7 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
       <section className="space-y-3">
         <h2 className="text-lg font-medium">Workspace</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {QUICK_LINKS.map(({ slug, label, description, icon: Icon }, i) => (
+          {(isGuideline ? GUIDELINE_QUICK_LINKS : QUICK_LINKS).map(({ slug, label, description, icon: Icon }, i) => (
             <Link key={slug} href={`/projects/${projectId}/${slug}`}>
               <Card className="h-full transition-shadow hover:shadow-md">
                 <CardHeader>

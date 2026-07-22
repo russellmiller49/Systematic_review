@@ -4,7 +4,75 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
-## Current state (2026-07-21) — collaboration suite: library access, references, manuscript, team chat — DONE
+## Current state (2026-07-22) — guideline projects with PICO sub-projects — DONE
+
+Backlog #8 (multi-PICO) shipped as **guideline families**: a guideline hub project owns the
+general manuscript sections and the shared reference library; each PICO question is a FULL
+review sub-project (protocol/screening/extraction/analysis/GRADE/manuscript all work as-is).
+
+- **Schema** (migration `20260722161640_guideline_subprojects`): `Project.isGuideline`
+  Boolean + self-relation `parentProjectId` (`parentProject`/`subProjects`,
+  `@@index([parentProjectId])`). One level only, same org — enforced in the service, not
+  the schema.
+- **Projects service**: `createProject` gained `isGuideline`; `createSubProject(parent)`
+  (needs `project.edit` on the guideline; guards: parent must be a guideline, subs cannot
+  nest) creates the sub in one tx — copies the guideline's ACTIVE members WITH their roles
+  (creator additionally gets OWNER), mirrors the parent TA stage screening config, inherits
+  reviewType, prefills `Protocol.reviewQuestion` with the PICO question, audits
+  `project.created` on the sub AND new action `project.subproject.created` on the parent.
+  `listSubProjects` (project.view, headline counts); `getProject` payload now carries
+  `isGuideline`, `parentProject {id,title}`, `subProjects [{id,title,status,researchQuestion}]`.
+  Routes: GET/POST `/api/projects/[projectId]/subprojects`.
+- **Shared reference library**: every references-service function resolves a scope =
+  family root (`parentProjectId ?? projectId`) AFTER checking permission on the project the
+  caller came through — rows, DOI/PMID dedupe, bibliography numbering, and exports are
+  family-wide; standalone projects are byte-identical to before (scope = self). Mirrored
+  `citationId` may point at citations in ANY family project. `addFromCitations` default
+  set: a sub mirrors its OWN FT-included studies; the guideline surface aggregates every
+  sub's. Reference audit events land on the ROOT's trail with `metadata.viaProjectId` when
+  worked through a sub. NOTE the deliberate boundary: permission is checked on the
+  via-project only, so a sub-only LIBRARIAN can curate the shared pool (that's the point);
+  the guideline's audit page requires guideline membership to read those events.
+- **Manuscript**: sub-projects seed PICO defaults (Question / Evidence summary / Certainty
+  of evidence / Recommendation / Rationale and considerations) instead of IMRaD —
+  `PICO_SECTIONS` in `default-sections.ts`; the guideline keeps the 8 IMRaD sections (the
+  "general fields"). `getCiteMap` refactored over a shared `buildCiteMap`. NEW
+  `getCompiledGuideline` (outline of parent + each accessible sub, per-sub access =
+  caller's OWN membership + `manuscript.view`; inaccessible subs reported in `skipped`,
+  `canExportAll` flag) and `exportGuidelineDocx` (HARD-requires access to every sub — no
+  silent partial documents; parent sections at H1, each PICO under "PICO n. <title>" with
+  sections demoted to H2 and its research question as an italic subtitle; ONE bibliography
+  numbered across the whole document — sound because the family shares one pool). Routes:
+  `manuscript/compiled` + `manuscript/compiled/docx`. Also fixed a latent DOCX bug for ALL
+  exports: `docToBlocks` restarts numbering groups per section, so ordered lists in
+  different sections shared a Word numbering instance (numbering continued across lists);
+  new pure `offsetNumberingGroups` (docx-map.ts, unit-tested) makes groups globally
+  disjoint in both the single-manuscript and compiled exports.
+- **UI**: new-project dialog gained a Structure choice (single review vs guideline;
+  guideline hides screening settings and defaults reviewType to GUIDELINE_EVIDENCE_REVIEW);
+  guideline dashboard = PICO hub (numbered sub-project cards + Add PICO question dialog
+  gated on `project.edit`, guideline-specific quick links, review-pipeline stats hidden);
+  sub dashboards link back to the guideline; sidebar on guidelines trims to
+  Dashboard/Chat/Protocol/Manuscript/References/Audit/Settings + a numbered PICO questions
+  list, and subs get a parent backlink; org dashboard hides sub cards behind their
+  guideline card ("N PICO questions"); references page explains the shared library on both
+  surfaces; manuscript page on guidelines gets the Compiled guideline dialog (outline +
+  skipped-subs warning + full-guideline DOCX export button disabled without full access).
+- **Seed**: demo guideline "Management of Malignant Pleural Effusion — Clinical Guideline"
+  with 2 PICO subs, cross-direction shared references (one added at the guideline, one from
+  inside PICO 1), and cited manuscript content in both the guideline (Intro/Methods) and
+  PICO 1 (Question/Recommendation) — exercises the compiled export on the demo DB.
+- **Tests**: `tests/integration/subprojects.test.ts` (10 tests: creation/member-copy/config
+  inheritance/audit, guards incl. nesting + permission, family payload, root-scoped rows +
+  via-permissions + viaProjectId audit, family-wide DOI dedupe, addFromCitations sub-vs-
+  guideline defaults, family bibliography + cite map, PICO vs IMRaD defaults, compiled
+  outline order/skipped/canExportAll, export 403-with-titles + audited DOCX) + an
+  `offsetNumberingGroups` unit test.
+- Verification: Prisma schema valid, typecheck + production build clean, **612 unit**,
+  **300 integration**, **14 E2E**; seeded guideline browser-checked (hub dashboard, PICO
+  sidebar, shared references from both surfaces, compiled dialog + DOCX download).
+
+## Prior state (2026-07-21) — collaboration suite: library access, references, manuscript, team chat — DONE
 
 Four features landed as one wave (plan: `~/.claude/plans/can-we-add-a-replicated-ullman.md`),
 plus two shared substrates:

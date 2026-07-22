@@ -36,6 +36,7 @@ export function NewProjectDialog({ orgId, onCreated }: { orgId: string; onCreate
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
+    structure: "SINGLE" as "SINGLE" | "GUIDELINE",
     title: "",
     reviewType: "SYSTEMATIC_REVIEW",
     researchQuestion: "",
@@ -46,6 +47,7 @@ export function NewProjectDialog({ orgId, onCreated }: { orgId: string; onCreate
     reviewersPerCitation: 2,
     blindedScreening: true,
   });
+  const isGuideline = form.structure === "GUIDELINE";
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -65,8 +67,9 @@ export function NewProjectDialog({ orgId, onCreated }: { orgId: string; onCreate
         dualScreening: form.dualScreening,
         reviewersPerCitation: form.dualScreening ? form.reviewersPerCitation : 1,
         blindedScreening: form.blindedScreening,
+        isGuideline,
       });
-      toast.success("Project created");
+      toast.success(isGuideline ? "Guideline created — now add its PICO questions" : "Project created");
       setOpen(false);
       onCreated?.();
       router.push(`/projects/${project.id}`);
@@ -91,6 +94,44 @@ export function NewProjectDialog({ orgId, onCreated }: { orgId: string; onCreate
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
+          <fieldset className="space-y-2 rounded-md border border-border p-4">
+            <legend className="px-1 text-sm font-medium">Structure</legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="p-structure"
+                className="mt-0.5 h-4 w-4 accent-[var(--color-primary)]"
+                checked={!isGuideline}
+                onChange={() => set("structure", "SINGLE")}
+              />
+              <span>
+                Single review project
+                <span className="block text-xs text-muted-foreground">
+                  One research question with the full workflow from protocol to manuscript.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="p-structure"
+                className="mt-0.5 h-4 w-4 accent-[var(--color-primary)]"
+                checked={isGuideline}
+                onChange={() => {
+                  set("structure", "GUIDELINE");
+                  set("reviewType", "GUIDELINE_EVIDENCE_REVIEW");
+                }}
+              />
+              <span>
+                Guideline with PICO sub-projects
+                <span className="block text-xs text-muted-foreground">
+                  A hub for the shared manuscript sections (introduction, methods,
+                  conclusions) and a shared reference library; each PICO question is added
+                  afterwards as its own review sub-project.
+                </span>
+              </span>
+            </label>
+          </fieldset>
           <div className="space-y-1.5">
             <Label htmlFor="p-title">Project title</Label>
             <Input
@@ -153,6 +194,7 @@ export function NewProjectDialog({ orgId, onCreated }: { orgId: string; onCreate
             </div>
           </div>
 
+          {!isGuideline && (
           <fieldset className="space-y-3 rounded-md border border-border p-4">
             <legend className="px-1 text-sm font-medium">Screening settings</legend>
             <label className="flex items-center gap-2 text-sm">
@@ -188,10 +230,11 @@ export function NewProjectDialog({ orgId, onCreated }: { orgId: string; onCreate
               Blinded screening (reviewers cannot see each other&apos;s decisions)
             </label>
           </fieldset>
+          )}
 
           <DialogFooter>
             <Button type="submit" disabled={busy}>
-              {busy && <Spinner />} Create project
+              {busy && <Spinner />} {isGuideline ? "Create guideline" : "Create project"}
             </Button>
           </DialogFooter>
         </form>

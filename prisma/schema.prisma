@@ -403,12 +403,20 @@ model Project {
   status               ProjectStatus @default(PLANNING)
   registrationPlatform String? // e.g. PROSPERO
   registrationId       String?
+  // Guideline family: a guideline project (isGuideline) holds the general manuscript
+  // sections + the shared reference library; each PICO question is a full sub-project
+  // pointing at it via parentProjectId. One level only (a sub cannot be a parent), same
+  // org, enforced in the projects service.
+  isGuideline          Boolean       @default(false)
+  parentProjectId      String?
   createdById          String
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
-  org       Organization @relation(fields: [orgId], references: [id])
-  createdBy User         @relation("ProjectCreator", fields: [createdById], references: [id])
+  org           Organization @relation(fields: [orgId], references: [id])
+  createdBy     User         @relation("ProjectCreator", fields: [createdById], references: [id])
+  parentProject Project?     @relation("GuidelineSubProjects", fields: [parentProjectId], references: [id])
+  subProjects   Project[]    @relation("GuidelineSubProjects")
 
   members             ProjectMember[]
   invitations         ProjectInvitation[]
@@ -441,6 +449,7 @@ model Project {
   chatAssignmentTasks ChatAssignmentTask[]
 
   @@index([orgId])
+  @@index([parentProjectId])
 }
 
 model ProjectMember {

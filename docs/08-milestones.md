@@ -48,7 +48,16 @@ history → export. Each maps to at least one integration or E2E test.
    `src/server/services/grade/`, `src/components/analysis/`); starting level remains manual and
    audited (`AnalysisRole.STUDY_DESIGN` deliberately unwired)
 7. Living-review surveillance (saved searches → new ImportBatches → triage queue)
-8. Multi-PICO projects (`picoQuestionId` FKs)
+8. ~~Multi-PICO projects~~ ✅ 2026-07-22 — shipped as **guideline families** instead of
+   `picoQuestionId` FKs: a guideline hub project (`Project.isGuideline`) holds the general
+   manuscript sections + the shared reference library, and each PICO question is a full
+   sub-project (`Project.parentProjectId`, one level, same org) with its own protocol,
+   screening, extraction, analysis, and PICO-specific manuscript sections; reference rows
+   are stored on the family root (family-wide dedupe + one bibliography), and the compiled
+   guideline outline/DOCX stitches parent + PICO manuscripts with a single reference list
+   (`createSubProject` in `src/server/services/projects/`, scope resolution in
+   `src/server/services/references/`, `getCompiledGuideline`/`exportGuidelineDocx` in
+   `src/server/services/manuscript/`)
 9. ~~Cohort-overlap detection~~ ✅ 2026-07-16 (NBIB/RIS affiliation + registry-ID capture
    with lazy raw-record backfill, two-tier scoring engine, link/reject with guarded study
    merge, "Companions" tab — `src/server/services/cohort/`); still open from this line:

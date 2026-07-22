@@ -7,6 +7,7 @@ export const AuditActions = {
   ORG_UPDATED: "org.updated",
   PROJECT_CREATED: "project.created",
   PROJECT_UPDATED: "project.updated",
+  PROJECT_SUBPROJECT_CREATED: "project.subproject.created",
   MEMBER_ADDED: "member.added",
   MEMBER_ROLES_CHANGED: "member.roles_changed",
   MEMBER_REMOVED: "member.removed",

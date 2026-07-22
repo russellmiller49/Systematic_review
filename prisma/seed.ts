@@ -1274,6 +1274,142 @@ async function main() {
   await chatService.markRead(r2Ctx, projectId, generalChannel.id, { at: new Date() });
   await chatService.markRead(adjCtx, projectId, generalChannel.id, { at: new Date() });
 
+  // 17. Guideline with PICO sub-projects ----------------------------------------------------
+  console.log("Seeding the demo guideline family…");
+  const guideline = await projects.createProject(ownerCtx, org.id, {
+    title: "Management of Malignant Pleural Effusion — Clinical Guideline",
+    reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+    researchQuestion:
+      "What is the optimal management of symptomatic malignant pleural effusion in adults?",
+    description:
+      "Multi-PICO guideline: the general manuscript sections and the shared reference library live here; each key question runs as its own review sub-project.",
+    isGuideline: true,
+  });
+  const guidelineId = guideline.id;
+  // A second admin on the guideline demonstrates the member copy into new sub-projects.
+  await projects.addProjectMember(ownerCtx, guidelineId, {
+    email: "adjudicator@demo.test",
+    roles: ["ADMIN"],
+  });
+
+  const kq1 = await projects.createSubProject(ownerCtx, guidelineId, {
+    title: "PICO 1 — Indwelling pleural catheter vs talc pleurodesis",
+    researchQuestion:
+      "In adults with symptomatic malignant pleural effusion (P), does an indwelling pleural catheter (I) compared with talc pleurodesis (C) improve breathlessness and reduce reintervention (O)?",
+  });
+  const kq2 = await projects.createSubProject(ownerCtx, guidelineId, {
+    title: "PICO 2 — Talc poudrage vs talc slurry",
+    researchQuestion:
+      "In adults with malignant pleural effusion undergoing pleurodesis (P), does thoracoscopic talc poudrage (I) compared with talc slurry via chest tube (C) improve pleurodesis success (O)?",
+  });
+
+  // Shared library: one methods reference added at the GUIDELINE, one added from within
+  // a PICO sub-project — both land in the same shared pool.
+  const gradeRef = await referencesService.createReference(ownerCtx, guidelineId, {
+    csl: {
+      type: "article-journal",
+      title:
+        "GRADE: an emerging consensus on rating quality of evidence and strength of recommendations",
+      author: [
+        { family: "Guyatt", given: "Gordon H" },
+        { family: "Oxman", given: "Andrew D" },
+        { family: "Vist", given: "Gunn E" },
+      ],
+      issued: { "date-parts": [[2008]] },
+      "container-title": "BMJ",
+      volume: "336",
+      issue: "7650",
+      page: "924-926",
+      DOI: "10.1136/bmj.39489.470347.ad",
+    },
+    tags: ["methods"],
+    notes: "Framework used to rate certainty across all PICO questions.",
+  });
+  const tapsRef = await referencesService.createReference(ownerCtx, kq1.id, {
+    csl: {
+      type: "article-journal",
+      title:
+        "Effect of an indwelling pleural catheter vs talc pleurodesis on hospitalization days in patients with malignant pleural effusion: the AMPLE randomized clinical trial",
+      author: [
+        { family: "Thomas", given: "Rajesh" },
+        { family: "Fysh", given: "Edward T H" },
+        { family: "Smith", given: "Nicola A" },
+      ],
+      issued: { "date-parts": [[2017]] },
+      "container-title": "JAMA",
+      volume: "318",
+      issue: "19",
+      page: "1903-1912",
+      DOI: "10.1001/jama.2017.17426",
+    },
+    tags: ["included-study"],
+  });
+
+  const citePara = (lead: string, referenceIds: string[], tail: string) => ({
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: lead },
+          { type: "citation", attrs: { referenceIds } },
+          ...(tail ? [{ type: "text", text: tail }] : []),
+        ],
+      },
+    ],
+  });
+
+  // Guideline manuscript: general sections, citing a reference that was added from a
+  // PICO workflow (the shared pool works in both directions).
+  const gMs = await manuscriptService.getManuscript(ownerCtx, guidelineId);
+  const gSection = (kind: string) => gMs.sections.find((s) => s.kind === kind)!;
+  let gLock = await manuscriptService.acquireLock(ownerCtx, guidelineId, gSection("INTRODUCTION").id, {});
+  await manuscriptService.saveSectionContent(ownerCtx, guidelineId, gSection("INTRODUCTION").id, {
+    content: citePara(
+      "Malignant pleural effusion affects roughly 15% of patients with advanced cancer; definitive fluid control strategies have been compared head-to-head in randomized trials ",
+      [tapsRef.id],
+      ".",
+    ),
+    baseVersion: gLock.version,
+  });
+  await manuscriptService.releaseLock(ownerCtx, guidelineId, gSection("INTRODUCTION").id);
+  gLock = await manuscriptService.acquireLock(ownerCtx, guidelineId, gSection("METHODS").id, {});
+  await manuscriptService.saveSectionContent(ownerCtx, guidelineId, gSection("METHODS").id, {
+    content: citePara(
+      "Each key question was addressed by an independent systematic review sub-project; certainty of evidence was rated with GRADE ",
+      [gradeRef.id],
+      ".",
+    ),
+    baseVersion: gLock.version,
+  });
+  await manuscriptService.releaseLock(ownerCtx, guidelineId, gSection("METHODS").id);
+
+  // PICO 1 manuscript: question-specific sections citing from the same shared pool.
+  const kq1Ms = await manuscriptService.getManuscript(ownerCtx, kq1.id);
+  const kq1Section = (title: string) => kq1Ms.sections.find((s) => s.title === title)!;
+  let kqLock = await manuscriptService.acquireLock(ownerCtx, kq1.id, kq1Section("Question").id, {});
+  await manuscriptService.saveSectionContent(ownerCtx, kq1.id, kq1Section("Question").id, {
+    content: citePara(
+      "Should adults with symptomatic malignant pleural effusion receive an indwelling pleural catheter or talc pleurodesis? Randomized evidence includes the AMPLE trial ",
+      [tapsRef.id],
+      ".",
+    ),
+    baseVersion: kqLock.version,
+  });
+  await manuscriptService.releaseLock(ownerCtx, kq1.id, kq1Section("Question").id);
+  kqLock = await manuscriptService.acquireLock(ownerCtx, kq1.id, kq1Section("Recommendation").id, {});
+  await manuscriptService.saveSectionContent(ownerCtx, kq1.id, kq1Section("Recommendation").id, {
+    content: citePara(
+      "We suggest either an indwelling pleural catheter or talc pleurodesis, guided by patient preference and expected survival (conditional recommendation, moderate certainty, GRADE ",
+      [gradeRef.id],
+      ").",
+    ),
+    baseVersion: kqLock.version,
+  });
+  await manuscriptService.releaseLock(ownerCtx, kq1.id, kq1Section("Recommendation").id);
+
+  console.log(`   Guideline: ${guidelineId} (PICO subs: ${kq1.id}, ${kq2.id})`);
+
   console.log("\n✅ Seed complete.");
   console.log(`   Org:     ${org.name}`);
   console.log(`   Project: ${projectId}`);

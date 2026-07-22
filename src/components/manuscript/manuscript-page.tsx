@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/misc";
 import { CiteMapContext } from "./cite-map-context";
 import { CommentsPanel } from "./comments-panel";
+import { GuidelineCompileDialog } from "./guideline-compile-dialog";
 import { SectionEditor } from "./section-editor";
 import { SectionList } from "./section-list";
 import type { CiteMapResponse, ManuscriptView, MemberRef, UserRef } from "./types";
@@ -26,9 +27,15 @@ const STYLES = [
   { id: "nlm", label: "NLM (grant proposals)" },
 ];
 
+interface ProjectFamily {
+  isGuideline: boolean;
+  parentProject: { id: string; title: string } | null;
+}
+
 export function ManuscriptClient({ projectId }: { projectId: string }) {
   const searchParams = useSearchParams();
   const [manuscript, setManuscript] = useState<ManuscriptView | null>(null);
+  const [family, setFamily] = useState<ProjectFamily | null>(null);
   const [me, setMe] = useState<UserRef | null>(null);
   const [members, setMembers] = useState<MemberRef[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("section"));
@@ -59,6 +66,9 @@ export function ManuscriptClient({ projectId }: { projectId: string }) {
     api<MemberRef[]>(`/api/projects/${projectId}/members`)
       .then(setMembers)
       .catch(() => setMembers([]));
+    api<ProjectFamily>(`/api/projects/${projectId}`)
+      .then(setFamily)
+      .catch(() => setFamily(null));
   }, [projectId, load, loadCiteMap]);
 
   // Presence/status polling (visible only + focus refetch — app convention).
@@ -103,9 +113,16 @@ export function ManuscriptClient({ projectId }: { projectId: string }) {
       <div className="mx-auto flex w-full max-w-6xl flex-col">
         <PageHeader
           title="Manuscript"
-          description="Draft the paper section by section — different members can work on different sections at once."
+          description={
+            family?.isGuideline
+              ? "The guideline's general sections — introduction, methods, conclusions. Each PICO question's sections are drafted in its sub-project and come together in the compiled guideline."
+              : family?.parentProject
+                ? `Sections for this PICO question — they compile into the “${family.parentProject.title}” guideline document alongside the other questions.`
+                : "Draft the paper section by section — different members can work on different sections at once."
+          }
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              {family?.isGuideline && <GuidelineCompileDialog projectId={projectId} />}
               {manuscript.canManage && (
                 <Select
                   aria-label="Citation style"

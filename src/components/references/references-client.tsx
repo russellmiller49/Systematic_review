@@ -33,8 +33,14 @@ const EXPORTS: { format: string; label: string }[] = [
   { format: "csl-json", label: "CSL-JSON" },
 ];
 
+interface ProjectFamily {
+  isGuideline: boolean;
+  parentProject: { id: string; title: string } | null;
+}
+
 export function ReferencesClient({ projectId }: { projectId: string }) {
   const [references, setReferences] = useState<ReferenceView[] | null>(null);
+  const [family, setFamily] = useState<ProjectFamily | null>(null);
   const [canManage, setCanManage] = useState(false);
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -54,9 +60,15 @@ export function ReferencesClient({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     load();
-    api<{ capabilities: string[] }>(`/api/projects/${projectId}`)
-      .then((p) => setCanManage(p.capabilities.includes("references.manage")))
-      .catch(() => setCanManage(false));
+    api<{ capabilities: string[] } & ProjectFamily>(`/api/projects/${projectId}`)
+      .then((p) => {
+        setCanManage(p.capabilities.includes("references.manage"));
+        setFamily({ isGuideline: p.isGuideline, parentProject: p.parentProject });
+      })
+      .catch(() => {
+        setCanManage(false);
+        setFamily(null);
+      });
   }, [projectId, load]);
 
   function refresh() {
@@ -128,7 +140,13 @@ export function ReferencesClient({ projectId }: { projectId: string }) {
     <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         title="References"
-        description="The citation library for your manuscript — methods papers, background references, and included studies. Export it straight into Word reference managers."
+        description={
+          family?.isGuideline
+            ? "The guideline's shared citation library — one pool used by the guideline manuscript and every PICO sub-project. Includes references added from any PICO workflow."
+            : family?.parentProject
+              ? `Shared library of the “${family.parentProject.title}” guideline — references added here are available to the guideline and every PICO question, and vice versa.`
+              : "The citation library for your manuscript — methods papers, background references, and included studies. Export it straight into Word reference managers."
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Popover>

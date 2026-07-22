@@ -28,6 +28,8 @@ interface ProjectRow {
   title: string;
   reviewType: string;
   status: string;
+  isGuideline?: boolean;
+  parentProjectId?: string | null;
   _count?: { citations: number; members: number };
 }
 
@@ -97,26 +99,38 @@ export function OrgDashboard({ orgId }: { orgId: string }) {
           />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
-            {projects.map((p) => (
-              <Link key={p.id} href={`/projects/${p.id}`}>
-                <Card className="h-full transition-shadow hover:shadow-md">
-                  <CardHeader>
-                    <div className="flex items-start justify-between gap-2">
-                      <CardTitle className="text-base leading-snug">{p.title}</CardTitle>
-                      <Badge variant="muted">{p.status.toLowerCase()}</Badge>
-                    </div>
-                    <CardDescription>
-                      {REVIEW_TYPE_LABELS[p.reviewType] ?? p.reviewType}
-                    </CardDescription>
-                  </CardHeader>
-                  {p._count && (
-                    <CardContent className="text-sm text-muted-foreground">
-                      {p._count.citations} citations · {p._count.members} members
-                    </CardContent>
-                  )}
-                </Card>
-              </Link>
-            ))}
+            {/* PICO sub-projects are shown as a count on their guideline's card, not as
+                top-level cards — open the guideline to reach them. */}
+            {projects
+              .filter((p) => !p.parentProjectId)
+              .map((p) => {
+                const picoCount = projects.filter((s) => s.parentProjectId === p.id).length;
+                return (
+                  <Link key={p.id} href={`/projects/${p.id}`}>
+                    <Card className="h-full transition-shadow hover:shadow-md">
+                      <CardHeader>
+                        <div className="flex items-start justify-between gap-2">
+                          <CardTitle className="text-base leading-snug">{p.title}</CardTitle>
+                          <span className="flex shrink-0 gap-1.5">
+                            {p.isGuideline && <Badge variant="secondary">Guideline</Badge>}
+                            <Badge variant="muted">{p.status.toLowerCase()}</Badge>
+                          </span>
+                        </div>
+                        <CardDescription>
+                          {REVIEW_TYPE_LABELS[p.reviewType] ?? p.reviewType}
+                        </CardDescription>
+                      </CardHeader>
+                      {p._count && (
+                        <CardContent className="text-sm text-muted-foreground">
+                          {p.isGuideline
+                            ? `${picoCount} PICO question${picoCount === 1 ? "" : "s"} · ${p._count.members} members`
+                            : `${p._count.citations} citations · ${p._count.members} members`}
+                        </CardContent>
+                      )}
+                    </Card>
+                  </Link>
+                );
+              })}
           </div>
         )}
       </section>

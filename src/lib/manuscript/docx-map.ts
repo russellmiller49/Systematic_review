@@ -152,3 +152,21 @@ export function docToBlocks(
   (root.content ?? []).forEach(walkBlock);
   return blocks;
 }
+
+// Numbering groups are unique only WITHIN one docToBlocks call. When several sections
+// (or several projects' manuscripts) are assembled into one document, equal group ids
+// would share a Word numbering instance and numbering would continue across lists.
+// Shifts each call's groups so they are globally disjoint; input arrays are not mutated.
+export function offsetNumberingGroups(sections: DocxBlock[][]): DocxBlock[][] {
+  let offset = 0;
+  return sections.map((blocks) => {
+    let maxGroup = 0;
+    const shifted = blocks.map((block) => {
+      if (block.numberingGroup === undefined) return block;
+      maxGroup = Math.max(maxGroup, block.numberingGroup);
+      return { ...block, numberingGroup: block.numberingGroup + offset };
+    });
+    offset += maxGroup;
+    return shifted;
+  });
+}
