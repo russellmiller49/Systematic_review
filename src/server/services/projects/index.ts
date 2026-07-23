@@ -81,6 +81,10 @@ export const createSubProjectSchema = z.object({
   blindedScreening: z.boolean().optional(),
 });
 
+export const convertSubProjectSchema = z.object({
+  sourceProjectId: z.string().trim().min(1),
+});
+
 export const updateProjectSchema = z.object({
   title: z.string().trim().min(2).max(300).optional(),
   reviewType: reviewTypeEnum.optional(),
@@ -306,6 +310,301 @@ export async function listSubProjects(ctx: Ctx, parentProjectId: string) {
       },
     },
     orderBy: { createdAt: "asc" },
+  });
+}
+
+function requireOwnerRole(roles: readonly ProjectRole[], message: string) {
+  if (!roles.includes("OWNER")) throw forbidden(message);
+}
+
+// Standalone projects the current guideline OWNER may convert. Ownership is checked
+// on both sides because attaching a project changes its library scope, navigation, and
+// the team that can access it.
+export async function listConvertibleProjects(ctx: Ctx, parentProjectId: string) {
+  const parentMember = await requirePermission(ctx, parentProjectId, "project.edit");
+  requireOwnerRole(
+    parentMember.roles,
+    "Only a guideline owner can convert an existing project",
+  );
+
+  const parent = await prisma.project.findUnique({
+    where: { id: parentProjectId },
+    select: { id: true, orgId: true, isGuideline: true, parentProjectId: true },
+  });
+  if (!parent) throw notFound("Project");
+  if (!parent.isGuideline || parent.parentProjectId) {
+    throw invalidState("Only a top-level guideline can accept existing projects");
+  }
+
+  return prisma.project.findMany({
+    where: {
+      id: { not: parent.id },
+      orgId: parent.orgId,
+      isGuideline: false,
+      parentProjectId: null,
+      members: {
+        some: {
+          userId: ctx.userId,
+          status: "ACTIVE",
+          roles: { has: "OWNER" },
+        },
+      },
+    },
+    select: {
+      id: true,
+      title: true,
+      reviewType: true,
+      researchQuestion: true,
+      description: true,
+      status: true,
+      createdAt: true,
+      protocol: { select: { reviewQuestion: true } },
+      _count: {
+        select: {
+          citations: true,
+          studies: true,
+          referenceEntries: true,
+          members: { where: { status: "ACTIVE" } },
+        },
+      },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+}
+
+type ReferenceCollisionRow = {
+  title: string;
+  doi: string | null;
+  pmid: string | null;
+  citationId: string | null;
+};
+
+function describeReferenceCollision(reference: ReferenceCollisionRow) {
+  const identifier = reference.doi
+    ? `DOI ${reference.doi}`
+    : reference.pmid
+      ? `PMID ${reference.pmid}`
+      : "the same mirrored citation";
+  return `“${reference.title}” (${identifier})`;
+}
+
+// Converts a previously created standalone review into a PICO sub-project without
+// recreating it. All project-owned workflow rows keep their IDs. Reference rows move
+// to the family root so existing manuscript citation nodes keep resolving.
+export async function convertProjectToSubProject(
+  ctx: Ctx,
+  parentProjectId: string,
+  rawInput: z.input<typeof convertSubProjectSchema>,
+) {
+  const input = convertSubProjectSchema.parse(rawInput);
+  if (input.sourceProjectId === parentProjectId) {
+    throw invalidState("A guideline cannot be converted into its own sub-project");
+  }
+
+  const parentMember = await requirePermission(ctx, parentProjectId, "project.edit");
+  requireOwnerRole(
+    parentMember.roles,
+    "Only a guideline owner can convert an existing project",
+  );
+  const sourceMember = await requirePermission(ctx, input.sourceProjectId, "project.edit");
+  requireOwnerRole(
+    sourceMember.roles,
+    "You must be an owner of the project being converted",
+  );
+
+  return prisma.$transaction(async (tx) => {
+    // Re-check both memberships inside the mutation transaction so an ownership change
+    // cannot race the conversion.
+    const currentParentMember = await requirePermission(
+      ctx,
+      parentProjectId,
+      "project.edit",
+      tx,
+    );
+    requireOwnerRole(
+      currentParentMember.roles,
+      "Only a guideline owner can convert an existing project",
+    );
+    const currentSourceMember = await requirePermission(
+      ctx,
+      input.sourceProjectId,
+      "project.edit",
+      tx,
+    );
+    requireOwnerRole(
+      currentSourceMember.roles,
+      "You must be an owner of the project being converted",
+    );
+
+    const parent = await tx.project.findUnique({
+      where: { id: parentProjectId },
+      include: { members: { where: { status: "ACTIVE" } } },
+    });
+    if (!parent) throw notFound("Project");
+    if (!parent.isGuideline || parent.parentProjectId) {
+      throw invalidState("Only a top-level guideline can accept existing projects");
+    }
+
+    const source = await tx.project.findUnique({
+      where: { id: input.sourceProjectId },
+      include: {
+        protocol: { select: { reviewQuestion: true } },
+        members: { select: { userId: true } },
+        _count: { select: { subProjects: true } },
+      },
+    });
+    if (!source) throw notFound("Project");
+    if (source.orgId !== parent.orgId) {
+      throw invalidState("The project and guideline must belong to the same organization");
+    }
+    if (source.isGuideline || source._count.subProjects > 0) {
+      throw invalidState("A guideline project cannot be converted into a PICO sub-project");
+    }
+    if (source.parentProjectId) {
+      throw invalidState("This project is already part of a guideline");
+    }
+    const resolvedResearchQuestion =
+      source.researchQuestion?.trim() ||
+      source.protocol?.reviewQuestion?.trim() ||
+      null;
+
+    // Claim the standalone project before inspecting/moving dependent rows. A concurrent
+    // conversion waits on this update and then fails the standalone predicate.
+    const claimed = await tx.project.updateMany({
+      where: {
+        id: source.id,
+        orgId: parent.orgId,
+        isGuideline: false,
+        parentProjectId: null,
+      },
+      data: {
+        parentProjectId: parent.id,
+        // A project-level research question is the compiled guideline subtitle. Older
+        // projects may have stored it only in Protocol.reviewQuestion.
+        researchQuestion: resolvedResearchQuestion,
+      },
+    });
+    if (claimed.count !== 1) {
+      throw invalidState("This project is no longer available for conversion");
+    }
+
+    const sourceReferences = await tx.referenceEntry.findMany({
+      where: { projectId: source.id },
+      select: { id: true, title: true, doi: true, pmid: true, citationId: true },
+    });
+    const dois = sourceReferences
+      .map((reference) => reference.doi)
+      .filter((doi): doi is string => doi !== null);
+    const pmids = sourceReferences
+      .map((reference) => reference.pmid)
+      .filter((pmid): pmid is string => pmid !== null);
+    const citationIds = sourceReferences
+      .map((reference) => reference.citationId)
+      .filter((citationId): citationId is string => citationId !== null);
+    const collisionFilters: Prisma.ReferenceEntryWhereInput[] = [];
+    if (dois.length > 0) collisionFilters.push({ doi: { in: dois } });
+    if (pmids.length > 0) collisionFilters.push({ pmid: { in: pmids } });
+    if (citationIds.length > 0) {
+      collisionFilters.push({ citationId: { in: citationIds } });
+    }
+
+    const collisions =
+      collisionFilters.length === 0
+        ? []
+        : await tx.referenceEntry.findMany({
+            where: { projectId: parent.id, OR: collisionFilters },
+            select: { title: true, doi: true, pmid: true, citationId: true },
+          });
+    if (collisions.length > 0) {
+      const examples = collisions
+        .slice(0, 3)
+        .map(describeReferenceCollision)
+        .join(", ");
+      const remaining = collisions.length > 3 ? ` and ${collisions.length - 3} more` : "";
+      throw conflict(
+        `Resolve ${collisions.length} duplicate reference${collisions.length === 1 ? "" : "s"} before converting: ${examples}${remaining}`,
+      );
+    }
+
+    const movedReferences = await tx.referenceEntry.updateMany({
+      where: { projectId: source.id },
+      data: { projectId: parent.id },
+    });
+
+    // Preserve the existing project's team and access decisions. Add only guideline
+    // members who have never had a membership row in the source; a previously removed
+    // source member is deliberately not reactivated.
+    const existingMemberIds = new Set(source.members.map((member) => member.userId));
+    const membersToAdd = parent.members.filter(
+      (member) => !existingMemberIds.has(member.userId),
+    );
+    if (membersToAdd.length > 0) {
+      await tx.projectMember.createMany({
+        data: membersToAdd.map((member) => ({
+          projectId: source.id,
+          userId: member.userId,
+          roles: member.roles,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    // Keep the project-level and protocol-level question fields aligned when an older
+    // project populated only one of them.
+    if (!source.protocol?.reviewQuestion && resolvedResearchQuestion) {
+      await tx.protocol.updateMany({
+        where: { projectId: source.id },
+        data: { reviewQuestion: resolvedResearchQuestion },
+      });
+    }
+
+    const conversionMetadata = {
+      guidelineProjectId: parent.id,
+      movedReferences: movedReferences.count,
+      addedGuidelineMembers: membersToAdd.length,
+      preservedExistingMembers: source.members.length,
+    };
+    await audit.record(tx, {
+      projectId: source.id,
+      userId: ctx.userId,
+      entityType: "Project",
+      entityId: source.id,
+      action: AuditActions.PROJECT_SUBPROJECT_CONVERTED,
+      previousValue: {
+        parentProjectId: null,
+        researchQuestion: source.researchQuestion,
+      },
+      newValue: {
+        parentProjectId: parent.id,
+        researchQuestion: resolvedResearchQuestion,
+      },
+      metadata: conversionMetadata,
+    });
+    await audit.record(tx, {
+      projectId: parent.id,
+      userId: ctx.userId,
+      entityType: "Project",
+      entityId: source.id,
+      action: AuditActions.PROJECT_SUBPROJECT_CONVERTED,
+      newValue: {
+        title: source.title,
+        researchQuestion: resolvedResearchQuestion,
+      },
+      metadata: conversionMetadata,
+    });
+
+    return tx.project.findUniqueOrThrow({
+      where: { id: source.id },
+      include: {
+        _count: {
+          select: {
+            citations: true,
+            studies: true,
+            members: { where: { status: "ACTIVE" } },
+          },
+        },
+      },
+    });
   });
 }
 

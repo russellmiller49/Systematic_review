@@ -46,7 +46,7 @@ the log human-readable and diffable in the UI.
 
 | Area | Actions |
 |---|---|
-| Org/project | `org.created`, `project.created`, `project.updated`, `member.added`, `member.roles_changed`, `member.removed`, `invitation.created`, `invitation.accepted` |
+| Org/project | `org.created`, `project.created`, `project.updated`, `project.subproject.{created,converted}`, `member.added`, `member.roles_changed`, `member.removed`, `invitation.created`, `invitation.accepted` |
 | Protocol | `protocol.updated`, `protocol.published`, `protocol.amended`, `protocol.criterion.{created,updated,deleted}`, `protocol.outcome.{created,updated,deleted}`, `protocol.pico.{created,updated,deleted}`, `exclusion_reason.{created,updated,deleted}` |
 | Import | `import.batch.created`, `import.batch.committed`, `import.batch.failed` |
 | Dedup | `dedup.run`, `dedup.merged`, `dedup.rejected`, `dedup.merge_undone` |

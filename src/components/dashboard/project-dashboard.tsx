@@ -23,6 +23,7 @@ import {
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { StatCard } from "@/components/layout/page-header";
+import { ConvertSubProjectDialog } from "@/components/projects/convert-subproject-dialog";
 import { NewSubProjectDialog } from "@/components/projects/new-subproject-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,6 +49,7 @@ interface ProjectFamily {
   isGuideline: boolean;
   parentProject: { id: string; title: string } | null;
   capabilities: string[];
+  myRoles: string[];
 }
 
 interface SubProjectRow {
@@ -322,7 +324,12 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
               </p>
             </div>
             {family?.capabilities.includes("project.edit") && (
-              <NewSubProjectDialog projectId={projectId} onCreated={load} />
+              <div className="flex flex-wrap gap-2">
+                {family.myRoles.includes("OWNER") && (
+                  <ConvertSubProjectDialog projectId={projectId} onConverted={load} />
+                )}
+                <NewSubProjectDialog projectId={projectId} onCreated={load} />
+              </div>
             )}
           </div>
           {subProjects === null ? (

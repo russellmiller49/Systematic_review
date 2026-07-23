@@ -172,6 +172,223 @@ describe("guideline sub-projects", () => {
     const outsider = await createTestUser({ name: "Outsider" });
     await expectAppError(projects.listSubProjects(ctx(outsider.id), guideline.id), "FORBIDDEN");
   });
+
+  it("converts an owned standalone project without losing its work, team, or manuscript references", async () => {
+    const owner = await createTestUser({ name: "Conversion Owner" });
+    const guidelineAdmin = await createTestUser({ name: "Guideline Admin" });
+    const existingReviewer = await createTestUser({ name: "Existing Reviewer" });
+    const org = await createTestOrg(owner.id);
+    await addOrgMember(org.id, guidelineAdmin.id);
+    await addOrgMember(org.id, existingReviewer.id);
+
+    const guideline = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Existing Reviews Guideline",
+      reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+      isGuideline: true,
+    });
+    await addProjectMember(guideline.id, guidelineAdmin.id, ["ADMIN"]);
+
+    const standalone = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Previously completed PICO",
+      reviewType: "SYSTEMATIC_REVIEW_META_ANALYSIS",
+      dualScreening: true,
+      reviewersPerCitation: 3,
+      blindedScreening: false,
+    });
+    await addProjectMember(standalone.id, existingReviewer.id, ["REVIEWER"]);
+    await prisma.protocol.update({
+      where: { projectId: standalone.id },
+      data: { reviewQuestion: "In adults with prior work, does conversion preserve the review?" },
+    });
+    const citation = await createTestCitation(standalone.id, {
+      title: "Preserved evidence report",
+      doi: "10.9000/preserved",
+    });
+    const reference = await references.createReference(ctx(owner.id), standalone.id, {
+      csl: cslFor("Reference cited before conversion", "10.9000/reference-before-conversion"),
+      citationId: citation.id,
+    });
+    const standaloneManuscript = await manuscript.getManuscript(ctx(owner.id), standalone.id);
+    const firstSection = standaloneManuscript.sections[0]!;
+    await prisma.manuscriptSection.update({
+      where: { id: firstSection.id },
+      data: {
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "This citation must survive " },
+                { type: "citation", attrs: { referenceIds: [reference.id] } },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const originalStageIds = standalone.screeningStages.map((stage) => stage.id).sort();
+
+    const candidates = await projects.listConvertibleProjects(ctx(owner.id), guideline.id);
+    expect(candidates.map((candidate) => candidate.id)).toContain(standalone.id);
+    expect(candidates.find((candidate) => candidate.id === standalone.id)?._count).toMatchObject({
+      citations: 1,
+      referenceEntries: 1,
+      members: 2,
+    });
+
+    const converted = await projects.convertProjectToSubProject(ctx(owner.id), guideline.id, {
+      sourceProjectId: standalone.id,
+    });
+    expect(converted).toMatchObject({
+      id: standalone.id,
+      parentProjectId: guideline.id,
+      reviewType: "SYSTEMATIC_REVIEW_META_ANALYSIS",
+      researchQuestion: "In adults with prior work, does conversion preserve the review?",
+    });
+
+    // Workflow rows and configuration keep their identities.
+    const stagesAfter = await prisma.screeningStage.findMany({
+      where: { projectId: standalone.id },
+      orderBy: { id: "asc" },
+    });
+    expect(stagesAfter.map((stage) => stage.id).sort()).toEqual(originalStageIds);
+    expect(stagesAfter.every((stage) => stage.reviewersPerCitation === 3)).toBe(true);
+    expect(stagesAfter.every((stage) => stage.blinded === false)).toBe(true);
+    await expect(
+      prisma.citation.findUniqueOrThrow({ where: { id: citation.id } }),
+    ).resolves.toMatchObject({ projectId: standalone.id });
+
+    // Reference IDs do not change, so pre-conversion manuscript citation nodes resolve
+    // through the guideline's shared library.
+    const movedReference = await prisma.referenceEntry.findUniqueOrThrow({
+      where: { id: reference.id },
+    });
+    expect(movedReference.projectId).toBe(guideline.id);
+    const citeMap = await manuscript.getCiteMap(ctx(owner.id), standalone.id);
+    expect(citeMap.orderedReferenceIds).toEqual([reference.id]);
+    expect(citeMap.markers[reference.id]).toBeTruthy();
+
+    const memberships = await prisma.projectMember.findMany({
+      where: { projectId: standalone.id },
+    });
+    const rolesByUser = new Map(memberships.map((member) => [member.userId, member.roles]));
+    expect(rolesByUser.get(owner.id)).toEqual(["OWNER"]);
+    expect(rolesByUser.get(existingReviewer.id)).toEqual(["REVIEWER"]);
+    expect(rolesByUser.get(guidelineAdmin.id)).toEqual(["ADMIN"]);
+
+    const parentView = await projects.getProject(ctx(owner.id), guideline.id);
+    expect(parentView.subProjects.map((project) => project.id)).toContain(standalone.id);
+    const compiled = await manuscript.getCompiledGuideline(ctx(owner.id), guideline.id);
+    expect(compiled.parts.map((part) => part.projectId)).toEqual([
+      guideline.id,
+      standalone.id,
+    ]);
+    expect(
+      compiled.parts.find((part) => part.projectId === standalone.id)?.sections.map(
+        (section) => section.id,
+      ),
+    ).toContain(firstSection.id);
+    const remainingCandidates = await projects.listConvertibleProjects(ctx(owner.id), guideline.id);
+    expect(remainingCandidates.map((candidate) => candidate.id)).not.toContain(standalone.id);
+
+    const events = await prisma.auditEvent.findMany({
+      where: {
+        action: "project.subproject.converted",
+        entityId: standalone.id,
+      },
+    });
+    expect(events.map((event) => event.projectId).sort()).toEqual(
+      [guideline.id, standalone.id].sort(),
+    );
+    expect(events[0]?.metadata).toMatchObject({
+      movedReferences: 1,
+      addedGuidelineMembers: 1,
+      preservedExistingMembers: 2,
+    });
+  });
+
+  it("requires ownership of both projects", async () => {
+    const guidelineOwner = await createTestUser({ name: "Guideline Owner" });
+    const standaloneOwner = await createTestUser({ name: "Standalone Owner" });
+    const org = await createTestOrg(guidelineOwner.id);
+    await addOrgMember(org.id, standaloneOwner.id);
+
+    const guideline = await projects.createProject(ctx(guidelineOwner.id), org.id, {
+      title: "Owner-only Guideline",
+      reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+      isGuideline: true,
+    });
+    await addProjectMember(guideline.id, standaloneOwner.id, ["ADMIN"]);
+    const standalone = await projects.createProject(ctx(standaloneOwner.id), org.id, {
+      title: "Separately Owned Review",
+      reviewType: "SYSTEMATIC_REVIEW",
+    });
+    await addProjectMember(standalone.id, guidelineOwner.id, ["ADMIN"]);
+
+    await expectAppError(
+      projects.listConvertibleProjects(ctx(standaloneOwner.id), guideline.id),
+      "FORBIDDEN",
+    );
+    await expect(projects.listConvertibleProjects(ctx(guidelineOwner.id), guideline.id)).resolves
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: standalone.id })]));
+    await expectAppError(
+      projects.convertProjectToSubProject(ctx(standaloneOwner.id), guideline.id, {
+        sourceProjectId: standalone.id,
+      }),
+      "FORBIDDEN",
+    );
+    await expectAppError(
+      projects.convertProjectToSubProject(ctx(guidelineOwner.id), guideline.id, {
+        sourceProjectId: standalone.id,
+      }),
+      "FORBIDDEN",
+    );
+
+    const unchanged = await prisma.project.findUniqueOrThrow({ where: { id: standalone.id } });
+    expect(unchanged.parentProjectId).toBeNull();
+  });
+
+  it("rejects duplicate shared references atomically", async () => {
+    const owner = await createTestUser({ name: "Collision Owner" });
+    const org = await createTestOrg(owner.id);
+    const guideline = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Reference Collision Guideline",
+      reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+      isGuideline: true,
+    });
+    const standalone = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Reference Collision Review",
+      reviewType: "SYSTEMATIC_REVIEW",
+    });
+    await references.createReference(ctx(owner.id), guideline.id, {
+      csl: cslFor("Guideline copy", "10.9000/conversion-collision"),
+    });
+    const standaloneReference = await references.createReference(ctx(owner.id), standalone.id, {
+      csl: cslFor("Standalone copy", "10.9000/conversion-collision"),
+    });
+
+    const err = await expectAppError(
+      projects.convertProjectToSubProject(ctx(owner.id), guideline.id, {
+        sourceProjectId: standalone.id,
+      }),
+      "CONFLICT",
+    );
+    expect(err.message).toContain("duplicate reference");
+    expect(err.message).toContain("10.9000/conversion-collision");
+
+    const unchanged = await prisma.project.findUniqueOrThrow({ where: { id: standalone.id } });
+    expect(unchanged.parentProjectId).toBeNull();
+    const unchangedReference = await prisma.referenceEntry.findUniqueOrThrow({
+      where: { id: standaloneReference.id },
+    });
+    expect(unchangedReference.projectId).toBe(standalone.id);
+    expect(
+      await prisma.auditEvent.count({
+        where: { action: "project.subproject.converted", entityId: standalone.id },
+      }),
+    ).toBe(0);
+  });
 });
 
 describe("shared guideline reference library", () => {

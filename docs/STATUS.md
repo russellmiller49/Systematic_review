@@ -4,6 +4,31 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-23) — convert existing PICO reviews into guideline sub-projects — DONE
+
+Guideline owners can now attach previously created standalone review projects as PICO
+sub-projects without recreating or copying the review.
+
+- **Owner-only conversion:** the caller must hold `OWNER` on both the top-level guideline and
+  the standalone source project, and both must belong to the same organization. The guideline
+  dashboard's new **Add existing project** dialog lists only eligible projects owned by the
+  current user (`GET/POST /api/projects/[projectId]/subprojects/convert`).
+- **Data preservation:** conversion changes only the family relationship (plus filling a
+  missing project-level research question from the existing protocol). Protocol, screening
+  configuration and decisions, citations/files, extraction, RoB, analysis/GRADE, manuscript
+  sections and versions, invitations, settings, and existing membership rows retain their IDs
+  and content. Missing active guideline members are added with their guideline roles; existing
+  source roles and prior removals are preserved.
+- **Shared references:** source `ReferenceEntry` rows move transactionally to the guideline
+  root while keeping their IDs, so existing manuscript citation nodes continue to resolve.
+  DOI/PMID/mirrored-citation collisions reject the whole conversion with a clear error rather
+  than dropping or silently merging bibliography data.
+- **Audit + tests:** `project.subproject.converted` is recorded in both project trails with
+  moved-reference and member-copy counts. Integration coverage pins preservation, ownership,
+  candidate filtering, audit events, shared-library behavior, and atomic collision rollback.
+- Verification: typecheck and production build clean; **612 unit** and **303 integration**
+  tests pass.
+
 ## Current state (2026-07-22) — guideline projects with PICO sub-projects — DONE
 
 Backlog #8 (multi-PICO) shipped as **guideline families**: a guideline hub project owns the

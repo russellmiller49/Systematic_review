@@ -57,6 +57,8 @@ const ACTION_GROUPS: { label: string; allPrefix?: string; actions: string[] }[] 
     actions: [
       "project.created",
       "project.updated",
+      "project.subproject.created",
+      "project.subproject.converted",
       "member.added",
       "member.roles_changed",
       "member.removed",
