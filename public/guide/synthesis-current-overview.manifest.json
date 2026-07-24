@@ -1,0 +1,436 @@
+{
+  "title": "Synthesis current product overview",
+  "method": "Retains the first fourteen chapters of the stabilized overview, replaces its outdated closing, and appends deterministic seeded-product captures with fresh narration.",
+  "source": {
+    "path": "public/guide/updated_overview_stabilized.mp4",
+    "bytes": 16413218,
+    "sha256": "aab68fc6d304fb2c239b9cadec88629a4ffda040888e0e8e1942b8ce4f1d15f0",
+    "retainedThroughFrame": 8858,
+    "retainedThroughSeconds": 295.26666666666665,
+    "retainedChapters": 14,
+    "probe": {
+      "streams": [
+        {
+          "index": 0,
+          "codec_name": "h264",
+          "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+          "profile": "High",
+          "codec_type": "video",
+          "codec_tag_string": "avc1",
+          "codec_tag": "0x31637661",
+          "mime_codec_string": "avc1.640020",
+          "width": 1422,
+          "height": 720,
+          "coded_width": 1424,
+          "coded_height": 720,
+          "has_b_frames": 2,
+          "sample_aspect_ratio": "1:1",
+          "display_aspect_ratio": "79:40",
+          "pix_fmt": "yuv420p",
+          "level": 32,
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "chroma_location": "left",
+          "field_order": "progressive",
+          "refs": 5,
+          "is_avc": "true",
+          "nal_length_size": "4",
+          "id": "0x1",
+          "r_frame_rate": "30/1",
+          "avg_frame_rate": "30/1",
+          "time_base": "1/15360",
+          "start_pts": 0,
+          "start_time": "0.000000",
+          "duration_ts": 4792320,
+          "duration": "312.000000",
+          "bit_rate": "178649",
+          "bits_per_raw_sample": "8",
+          "nb_frames": "9360",
+          "nb_read_frames": "9360",
+          "extradata_size": 52,
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0,
+            "non_diegetic": 0,
+            "captions": 0,
+            "descriptions": 0,
+            "metadata": 0,
+            "dependent": 0,
+            "still_image": 0,
+            "multilayer": 0
+          },
+          "tags": {
+            "language": "und",
+            "handler_name": "VideoHandler",
+            "encoder": "Lavc62.28.100 libx264"
+          }
+        },
+        {
+          "index": 1,
+          "codec_name": "aac",
+          "codec_long_name": "AAC (Advanced Audio Coding)",
+          "profile": "LC",
+          "codec_type": "audio",
+          "codec_tag_string": "mp4a",
+          "codec_tag": "0x6134706d",
+          "mime_codec_string": "mp4a.40.2",
+          "sample_fmt": "fltp",
+          "sample_rate": "48000",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "bits_per_sample": 0,
+          "initial_padding": 0,
+          "id": "0x2",
+          "r_frame_rate": "0/0",
+          "avg_frame_rate": "0/0",
+          "time_base": "1/48000",
+          "start_pts": 0,
+          "start_time": "0.000000",
+          "duration_ts": 14976000,
+          "duration": "312.000000",
+          "bit_rate": "233352",
+          "nb_frames": "14625",
+          "nb_read_frames": "14625",
+          "extradata_size": 2,
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0,
+            "non_diegetic": 0,
+            "captions": 0,
+            "descriptions": 0,
+            "metadata": 0,
+            "dependent": 0,
+            "still_image": 0,
+            "multilayer": 0
+          },
+          "tags": {
+            "language": "und",
+            "handler_name": "SoundHandler"
+          }
+        }
+      ],
+      "format": {
+        "filename": "/Users/russellmiller/Projects/systematic_review_builder/public/guide/updated_overview_stabilized.mp4",
+        "nb_streams": 2,
+        "nb_programs": 0,
+        "nb_stream_groups": 0,
+        "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+        "format_long_name": "QuickTime / MOV",
+        "start_time": "0.000000",
+        "duration": "312.000000",
+        "size": "16413218",
+        "bit_rate": "420851",
+        "probe_score": 100,
+        "tags": {
+          "major_brand": "isom",
+          "minor_version": "512",
+          "compatible_brands": "isomiso2avc1mp41",
+          "encoder": "Lavf62.12.100"
+        }
+      }
+    }
+  },
+  "output": {
+    "path": "public/guide/synthesis-current-overview.mp4",
+    "bytes": 22849340,
+    "sha256": "61c544f223422160e2b2f61fd7403a6faea97c64f39b74e601ee55c0100baf6a",
+    "expectedFrames": 13421,
+    "decodedFrames": 13421,
+    "duration": 447.366667,
+    "probe": {
+      "streams": [
+        {
+          "index": 0,
+          "codec_name": "h264",
+          "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+          "profile": "High",
+          "codec_type": "video",
+          "codec_tag_string": "avc1",
+          "codec_tag": "0x31637661",
+          "mime_codec_string": "avc1.640020",
+          "width": 1422,
+          "height": 720,
+          "coded_width": 1424,
+          "coded_height": 720,
+          "has_b_frames": 2,
+          "sample_aspect_ratio": "1:1",
+          "display_aspect_ratio": "79:40",
+          "pix_fmt": "yuv420p",
+          "level": 32,
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "chroma_location": "left",
+          "field_order": "progressive",
+          "refs": 4,
+          "is_avc": "true",
+          "nal_length_size": "4",
+          "id": "0x1",
+          "r_frame_rate": "30/1",
+          "avg_frame_rate": "30/1",
+          "time_base": "1/15360",
+          "start_pts": 0,
+          "start_time": "0.000000",
+          "duration_ts": 6871552,
+          "duration": "447.366667",
+          "bit_rate": "170578",
+          "bits_per_raw_sample": "8",
+          "nb_frames": "13421",
+          "nb_read_frames": "13421",
+          "extradata_size": 52,
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0,
+            "non_diegetic": 0,
+            "captions": 0,
+            "descriptions": 0,
+            "metadata": 0,
+            "dependent": 0,
+            "still_image": 0,
+            "multilayer": 0
+          },
+          "tags": {
+            "language": "und",
+            "handler_name": "VideoHandler",
+            "encoder": "Lavc62.28.100 libx264"
+          }
+        },
+        {
+          "index": 1,
+          "codec_name": "aac",
+          "codec_long_name": "AAC (Advanced Audio Coding)",
+          "profile": "LC",
+          "codec_type": "audio",
+          "codec_tag_string": "mp4a",
+          "codec_tag": "0x6134706d",
+          "mime_codec_string": "mp4a.40.2",
+          "sample_fmt": "fltp",
+          "sample_rate": "48000",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "bits_per_sample": 0,
+          "initial_padding": 0,
+          "id": "0x2",
+          "r_frame_rate": "0/0",
+          "avg_frame_rate": "0/0",
+          "time_base": "1/48000",
+          "start_pts": 0,
+          "start_time": "0.000000",
+          "duration_ts": 21472658,
+          "duration": "447.347042",
+          "bit_rate": "229194",
+          "nb_frames": "20975",
+          "nb_read_frames": "20975",
+          "extradata_size": 2,
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0,
+            "non_diegetic": 0,
+            "captions": 0,
+            "descriptions": 0,
+            "metadata": 0,
+            "dependent": 0,
+            "still_image": 0,
+            "multilayer": 0
+          },
+          "tags": {
+            "language": "und",
+            "handler_name": "SoundHandler"
+          }
+        }
+      ],
+      "format": {
+        "filename": "/Users/russellmiller/Projects/systematic_review_builder/public/guide/synthesis-current-overview.mp4",
+        "nb_streams": 2,
+        "nb_programs": 0,
+        "nb_stream_groups": 0,
+        "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+        "format_long_name": "QuickTime / MOV",
+        "start_time": "0.000000",
+        "duration": "447.366667",
+        "size": "22849340",
+        "bit_rate": "408601",
+        "probe_score": 100,
+        "tags": {
+          "major_brand": "isom",
+          "minor_version": "512",
+          "compatible_brands": "isomiso2avc1mp41",
+          "encoder": "Lavf62.12.100"
+        }
+      }
+    }
+  },
+  "video": {
+    "width": 1422,
+    "height": 720,
+    "fps": 30
+  },
+  "narration": {
+    "retained": "Natural narration from the stabilized source for chapters 1–14",
+    "new": "macOS say voice Samantha at 178 words per minute, gain-matched at -2.6 dB"
+  },
+  "chapters": [
+    {
+      "label": "14 · Coordinate",
+      "title": "Chat, mentions, and accountable assignments",
+      "startSeconds": 295.26666666666665,
+      "endSeconds": 313.3333333333333,
+      "frames": 542,
+      "voiceDuration": 17.475873,
+      "image": "public/guide/captures/16-team-chat.jpg"
+    },
+    {
+      "label": "15 · Coordinate",
+      "title": "Notifications that lead back to the work",
+      "startSeconds": 313.3333333333333,
+      "endSeconds": 328.6333333333333,
+      "frames": 459,
+      "voiceDuration": 14.687075,
+      "image": "public/guide/captures/21-notifications.jpg"
+    },
+    {
+      "label": "16 · Retrieve",
+      "title": "Open-access and institutional full-text routes",
+      "startSeconds": 328.6333333333333,
+      "endSeconds": 349.6666666666667,
+      "frames": 631,
+      "voiceDuration": 20.433288,
+      "image": "public/guide/captures/19-library-fulltext.jpg"
+    },
+    {
+      "label": "17 · Cite",
+      "title": "A reference library connected to the manuscript",
+      "startSeconds": 349.6666666666667,
+      "endSeconds": 370.8666666666667,
+      "frames": 636,
+      "voiceDuration": 20.608163,
+      "image": "public/guide/captures/17-reference-library.jpg"
+    },
+    {
+      "label": "18 · Write",
+      "title": "Collaborative manuscript drafting",
+      "startSeconds": 370.8666666666667,
+      "endSeconds": 391.1,
+      "frames": 607,
+      "voiceDuration": 19.624898,
+      "image": "public/guide/captures/18-manuscript.jpg"
+    },
+    {
+      "label": "19 · Scale",
+      "title": "Guidelines with complete PICO sub-reviews",
+      "startSeconds": 391.1,
+      "endSeconds": 412.1666666666667,
+      "frames": 632,
+      "voiceDuration": 20.458231,
+      "image": "public/guide/captures/15-guideline-hub.jpg"
+    },
+    {
+      "label": "20 · Publish",
+      "title": "One compiled guideline and bibliography",
+      "startSeconds": 412.1666666666667,
+      "endSeconds": 429.1333333333333,
+      "frames": 509,
+      "voiceDuration": 16.382132,
+      "image": "public/guide/captures/20-compiled-guideline.jpg"
+    },
+    {
+      "label": "Start here",
+      "title": "One workspace, from evidence to publication",
+      "startSeconds": 429.1333333333333,
+      "endSeconds": 447.3666666666667,
+      "frames": 547,
+      "voiceDuration": 17.633696,
+      "image": "public/guide/captures/15-guideline-hub.jpg"
+    }
+  ],
+  "captures": [
+    {
+      "path": "public/guide/captures/16-team-chat.jpg",
+      "bytes": 87950,
+      "sha256": "d39d6e18a6bca83b4582e5722a8e067c009fce28167d214f98d32068db3ff545"
+    },
+    {
+      "path": "public/guide/captures/21-notifications.jpg",
+      "bytes": 104593,
+      "sha256": "e716fc2eb86a07e69173e572dc55d15173780178f1ba24f4c5ca12091a935744"
+    },
+    {
+      "path": "public/guide/captures/19-library-fulltext.jpg",
+      "bytes": 142493,
+      "sha256": "afd6ca104b9891b34be366a1f2e91e66bf4590a48d14d53f3efb16a3f98df001"
+    },
+    {
+      "path": "public/guide/captures/17-reference-library.jpg",
+      "bytes": 144719,
+      "sha256": "2fc5b6bee68e61cd048a5f5340960021688dc5a22429cfcebba6458cf133217a"
+    },
+    {
+      "path": "public/guide/captures/18-manuscript.jpg",
+      "bytes": 110310,
+      "sha256": "b121cb56487aa8de8792d6161598526391cf9b57893d9835c609483d31dcab90"
+    },
+    {
+      "path": "public/guide/captures/15-guideline-hub.jpg",
+      "bytes": 132749,
+      "sha256": "168d5439c713fe53ecb8c78735c2c4e77407bf97044a66e184e557cf90d1ca64"
+    },
+    {
+      "path": "public/guide/captures/20-compiled-guideline.jpg",
+      "bytes": 138437,
+      "sha256": "d939d72ab34bd5d503eaa71101577db70e2cef4e17873f05710f749029e2304b"
+    },
+    {
+      "path": "public/guide/captures/15-guideline-hub.jpg",
+      "bytes": 132749,
+      "sha256": "168d5439c713fe53ecb8c78735c2c4e77407bf97044a66e184e557cf90d1ca64"
+    }
+  ],
+  "tracks": {
+    "captions": "public/guide/synthesis-current-overview.en.vtt",
+    "chapters": "public/guide/synthesis-current-overview.chapters.vtt",
+    "poster": "public/guide/synthesis-current-overview-poster.jpg"
+  }
+}

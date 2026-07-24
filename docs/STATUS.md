@@ -4,6 +4,35 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-23) — user guide and current-product overview refreshed — DONE
+
+The public guide and narrated overview now cover the feature waves that landed after the prior
+guide recording.
+
+- **Searchable guide:** expanded from 11 to 15 task chapters. New guidance covers organization
+  invitations and the distinction between workspace/project roles, institutional library
+  settings, guideline hubs and PICO sub-projects (including conversion), chat/threads/mentions/
+  assignments/notifications, open-access retrieval, companion reports and re-anchoring,
+  reference management, collaborative manuscript drafting, compiled-guideline access checks,
+  updated role summaries, FAQs, and six quality checkpoints.
+- **Real product captures:** added eight seeded-workspace screens for organization/library
+  administration, the guideline hub, team chat, references, manuscript drafting, full-text
+  retrieval, compiled guideline preview, and notifications.
+- **Current overview:** `/guide` now serves `synthesis-current-overview.mp4`, a 7:27
+  (13,421-frame) narrated, captioned, chaptered walkthrough. It preserves the first 14 chapters
+  of the stabilized overview, replaces the old closing, and adds eight current-product scenes.
+  The extension's loudness is gain-matched to the retained narration. The former overview remains
+  preserved as a source artifact.
+- **Reproducibility:** `npm run build:current-guide-video` rebuilds the MP4, poster, English
+  captions, chapter cues, provenance notes, and a manifest containing source/capture/output
+  hashes plus decoded-frame verification.
+- **Verification:** the final H.264/AAC MP4 decodes cleanly at 1422×720 and 30 fps; its retained
+  and new narration both measure approximately -19.0 LUFS. HTTP checks return byte-range
+  `video/mp4`, `text/vtt` tracks, and the matching JPEG poster. `/guide` was browser-checked at
+  1920×1080 and 390×844, including 15-chapter rendering, search filtering, responsive video,
+  ready-state metadata (447.367 seconds, 1422×720), and a clean console. Typecheck and production
+  build are clean; **612 unit** and **303 integration** tests pass.
+
 ## Current state (2026-07-23) — convert existing PICO reviews into guideline sub-projects — DONE
 
 Guideline owners can now attach previously created standalone review projects as PICO

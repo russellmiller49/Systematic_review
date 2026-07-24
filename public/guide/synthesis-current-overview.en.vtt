@@ -1,0 +1,267 @@
+WEBVTT
+
+NOTE English narration for the current Synthesis product overview
+
+1.1
+00:00:00.324 --> 00:00:04.800
+Welcome to Synthesis, a traceable workspace for systematic reviews and meta-analyses.
+
+1.2
+00:00:04.800 --> 00:00:10.101
+This overview follows a review from its protocol through screening, synthesis, and reporting.
+
+1.3
+00:00:10.335 --> 00:00:16.956
+What you see is the seeded demonstration project, using the same workflows your team will use.
+
+2.1
+00:00:17.393 --> 00:00:21.783
+Start by creating a project and assigning team roles.
+
+2.2
+00:00:22.121 --> 00:00:32.543
+In Protocol, record the review question, narrative and structured PICO, eligibility criteria, outcomes, search plan, exclusion reasons, and analysis plan.
+
+2.3
+00:00:32.809 --> 00:00:34.787
+Publish a version before screening.
+
+2.4
+00:00:34.958 --> 00:00:39.679
+Later edits require an amendment note, so the methods history remains visible.
+
+3.1
+00:00:41.580 --> 00:00:48.634
+Add each database as a source, then upload RIS, BibTeX, CSV, or NBIB exports.
+
+3.2
+00:00:49.211 --> 00:00:54.117
+Synthesis previews every record and preserves parse errors before you commit a batch.
+
+3.3
+00:00:54.703 --> 00:00:58.046
+The project always knows where each citation came from.
+
+4.1
+00:00:59.218 --> 00:01:01.969
+Run duplicate detection before screening.
+
+4.2
+00:01:02.466 --> 00:01:08.635
+Exact DOI and PMID matches sit alongside title-based suggestions for human review.
+
+4.3
+00:01:09.253 --> 00:01:15.045
+Merge a pair, reject it, or undo a merge later; the original provenance is retained.
+
+5.1
+00:01:15.856 --> 00:01:20.485
+Assign title-and-abstract and full-text work to one or more reviewers.
+
+5.2
+00:01:21.016 --> 00:01:30.145
+The queue is keyboard first: I includes, E excludes, M marks maybe, N opens a note, and J skips.
+
+5.3
+00:01:30.587 --> 00:01:34.458
+When blinding is enabled, reviewers cannot see one another's decisions.
+
+5.4
+00:01:34.986 --> 00:01:40.325
+Disagreements become conflicts for an adjudicator, while agreed decisions advance automatically.
+
+6.1
+00:01:40.932 --> 00:01:46.977
+The full-text workspace tracks retrieval attempts, attached PDFs, and screening status together.
+
+6.2
+00:01:47.647 --> 00:01:50.140
+Included reports advance to studies.
+
+6.3
+00:01:50.816 --> 00:01:57.758
+A full-text exclusion must use a configured reason, keeping PRISMA counts and exclusion tables consistent.
+
+7.1
+00:01:58.680 --> 00:02:03.903
+Build a typed, versioned extraction template, publish it, and assign extractors.
+
+7.2
+00:02:04.455 --> 00:02:12.453
+The living table resolves values in a clear order: adjudicated first, then consensus, then a single completed value.
+
+7.3
+00:02:13.460 --> 00:02:19.905
+Evidence anchors reopen the exact supporting page and quote, and CSV export is always close at hand.
+
+8.1
+00:02:20.537 --> 00:02:24.577
+For risk of bias, clone a standard instrument or build your own.
+
+8.2
+00:02:25.174 --> 00:02:33.468
+Synthesis includes RoB 2, ROBINS-I, QUADAS-2, Newcastle-Ottawa, JBI, and AMSTAR 2.
+
+8.3
+00:02:34.252 --> 00:02:41.852
+Reviewers assess domains independently; the traffic-light summary shows agreement, disagreements, and adjudicated judgments.
+
+9.1
+00:02:42.525 --> 00:02:49.708
+Map extraction fields to an outcome once, and pooled results refresh as finalized evidence changes.
+
+9.2
+00:02:50.645 --> 00:03:04.714
+Fixed and random effects, forest plots, prediction intervals, funnel plots, and small-study diagnostics are generated from deterministic statistical code, with incomplete or excluded studies called out.
+
+10.1
+00:03:05.248 --> 00:03:12.292
+On the GRADE tab, Synthesis drafts five certainty domains from the pooled evidence and risk-of-bias results.
+
+10.2
+00:03:12.976 --> 00:03:16.271
+Every judgment and rationale stays human-editable.
+
+10.3
+00:03:16.975 --> 00:03:22.505
+Mark an assessment reviewed only when the evidence is current; source changes flag it as stale.
+
+11.1
+00:03:23.025 --> 00:03:30.943
+AI assistance in Synthesis is optional, and it is designed as a second set of eyes—not an automated decision-maker.
+
+11.2
+00:03:32.124 --> 00:03:40.622
+During title-and-abstract screening, it can score and prioritize citations, then show reviewers a suggested decision and rationale.
+
+11.3
+00:03:41.851 --> 00:03:51.369
+For extraction and risk of bias, it can read the linked PDF, propose values or domain judgments, and surface supporting quotes with page references.
+
+11.4
+00:03:52.671 --> 00:03:58.627
+In GRADE, it can draft per-domain rationale from the current pooled results and protocol context.
+
+11.5
+00:03:59.980 --> 00:04:02.767
+Suggestions stay separate from the authoritative record.
+
+11.6
+00:04:03.318 --> 00:04:10.275
+A reviewer chooses what to apply, existing work is protected, and accepted changes follow the normal audit trail.
+
+12.1
+00:04:11.260 --> 00:04:19.927
+The Summary of Findings brings together study counts, participants, relative effects, anticipated absolute effects, and certainty.
+
+12.2
+00:04:20.564 --> 00:04:24.026
+Download the table as CSV when it is ready for your report.
+
+13.1
+00:04:25.976 --> 00:04:30.413
+PRISMA counts are computed live from the same decisions that drive the workflow.
+
+13.2
+00:04:30.850 --> 00:04:37.933
+Save a frozen snapshot for a submission, and download the publication-ready flow diagram as SVG or PNG.
+
+14.1
+00:04:38.552 --> 00:04:43.389
+Finally, the audit trail records who changed what, when, and why.
+
+14.2
+00:04:44.072 --> 00:04:46.753
+Role-aware filtering preserves reviewer blinding.
+
+14.3
+00:04:47.526 --> 00:04:54.784
+Together with capability-gated exports, it gives the review a defensible chain from source record to final conclusion.
+
+15.1
+00:04:55.347 --> 00:04:58.499
+Synthesis now keeps review coordination beside the evidence.
+
+15.2
+00:04:58.499 --> 00:05:07.955
+Use project channels and direct messages for questions, mentions to bring in the right colleague, and assignment messages with due dates and per-person completion.
+
+15.3
+00:05:07.955 --> 00:05:12.683
+Unread badges show where attention is needed without exposing another project's activity.
+
+16.1
+00:05:13.413 --> 00:05:19.071
+The notification bell brings direct messages, manuscript mentions, and assigned work into one inbox.
+
+16.2
+00:05:19.071 --> 00:05:27.960
+Each item links back to its project context, and read state stays synchronized as the team moves between conversations and evidence tasks.
+
+17.1
+00:05:28.713 --> 00:05:33.463
+Configure institutional proxy and OpenURL links once at the organization level.
+
+17.2
+00:05:33.463 --> 00:05:38.212
+Each full-text record then offers DOI, PubMed, and library resolver routes.
+
+17.3
+00:05:38.212 --> 00:05:49.007
+Owners can also run legal open-access retrieval through Unpaywall and Europe PMC, with successful files following the same validation and attempt history as manual uploads.
+
+18.1
+00:05:49.747 --> 00:05:55.329
+The reference library brings included studies, methods papers, and background sources together.
+
+18.2
+00:05:55.329 --> 00:06:01.841
+Add by DOI or PMID, paste RIS or BibTeX, or enter a record manually.
+
+18.3
+00:06:01.841 --> 00:06:07.424
+Format Vancouver, AMA, APA, or NLM bibliographies and export to reference managers.
+
+18.4
+00:06:07.424 --> 00:06:10.215
+A guideline family shares one library.
+
+19.1
+00:06:10.947 --> 00:06:18.741
+Draft the manuscript section by section with assignments, editing locks, autosave, comments, mentions, version history, and approval states.
+
+19.2
+00:06:18.741 --> 00:06:25.669
+Insert citations from the project library; the reference list follows first-use order and the selected style.
+
+19.3
+00:06:25.669 --> 00:06:30.432
+Export the current manuscript as DOCX when the team is ready.
+
+20.1
+00:06:31.180 --> 00:06:37.815
+For multi-question guidelines, create a guideline hub and add one full review for each PICO question.
+
+20.2
+00:06:37.815 --> 00:06:43.620
+Teams can also convert an existing standalone review without recreating its evidence or history.
+
+20.3
+00:06:43.620 --> 00:06:51.498
+The hub holds shared context, chat, references, and general manuscript sections, while each PICO keeps its complete review workflow.
+
+21.1
+00:06:52.247 --> 00:06:59.774
+The compiled preview assembles the guideline's general sections followed by each PICO question, with one bibliography across the family.
+
+21.2
+00:06:59.774 --> 00:07:08.489
+Full DOCX export is enabled only when the caller can read every included sub-project, so a partial guideline is never produced silently.
+
+22.1
+00:07:09.213 --> 00:07:20.346
+That is the current Synthesis workspace: one connected system for evidence review, team coordination, reference management, manuscript development, and multi-question guidelines.
+
+22.2
+00:07:20.346 --> 00:07:26.707
+Open the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.

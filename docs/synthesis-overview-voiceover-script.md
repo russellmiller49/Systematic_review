@@ -1,11 +1,15 @@
 # Synthesis product overview — voiceover script
 
 This is the base narration used by the original 3:53 product overview. The public guide now uses
-the stabilized 5:12 natural-voice recording in
-`public/guide/updated_overview_stabilized.mp4`, with the AI-assistance narration inserted after
-GRADE. Its current timings live in `updated_overview_stabilized.en.vtt` and
-`updated_overview_stabilized.chapters.vtt`; the timings below preserve the original recording
-reference.
+the 7:27 current-product render in `public/guide/synthesis-current-overview.mp4`. It preserves the
+stabilized overview through the audit-trail chapter, replaces the former closing, and adds team
+chat, notifications, institutional/open-access retrieval, references, manuscript drafting,
+guideline PICO sub-reviews, and compiled-guideline export.
+
+Exact current timings live in `synthesis-current-overview.en.vtt` and
+`synthesis-current-overview.chapters.vtt`; hashes and scene boundaries live in
+`synthesis-current-overview.manifest.json`. The base timings below preserve the original
+recording reference, followed by the current feature extension.
 
 ## Voice direction
 
@@ -194,6 +198,64 @@ That is Synthesis: one connected workspace for planning, screening, extraction, 
 synthesis, and reporting.
 
 Open the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.
+
+## Current feature extension
+
+The current render keeps the original overview through `04:55.267`, then uses this replacement
+sequence. Spoken copy is also the source for the on-page transcript in
+`src/content/user-guide.ts`.
+
+### 04:55–05:13 — Coordinate: Chat, mentions, and accountable assignments
+
+Synthesis now keeps review coordination beside the evidence. Use project channels and direct
+messages for questions, mentions to bring in the right colleague, and assignment messages with
+due dates and per-person completion. Unread badges show where attention is needed without
+exposing another project's activity.
+
+### 05:13–05:29 — Coordinate: Notifications that lead back to the work
+
+The notification bell brings direct messages, manuscript mentions, and assigned work into one
+inbox. Each item links back to its project context, and read state stays synchronized as the team
+moves between conversations and evidence tasks.
+
+### 05:29–05:50 — Retrieve: Open-access and institutional full-text routes
+
+Configure institutional proxy and OpenURL links once at the organization level. Each full-text
+record then offers DOI, PubMed, and library resolver routes. Owners can also run legal
+open-access retrieval through Unpaywall and Europe PMC, with successful files following the same
+validation and attempt history as manual uploads.
+
+### 05:50–06:11 — Cite: A reference library connected to the manuscript
+
+The reference library brings included studies, methods papers, and background sources together.
+Add by DOI or PMID, paste RIS or BibTeX, or enter a record manually. Format Vancouver, AMA, APA,
+or NLM bibliographies and export to reference managers. A guideline family shares one library.
+
+### 06:11–06:31 — Write: Collaborative manuscript drafting
+
+Draft the manuscript section by section with assignments, editing locks, autosave, comments,
+mentions, version history, and approval states. Insert citations from the project library; the
+reference list follows first-use order and the selected style. Export the current manuscript as
+DOCX when the team is ready.
+
+### 06:31–06:52 — Scale: Guidelines with complete PICO sub-reviews
+
+For multi-question guidelines, create a guideline hub and add one full review for each PICO
+question. Teams can also convert an existing standalone review without recreating its evidence
+or history. The hub holds shared context, chat, references, and general manuscript sections,
+while each PICO keeps its complete review workflow.
+
+### 06:52–07:09 — Publish: One compiled guideline and bibliography
+
+The compiled preview assembles the guideline's general sections followed by each PICO question,
+with one bibliography across the family. Full DOCX export is enabled only when the caller can
+read every included sub-project, so a partial guideline is never produced silently.
+
+### 07:09–07:27 — Closing: One workspace, from evidence to publication
+
+That is the current Synthesis workspace: one connected system for evidence review, team
+coordination, reference management, manuscript development, and multi-question guidelines. Open
+the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.
 
 ## Recording handoff
 

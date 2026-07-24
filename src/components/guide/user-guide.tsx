@@ -5,6 +5,8 @@ import Link from "next/link";
 import {
   ArrowRight,
   BarChart3,
+  Bell,
+  BookMarked,
   BookOpenCheck,
   CheckCircle2,
   ChevronRight,
@@ -17,6 +19,9 @@ import {
   GitMerge,
   Keyboard,
   ListChecks,
+  ListTree,
+  MessagesSquare,
+  PenLine,
   PlayCircle,
   Search,
   ShieldCheck,
@@ -28,7 +33,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
-import { guideFaqs, guideRoles, guideSteps, updatedVideoChapters } from "@/content/user-guide";
+import { currentVideoChapters, guideFaqs, guideRoles, guideSteps } from "@/content/user-guide";
 
 const PHASE_STYLES: Record<string, string> = {
   Plan: "bg-indigo-50 text-indigo-700 ring-indigo-200",
@@ -41,6 +46,8 @@ const PHASE_STYLES: Record<string, string> = {
 
 const STEP_ICONS: Record<string, LucideIcon> = {
   "create-project": Users,
+  guidelines: ListTree,
+  collaboration: MessagesSquare,
   protocol: ClipboardCheck,
   import: FileUp,
   deduplication: GitMerge,
@@ -50,6 +57,8 @@ const STEP_ICONS: Record<string, LucideIcon> = {
   "risk-of-bias": ShieldCheck,
   analysis: TrendingUp,
   grade: Sparkles,
+  references: BookMarked,
+  manuscript: PenLine,
   reporting: BarChart3,
 };
 
@@ -142,7 +151,7 @@ export function UserGuide() {
               </div>
               <div className="mt-10 grid max-w-2xl grid-cols-3 divide-x divide-slate-200 border-y border-slate-200 py-4">
                 <div className="pr-4">
-                  <p className="text-2xl font-semibold">12</p>
+                  <p className="text-2xl font-semibold">16</p>
                   <p className="text-xs text-slate-500">connected workspaces</p>
                 </div>
                 <div className="px-4">
@@ -195,11 +204,11 @@ export function UserGuide() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-300">Video overview</p>
                 <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
-                  See the complete review in about five minutes.
+                  See the current product in about seven minutes.
                 </h2>
                 <p className="mt-4 leading-7 text-slate-300">
-                  A narrated tour of the real seeded workspace—from a versioned protocol to
-                  PRISMA, GRADE, optional AI assistance, and the audit trail.
+                  A narrated tour of real seeded workspaces—from protocol and GRADE to team
+                  coordination, references, manuscript drafting, and multi-PICO guidelines.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-2 text-xs text-slate-300">
                   <span className="rounded-full border border-slate-700 px-3 py-1.5">English captions</span>
@@ -212,20 +221,20 @@ export function UserGuide() {
                   className="aspect-[79/40] w-full bg-black object-contain"
                   controls
                   preload="metadata"
-                  poster="/guide/updated_overview_stabilized-poster.jpg"
+                  poster="/guide/synthesis-current-overview-poster.jpg"
                   aria-label="Synthesis systematic review software overview"
                 >
-                  <source src="/guide/updated_overview_stabilized.mp4" type="video/mp4" />
+                  <source src="/guide/synthesis-current-overview.mp4" type="video/mp4" />
                   <track
                     kind="captions"
-                    src="/guide/updated_overview_stabilized.en.vtt"
+                    src="/guide/synthesis-current-overview.en.vtt"
                     srcLang="en"
                     label="English"
                     default
                   />
                   <track
                     kind="chapters"
-                    src="/guide/updated_overview_stabilized.chapters.vtt"
+                    src="/guide/synthesis-current-overview.chapters.vtt"
                     srcLang="en"
                     label="Chapters"
                   />
@@ -236,7 +245,7 @@ export function UserGuide() {
             <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 pt-6">
               <p className="text-sm text-slate-400">Prefer to watch offline?</p>
               <a
-                href="/guide/updated_overview_stabilized.mp4"
+                href="/guide/synthesis-current-overview.mp4"
                 download
                 className="inline-flex items-center gap-2 text-sm font-medium text-indigo-300 hover:text-indigo-200"
               >
@@ -246,7 +255,7 @@ export function UserGuide() {
             <details className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
               <summary className="cursor-pointer font-medium text-slate-100">Read the video transcript</summary>
               <div className="mt-5 grid gap-5 text-sm leading-7 text-slate-300 md:grid-cols-2">
-                {updatedVideoChapters.map((chapter) => (
+                {currentVideoChapters.map((chapter) => (
                   <div key={`${chapter.label}-${chapter.title}`}>
                     <p className="text-xs font-semibold uppercase tracking-[0.15em] text-indigo-300">{chapter.label}</p>
                     <p className="mt-1 font-medium text-white">{chapter.title}</p>
@@ -275,7 +284,7 @@ export function UserGuide() {
                 ["03", "Decide", "Screening"],
                 ["04", "Extract", "Data + RoB"],
                 ["05", "Synthesize", "Analysis + GRADE"],
-                ["06", "Report", "PRISMA + audit"],
+                ["06", "Report", "PRISMA + writing"],
               ].map(([number, label, detail], index) => (
                 <div key={label} className="relative border-b border-slate-200 p-5 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0">
                   <p className="font-mono text-xs text-slate-400">{number}</p>
@@ -284,6 +293,13 @@ export function UserGuide() {
                   {index < 5 && <ChevronRight className="absolute -right-3 top-1/2 z-10 hidden h-6 w-6 -translate-y-1/2 rounded-full border border-slate-200 bg-white p-1 text-slate-400 xl:block" />}
                 </div>
               ))}
+            </div>
+            <div className="mt-6 flex items-start gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-5 text-sm leading-6 text-indigo-950">
+              <Bell className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
+              <p>
+                Coordination spans every phase: chat, assignments, notifications, references,
+                and manuscript comments stay attached to the same project context.
+              </p>
             </div>
           </div>
         </section>
@@ -433,7 +449,7 @@ export function UserGuide() {
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Before you advance</p>
-              <h2 className="mt-3 text-3xl font-semibold tracking-tight">Five quality checkpoints.</h2>
+              <h2 className="mt-3 text-3xl font-semibold tracking-tight">Six quality checkpoints.</h2>
               <div className="mt-8 space-y-4">
                 {[
                   "Publish the protocol and configure full-text exclusion reasons before screening.",
@@ -441,6 +457,7 @@ export function UserGuide() {
                   "Settle extraction and risk-of-bias conflicts before treating results as final.",
                   "Inspect every excluded or incomplete analysis row; nothing is silently dropped.",
                   "Refresh stale GRADE assessments and freeze a PRISMA snapshot for each submission.",
+                  "Before compiling a guideline, confirm that the exporter can read every PICO sub-project.",
                 ].map((item) => (
                   <div key={item} className="flex gap-3 text-sm leading-6 text-slate-300"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" /><span>{item}</span></div>
                 ))}

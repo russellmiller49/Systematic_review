@@ -3,14 +3,15 @@
 A systematic-review and meta-analysis platform for medical research teams. Synthesis takes a
 review from protocol registration through search import, deduplication, blinded dual screening,
 full-text retrieval, data extraction, risk-of-bias assessment, and a live PRISMA 2020 flow — with
-a complete, blinding-aware audit trail at every step.
+a complete, blinding-aware audit trail at every step. Team chat, references, manuscript drafting,
+and guideline projects keep collaboration and publication in the same evidence chain.
 
 Built with Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind v4 · Prisma ·
 PostgreSQL · Auth.js.
 
 The in-product [user guide](http://localhost:3000/guide) includes a searchable workflow,
 role guidance, screening shortcuts, troubleshooting, and a narrated captioned overview of the
-seeded demo project.
+seeded systematic-review and multi-PICO guideline workspaces.
 
 ## What it does
 
@@ -27,7 +28,8 @@ seeded demo project.
   disagreements open conflicts for an adjudicator. Stage results are materialized so PRISMA and
   the full-text queue stay consistent.
 - **Full text** — retrieval tracking, PDF upload (magic-byte validated, content-addressed) and
-  inline serving, and full-text screening where exclusions require a reason.
+  inline serving, institutional proxy/OpenURL links, legal open-access retrieval through
+  Unpaywall and Europe PMC, and full-text screening where exclusions require a reason.
 - **Extraction** — build versioned extraction templates with typed fields, extract in parallel,
   and adjudicate field-level conflicts. Adjudicated values are authoritative for export.
 - **Risk of bias** — built-in tools for the standard instruments (RoB 2, ROBINS-I, QUADAS-2,
@@ -40,6 +42,14 @@ seeded demo project.
 - **Audit trail** — every mutation is recorded with before/after values; sensitive
   (blinding-relevant) events are filtered by capability so a blinded reviewer never sees a
   co-reviewer's decisions.
+- **Team coordination** — project channels, direct messages, threads, mentions, assignments,
+  unread badges, and a cross-project notification inbox.
+- **References & manuscript** — a formatted citation library with interoperable exports plus
+  section assignments, safe editing locks, comments, versions, approvals, inline citations, and
+  DOCX export.
+- **Guideline families** — a top-level guideline with shared references and general manuscript
+  sections, complete PICO review sub-projects, conversion of existing reviews, and guarded
+  full-guideline DOCX compilation.
 
 ## Prerequisites
 

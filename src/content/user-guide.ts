@@ -28,21 +28,56 @@ export const guideSteps: GuideStep[] = [
     id: "create-project",
     number: "01",
     phase: "Plan",
-    title: "Create the workspace",
+    title: "Create the workspace and invite the team",
     summary:
-      "Create an organization, start a review project, and choose the review and screening model before work begins.",
+      "Set up the organization, invite collaborators, configure institutional access, and create the right kind of evidence project.",
     actions: [
       "Create or open an organization from the Organizations page.",
-      "Select New project and enter the title, review type, question, and registration details.",
-      "Choose single or dual screening, the reviewer count, and whether screening is blinded.",
-      "Invite the team from Settings and give each person one or more project roles.",
+      "Invite members as beta testers, Workspace admins, or Workspace owners; each invitation link is single-use and tied to one email.",
+      "Optionally configure the institution's EZProxy prefix and OpenURL resolver once for every full-text queue in the organization.",
+      "Select New project, choose a single review or guideline structure, then assign the project roles needed for the work.",
     ],
-    remember: "Roles are cumulative. Give each person only the roles needed for their work.",
-    image: "/guide/captures/01-dashboard.jpg",
+    remember:
+      "Organization membership opens the workspace; project roles control access to each review. A member does not automatically gain access to every project.",
+    image: "/guide/captures/14-collaboration-and-library.jpg",
+  },
+  {
+    id: "guidelines",
+    number: "02",
+    phase: "Plan",
+    title: "Organize a guideline around PICO questions",
+    summary:
+      "Use a guideline hub for shared methods, coordination, references, and writing while each PICO question keeps a complete review workflow.",
+    actions: [
+      "Choose Guideline when creating the top-level project.",
+      "Add each PICO question as a new review sub-project; members, review type, screening configuration, and the research question are initialized from the guideline.",
+      "Use Add existing project to convert an eligible standalone review without recreating its citations, decisions, evidence, roles, or audit history.",
+      "Draft general sections at the guideline level and PICO-specific sections inside each sub-project, then preview the compiled guideline.",
+    ],
+    remember:
+      "References are shared across the guideline family. Full DOCX compilation requires access to every included PICO sub-project so a partial guideline is never exported silently.",
+    image: "/guide/captures/15-guideline-hub.jpg",
+  },
+  {
+    id: "collaboration",
+    number: "03",
+    phase: "Plan",
+    title: "Coordinate in chat and assignments",
+    summary:
+      "Keep questions, decisions, direct messages, and accountable work beside the review instead of scattering them across separate tools.",
+    actions: [
+      "Use #general for team-wide coordination and create topic channels for focused discussions.",
+      "Start direct messages when a conversation should be limited to selected project members.",
+      "Use @mentions or @channel to notify the right people, and reply in a thread to keep a question together.",
+      "Send an Assignment with assignees and an optional due date; each recipient marks their own task complete from the Assignments tab.",
+    ],
+    remember:
+      "The notification bell collects mentions, direct messages, manuscript comments, and assignments across projects. Unread badges remain scoped to the projects you can access.",
+    image: "/guide/captures/16-team-chat.jpg",
   },
   {
     id: "protocol",
-    number: "02",
+    number: "04",
     phase: "Plan",
     title: "Define and publish the protocol",
     summary:
@@ -58,7 +93,7 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "import",
-    number: "03",
+    number: "05",
     phase: "Find",
     title: "Import search results",
     summary:
@@ -74,7 +109,7 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "deduplication",
-    number: "04",
+    number: "06",
     phase: "Find",
     title: "Resolve duplicate citations",
     summary:
@@ -90,7 +125,7 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "screening",
-    number: "05",
+    number: "07",
     phase: "Decide",
     title: "Screen independently",
     summary:
@@ -106,13 +141,14 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "full-text",
-    number: "06",
+    number: "08",
     phase: "Decide",
     title: "Retrieve and review full text",
     summary:
-      "Track retrieval attempts, attach PDFs, and keep eligibility status and PRISMA reporting synchronized.",
+      "Use open-access and institutional routes, track every attempt, attach PDFs, and keep eligibility status and PRISMA reporting synchronized.",
     actions: [
       "Filter reports by retrieval or decision status to focus the queue.",
+      "Run open-access PDF retrieval through Unpaywall and Europe PMC, or use the configured DOI, PubMed, and OpenURL library links.",
       "Record publisher, library, interlibrary-loan, or author-contact attempts.",
       "Upload the main PDF and preview it in the workspace.",
       "Complete assigned full-text decisions; included reports automatically create or join studies.",
@@ -122,7 +158,7 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "extraction",
-    number: "07",
+    number: "09",
     phase: "Extract",
     title: "Extract with evidence anchors",
     summary:
@@ -130,7 +166,8 @@ export const guideSteps: GuideStep[] = [
     actions: [
       "Build a draft template with text, number, date, select, multiselect, and boolean fields.",
       "Publish the template, assign extractors, and start one form per study and extractor.",
-      "Capture a source quote and page, or select text directly in the PDF viewer.",
+      "Run companion-report detection and link follow-up publications to the correct study before treating reports as independent cohorts.",
+      "Capture a source quote and page, or select text directly in the PDF viewer; re-anchor an older quote when the source text has shifted.",
       "Use Table for the living matrix and Conflicts to adjudicate field-level disagreements.",
     ],
     remember: "Resolved data follows a fixed precedence: adjudicated, then consensus, then a single final value.",
@@ -138,7 +175,7 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "risk-of-bias",
-    number: "08",
+    number: "10",
     phase: "Extract",
     title: "Assess risk of bias",
     summary:
@@ -154,14 +191,14 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "analysis",
-    number: "09",
+    number: "11",
     phase: "Synthesize",
     title: "Pool outcomes and inspect uncertainty",
     summary:
       "Map finalized extraction fields to statistical roles and generate transparent, deterministic meta-analysis results.",
     actions: [
       "Create an outcome and choose RR, OR, RD, MD, SMD, proportion, or generic inverse variance.",
-      "Map each required statistical role to a numeric extraction field.",
+      "Map each required statistical role to a numeric extraction field, or scaffold a compatible outcome and fields from the analysis workspace.",
       "Compare fixed and random effects and inspect included, incomplete, disputed, and manually excluded studies.",
       "Download forest and funnel plots; review heterogeneity, prediction intervals, and small-study diagnostics where available.",
     ],
@@ -170,7 +207,7 @@ export const guideSteps: GuideStep[] = [
   },
   {
     id: "grade",
-    number: "10",
+    number: "12",
     phase: "Synthesize",
     title: "Review GRADE and Summary of Findings",
     summary:
@@ -185,8 +222,42 @@ export const guideSteps: GuideStep[] = [
     image: "/guide/captures/10-grade.jpg",
   },
   {
+    id: "references",
+    number: "13",
+    phase: "Report",
+    title: "Build the reference library",
+    summary:
+      "Manage included studies, methods papers, and background sources in one citation library that feeds the manuscript and interoperates with reference managers.",
+    actions: [
+      "Import included studies from screening, or add a reference by DOI, PMID, pasted RIS/BibTeX, or manual entry.",
+      "Tag and search records, then edit normalized metadata when a source needs correction.",
+      "Preview the bibliography in Vancouver, AMA, APA, or NLM style.",
+      "Export RIS, BibTeX, CSL-JSON, or formatted text for Word, Zotero, EndNote, Mendeley, and other tools.",
+    ],
+    remember:
+      "A guideline and all of its PICO sub-projects use one shared reference library and one family-wide duplicate check.",
+    image: "/guide/captures/17-reference-library.jpg",
+  },
+  {
+    id: "manuscript",
+    number: "14",
+    phase: "Report",
+    title: "Draft and review the manuscript",
+    summary:
+      "Write section by section with assignments, safe concurrent editing, citations, comments, version history, approval states, and DOCX export.",
+    actions: [
+      "Assign sections and use Draft, In review, and Approved states to make ownership and readiness visible.",
+      "Select Edit to acquire the section lock; autosave and optimistic version checks protect another member's work.",
+      "Insert project-library citations, discuss changes in comment threads, and use @mentions to notify collaborators.",
+      "Review session versions and restore when needed, then export the manuscript as DOCX with its generated bibliography.",
+    ],
+    remember:
+      "Approved sections are frozen until returned to draft. Guideline hubs can compile their general sections with every accessible PICO manuscript.",
+    image: "/guide/captures/18-manuscript.jpg",
+  },
+  {
     id: "reporting",
-    number: "11",
+    number: "15",
     phase: "Report",
     title: "Freeze, export, and audit",
     summary:
@@ -206,42 +277,50 @@ export const guideRoles: GuideRole[] = [
   {
     role: "Owner / Admin",
     bestFor: "Review leads and project coordinators",
-    access: "Full control, team roles, assignments, settings, adjudication, exports, and audit.",
+    access:
+      "Full project control, chat administration and assignments, manuscript management, team roles, adjudication, exports, and audit.",
   },
   {
     role: "Reviewer",
     bestFor: "Title, abstract, and assigned full-text screening",
-    access: "Assignment-gated screening and a blinding-aware view of relevant audit events.",
+    access:
+      "Assignment-gated screening, chat and notifications, reference and manuscript viewing, comments, and a blinding-aware audit view.",
   },
   {
     role: "Adjudicator",
     bestFor: "Resolving screening, extraction, and RoB disagreements",
-    access: "Conflict resolution, full-text management, analysis viewing, and permitted audit history.",
+    access:
+      "Conflict resolution, full-text management, manuscript editing, chat, analysis viewing, and permitted audit history.",
   },
   {
     role: "Extractor",
     bestFor: "Structured data extraction and RoB assessment",
-    access: "Assigned extraction forms, RoB work, and the PDFs needed to complete them.",
+    access:
+      "Assigned extraction and RoB work, the PDFs needed to complete it, chat, references, and manuscript comments.",
   },
   {
     role: "Statistician",
     bestFor: "Outcome mapping, meta-analysis, GRADE, and reporting",
-    access: "Analysis management, extraction templates, RoB tools, PRISMA snapshots, and exports.",
+    access:
+      "Analysis and GRADE management, reference curation, manuscript editing, extraction templates, PRISMA snapshots, and exports.",
   },
   {
     role: "Librarian",
     bestFor: "Searches, imports, deduplication, and retrieval",
-    access: "Protocol editing, imports, deduplication, full-text management, snapshots, and exports.",
+    access:
+      "Protocol editing, imports, deduplication, full-text and reference management, manuscript editing, snapshots, and exports.",
   },
   {
     role: "Panel / Observer",
     bestFor: "Stakeholders who review findings",
-    access: "Read-only project, analysis, and permitted audit views.",
+    access:
+      "Read-only evidence, analysis, references, manuscript, and permitted audit views, plus participation in project chat.",
   },
   {
     role: "Trainee",
     bestFor: "Supervised review work",
-    access: "Assigned screening, extraction, RoB, and full-text tasks without project administration.",
+    access:
+      "Assigned screening, extraction, RoB, and full-text tasks plus chat, references, and manuscript comments without project administration.",
   },
 ];
 
@@ -378,6 +457,78 @@ export const updatedVideoChapters: VideoChapter[] = [
   videoChapters[13]!,
 ];
 
+export const currentFeatureVideoChapters: VideoChapter[] = [
+  {
+    image: "16-team-chat.jpg",
+    label: "14 · Coordinate",
+    title: "Chat, mentions, and accountable assignments",
+    subtitle: "Channels, direct messages, threads, due dates, and per-person completion",
+    narration:
+      "Synthesis now keeps review coordination beside the evidence. Use project channels and direct messages for questions, mentions to bring in the right colleague, and assignment messages with due dates and per-person completion. Unread badges show where attention is needed without exposing another project's activity.",
+  },
+  {
+    image: "21-notifications.jpg",
+    label: "15 · Coordinate",
+    title: "Notifications that lead back to the work",
+    subtitle: "Direct messages, mentions, comments, and assignments in one inbox",
+    narration:
+      "The notification bell brings direct messages, manuscript mentions, and assigned work into one inbox. Each item links back to its project context, and read state stays synchronized as the team moves between conversations and evidence tasks.",
+  },
+  {
+    image: "19-library-fulltext.jpg",
+    label: "16 · Retrieve",
+    title: "Open-access and institutional full-text routes",
+    subtitle: "Unpaywall, Europe PMC, proxy links, OpenURL, and one retrieval history",
+    narration:
+      "Configure institutional proxy and OpenURL links once at the organization level. Each full-text record then offers DOI, PubMed, and library resolver routes. Owners can also run legal open-access retrieval through Unpaywall and Europe PMC, with successful files following the same validation and attempt history as manual uploads.",
+  },
+  {
+    image: "17-reference-library.jpg",
+    label: "17 · Cite",
+    title: "A reference library connected to the manuscript",
+    subtitle: "Included studies, external sources, formatted styles, and interoperable exports",
+    narration:
+      "The reference library brings included studies, methods papers, and background sources together. Add by DOI or PMID, paste RIS or BibTeX, or enter a record manually. Format Vancouver, AMA, APA, or NLM bibliographies and export to reference managers. A guideline family shares one library.",
+  },
+  {
+    image: "18-manuscript.jpg",
+    label: "18 · Write",
+    title: "Collaborative manuscript drafting",
+    subtitle: "Section ownership, safe editing, citations, comments, versions, and DOCX",
+    narration:
+      "Draft the manuscript section by section with assignments, editing locks, autosave, comments, mentions, version history, and approval states. Insert citations from the project library; the reference list follows first-use order and the selected style. Export the current manuscript as DOCX when the team is ready.",
+  },
+  {
+    image: "15-guideline-hub.jpg",
+    label: "19 · Scale",
+    title: "Guidelines with complete PICO sub-reviews",
+    subtitle: "Shared coordination and writing, with a full review workflow per question",
+    narration:
+      "For multi-question guidelines, create a guideline hub and add one full review for each PICO question. Teams can also convert an existing standalone review without recreating its evidence or history. The hub holds shared context, chat, references, and general manuscript sections, while each PICO keeps its complete review workflow.",
+  },
+  {
+    image: "20-compiled-guideline.jpg",
+    label: "20 · Publish",
+    title: "One compiled guideline and bibliography",
+    subtitle: "General sections, ordered PICO sections, complete-access checks, and DOCX",
+    narration:
+      "The compiled preview assembles the guideline's general sections followed by each PICO question, with one bibliography across the family. Full DOCX export is enabled only when the caller can read every included sub-project, so a partial guideline is never produced silently.",
+  },
+  {
+    image: "15-guideline-hub.jpg",
+    label: "Start here",
+    title: "One workspace, from evidence to publication",
+    subtitle: "Review, coordinate, cite, write, and scale to multi-question guidelines",
+    narration:
+      "That is the current Synthesis workspace: one connected system for evidence review, team coordination, reference management, manuscript development, and multi-question guidelines. Open the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.",
+  },
+];
+
+export const currentVideoChapters: VideoChapter[] = [
+  ...updatedVideoChapters.slice(0, -1),
+  ...currentFeatureVideoChapters,
+];
+
 export const guideFaqs = [
   {
     question: "Why can I see a page but not its edit controls?",
@@ -408,5 +559,20 @@ export const guideFaqs = [
     question: "Can AI make review decisions automatically?",
     answer:
       "No. When configured, AI creates separate suggestions for screening, extraction, RoB, or GRADE. A person must explicitly apply or act on a suggestion; human decision records remain human-authored.",
+  },
+  {
+    question: "What is the difference between an organization role and a project role?",
+    answer:
+      "Organization roles control workspace administration and invitations. Project roles grant capabilities inside a specific review. A workspace member can create and own a new project without receiving access to anyone else's existing project.",
+  },
+  {
+    question: "Where do references live in a guideline?",
+    answer:
+      "The guideline and every PICO sub-project share one family-wide reference library. A librarian working through an authorized PICO can curate that shared pool, and the root guideline audit trail records the change.",
+  },
+  {
+    question: "Why is full guideline export unavailable?",
+    answer:
+      "The exporter requires manuscript access to every PICO sub-project included in the compilation. This prevents an apparently complete DOCX from silently omitting a question the caller cannot read.",
   },
 ] as const;

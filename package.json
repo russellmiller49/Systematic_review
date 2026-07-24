@@ -7,6 +7,7 @@
     "build": "next build",
     "build:guide-video": "tsx scripts/build-guide-video.ts",
     "build:guide-ai-insert": "tsx scripts/build-guide-ai-insert.ts",
+    "build:current-guide-video": "tsx scripts/build-current-guide-overview.ts",
     "prepare:guide-ai-capture": "tsx scripts/prepare-guide-ai-capture.ts",
     "stabilize:guide-overview": "tsx scripts/stabilize-updated-overview.ts",
     "start": "next start",
