@@ -35,7 +35,11 @@ import {
   validateDoc,
 } from "@/lib/manuscript/doc-text";
 import { isLockStale } from "@/lib/manuscript/lock-rules";
-import { DEFAULT_SECTIONS, PICO_SECTIONS } from "./default-sections";
+import {
+  DEFAULT_SECTIONS,
+  hasPicoDefaultSectionStructure,
+  PICO_SECTIONS,
+} from "./default-sections";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -102,6 +106,10 @@ export const createCommentSchema = z.object({
 
 export const commentStatusSchema = z.object({
   status: z.enum(["OPEN", "RESOLVED"]),
+});
+
+export const resetToPicoDefaultsSchema = z.object({
+  confirmDataLoss: z.literal(true),
 });
 
 // ---------------------------------------------------------------------------
@@ -262,16 +270,25 @@ async function activeMemberIds(projectId: string): Promise<Set<string>> {
 export async function getManuscript(ctx: Ctx, projectId: string) {
   const member = await requirePermission(ctx, projectId, "manuscript.view");
   const manuscript = await getOrCreateManuscript(ctx, projectId);
-  const sections = await prisma.manuscriptSection.findMany({
-    where: { manuscriptId: manuscript.id },
-    include: {
-      assignee: userRef,
-      lockedBy: userRef,
-      _count: { select: { comments: { where: { status: "OPEN", parentId: null } } } },
-    },
-    orderBy: { order: "asc" },
-  });
+  const [project, sections] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id: projectId },
+      select: { parentProjectId: true },
+    }),
+    prisma.manuscriptSection.findMany({
+      where: { manuscriptId: manuscript.id },
+      include: {
+        assignee: userRef,
+        lockedBy: userRef,
+        _count: { select: { comments: { where: { status: "OPEN", parentId: null } } } },
+      },
+      orderBy: { order: "asc" },
+    }),
+  ]);
+  if (!project) throw notFound("Project");
   const now = new Date();
+  const isPicoSubProject = project.parentProjectId !== null;
+  const usesPicoDefaultSections = hasPicoDefaultSectionStructure(sections);
   return {
     id: manuscript.id,
     title: manuscript.title,
@@ -279,6 +296,12 @@ export async function getManuscript(ctx: Ctx, projectId: string) {
     canEditAny: can(member.roles, "manuscript.edit"),
     canManage: can(member.roles, "manuscript.manage"),
     canComment: can(member.roles, "manuscript.comment"),
+    isPicoSubProject,
+    usesPicoDefaultSections,
+    canResetToPicoDefaults:
+      isPicoSubProject &&
+      member.roles.includes("OWNER") &&
+      !usesPicoDefaultSections,
     sections: sections.map((s) => ({
       id: s.id,
       title: s.title,
@@ -348,6 +371,183 @@ export async function updateManuscript(
     });
     return updated;
   });
+}
+
+type PicoDefaultsResetTrigger = "PROJECT_CONVERSION" | "EXISTING_SUBPROJECT";
+
+interface PicoDefaultsResetOptions {
+  confirmDataLoss: true;
+  trigger: PicoDefaultsResetTrigger;
+}
+
+// Shared destructive primitive for both conversion and an existing legacy sub-project.
+// The caller's OWNER role and the sub-project relationship are re-checked inside the
+// transaction. The Manuscript row (title/style) stays intact; only section-scoped data is
+// replaced.
+export async function resetManuscriptToPicoDefaultsInTransaction(
+  ctx: Ctx,
+  projectId: string,
+  tx: Tx,
+  options: PicoDefaultsResetOptions,
+) {
+  if (options.confirmDataLoss !== true) {
+    throw validationError("Explicit confirmation is required before manuscript data is deleted");
+  }
+
+  const member = await requirePermission(ctx, projectId, "manuscript.manage", tx);
+  if (!member.roles.includes("OWNER")) {
+    throw forbidden("Only a project owner can replace the manuscript with PICO defaults");
+  }
+
+  // Serialize destructive resets for this project. Locking the manuscript row as well
+  // prevents a concurrent structure insert from leaving a sixth section behind.
+  await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${projectId} FOR UPDATE`;
+  const project = await tx.project.findUnique({
+    where: { id: projectId },
+    select: { parentProjectId: true },
+  });
+  if (!project) throw notFound("Project");
+  if (!project.parentProjectId) {
+    throw invalidState("Only a PICO sub-project can use the PICO manuscript defaults");
+  }
+
+  await tx.$queryRaw`SELECT id FROM "Manuscript" WHERE "projectId" = ${projectId} FOR UPDATE`;
+  let manuscript = await tx.manuscript.findUnique({
+    where: { projectId },
+    include: {
+      sections: {
+        include: { _count: { select: { comments: true, versions: true } } },
+        orderBy: { order: "asc" },
+      },
+    },
+  });
+
+  if (!manuscript) {
+    manuscript = await tx.manuscript.create({
+      data: { projectId, createdById: ctx.userId },
+      include: {
+        sections: {
+          include: { _count: { select: { comments: true, versions: true } } },
+          orderBy: { order: "asc" },
+        },
+      },
+    });
+    await audit.record(tx, {
+      projectId,
+      userId: ctx.userId,
+      entityType: "Manuscript",
+      entityId: manuscript.id,
+      action: AuditActions.MANUSCRIPT_CREATED,
+      metadata: { sectionCount: PICO_SECTIONS.length, defaultSet: "PICO" },
+    });
+  }
+
+  const previousSections = manuscript.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    kind: section.kind,
+    order: section.order,
+    status: section.status,
+    wordCount: section.wordCount,
+    version: section.version,
+    commentCount: section._count?.comments ?? 0,
+    versionCount: section._count?.versions ?? 0,
+    assigned: section.assigneeId !== null,
+    locked: section.lockedById !== null,
+  }));
+  const sectionIds = previousSections.map((section) => section.id);
+
+  let deletedCommentCount = 0;
+  let deletedVersionCount = 0;
+  let deletedSectionCount = 0;
+  if (sectionIds.length > 0) {
+    // Comment threads self-reference, so replies must go before their roots.
+    const replies = await tx.manuscriptComment.deleteMany({
+      where: { sectionId: { in: sectionIds }, parentId: { not: null } },
+    });
+    const roots = await tx.manuscriptComment.deleteMany({
+      where: { sectionId: { in: sectionIds } },
+    });
+    const versions = await tx.manuscriptSectionVersion.deleteMany({
+      where: { sectionId: { in: sectionIds } },
+    });
+    const sections = await tx.manuscriptSection.deleteMany({
+      where: { id: { in: sectionIds }, manuscriptId: manuscript.id },
+    });
+    deletedCommentCount = replies.count + roots.count;
+    deletedVersionCount = versions.count;
+    deletedSectionCount = sections.count;
+  }
+
+  await tx.manuscriptSection.createMany({
+    data: PICO_SECTIONS.map((section, order) => ({
+      manuscriptId: manuscript.id,
+      title: section.title,
+      kind: section.kind,
+      order,
+      content: EMPTY_DOC as Prisma.InputJsonObject,
+    })),
+  });
+
+  const sections = await tx.manuscriptSection.findMany({
+    where: { manuscriptId: manuscript.id },
+    orderBy: { order: "asc" },
+  });
+  const resetSummary = {
+    trigger: options.trigger,
+    deletedSectionCount,
+    deletedCommentCount,
+    deletedVersionCount,
+    deletedWordCount: previousSections.reduce((sum, section) => sum + section.wordCount, 0),
+    deletedAssignedSectionCount: previousSections.filter((section) => section.assigned).length,
+    deletedLockedSectionCount: previousSections.filter((section) => section.locked).length,
+  };
+
+  await audit.record(tx, {
+    projectId,
+    userId: ctx.userId,
+    entityType: "Manuscript",
+    entityId: manuscript.id,
+    action: AuditActions.MANUSCRIPT_RESET_TO_PICO_DEFAULTS,
+    previousValue: { sections: previousSections },
+    newValue: {
+      sections: PICO_SECTIONS.map((section, order) => ({ ...section, order })),
+    },
+    metadata: resetSummary,
+  });
+
+  return {
+    manuscriptId: manuscript.id,
+    ...resetSummary,
+    sections: sections.map((section) => ({
+      id: section.id,
+      title: section.title,
+      kind: section.kind,
+      order: section.order,
+      status: section.status,
+      wordCount: section.wordCount,
+      version: section.version,
+    })),
+  };
+}
+
+export async function resetManuscriptToPicoDefaults(
+  ctx: Ctx,
+  projectId: string,
+  rawInput: z.input<typeof resetToPicoDefaultsSchema>,
+) {
+  const input = resetToPicoDefaultsSchema.parse(rawInput);
+  // Fast fail before opening the transaction; the same checks run again inside it.
+  const member = await requirePermission(ctx, projectId, "manuscript.manage");
+  if (!member.roles.includes("OWNER")) {
+    throw forbidden("Only a project owner can replace the manuscript with PICO defaults");
+  }
+  return prisma.$transaction((tx) =>
+    resetManuscriptToPicoDefaultsInTransaction(ctx, projectId, tx, {
+      confirmDataLoss: input.confirmDataLoss,
+      trigger: "EXISTING_SUBPROJECT",
+    }),
+  );
 }
 
 export async function createSection(

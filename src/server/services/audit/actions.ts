@@ -161,6 +161,7 @@ export const AuditActions = {
   MANUSCRIPT_COMMENT_RESOLVED: "manuscript.comment.resolved",
   MANUSCRIPT_COMMENT_REOPENED: "manuscript.comment.reopened",
   MANUSCRIPT_COMMENT_DELETED: "manuscript.comment.deleted",
+  MANUSCRIPT_RESET_TO_PICO_DEFAULTS: "manuscript.reset_to_pico_defaults",
   MANUSCRIPT_EXPORTED: "manuscript.exported",
 
   // reference library (citation manager; bibliography formatting is an unaudited read —

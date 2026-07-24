@@ -8,6 +8,7 @@ import { AppError } from "@/server/errors";
 import * as projects from "@/server/services/projects";
 import * as references from "@/server/services/references";
 import * as manuscript from "@/server/services/manuscript";
+import { PICO_SECTIONS } from "@/server/services/manuscript/default-sections";
 import { resetDb } from "../db-utils";
 import {
   addOrgMember,
@@ -236,6 +237,12 @@ describe("guideline sub-projects", () => {
       referenceEntries: 1,
       members: 2,
     });
+    expect(
+      candidates.find((candidate) => candidate.id === standalone.id)?.manuscript,
+    ).toMatchObject({
+      id: standaloneManuscript.id,
+      usesPicoDefaultSections: false,
+    });
 
     const converted = await projects.convertProjectToSubProject(ctx(owner.id), guideline.id, {
       sourceProjectId: standalone.id,
@@ -305,7 +312,242 @@ describe("guideline sub-projects", () => {
       movedReferences: 1,
       addedGuidelineMembers: 1,
       preservedExistingMembers: 2,
+      manuscriptResetToPicoDefaults: false,
     });
+  });
+
+  it("can replace a standalone manuscript with PICO defaults during conversion only after confirmation", async () => {
+    const owner = await createTestUser({ name: "Confirmed Reset Owner" });
+    const org = await createTestOrg(owner.id);
+    const guideline = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Reset-on-conversion Guideline",
+      reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+      isGuideline: true,
+    });
+    const standalone = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Legacy Full Manuscript",
+      reviewType: "SYSTEMATIC_REVIEW",
+    });
+
+    const before = await manuscript.getManuscript(ctx(owner.id), standalone.id);
+    const section = before.sections[0]!;
+    await manuscript.updateManuscript(ctx(owner.id), standalone.id, {
+      title: "Preserved manuscript title",
+      citationStyleId: "apa",
+    });
+    await manuscript.assignSection(ctx(owner.id), standalone.id, section.id, {
+      assigneeId: owner.id,
+    });
+    const lock = await manuscript.acquireLock(ctx(owner.id), standalone.id, section.id, {});
+    await manuscript.saveSectionContent(ctx(owner.id), standalone.id, section.id, {
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Writing that will be deliberately removed." }],
+          },
+        ],
+      },
+      baseVersion: lock.version,
+    });
+    const version = await manuscript.createVersion(ctx(owner.id), standalone.id, section.id, {
+      note: "Legacy draft",
+    });
+    const comment = await manuscript.createComment(
+      ctx(owner.id),
+      standalone.id,
+      section.id,
+      { body: "This manuscript comment will also be removed." },
+    );
+    await manuscript.setSectionStatus(ctx(owner.id), standalone.id, section.id, {
+      status: "IN_REVIEW",
+    });
+
+    await expect(
+      projects.convertProjectToSubProject(ctx(owner.id), guideline.id, {
+        sourceProjectId: standalone.id,
+        resetManuscriptToPicoDefaults: true,
+      }),
+    ).rejects.toThrow("Confirm manuscript data loss");
+    await expect(
+      prisma.project.findUniqueOrThrow({ where: { id: standalone.id } }),
+    ).resolves.toMatchObject({ parentProjectId: null });
+    await expect(
+      prisma.manuscriptSection.findUnique({ where: { id: section.id } }),
+    ).resolves.not.toBeNull();
+
+    await projects.convertProjectToSubProject(ctx(owner.id), guideline.id, {
+      sourceProjectId: standalone.id,
+      resetManuscriptToPicoDefaults: true,
+      confirmManuscriptDataLoss: true,
+    });
+
+    const after = await manuscript.getManuscript(ctx(owner.id), standalone.id);
+    expect(after.id).toBe(before.id);
+    expect(after.title).toBe("Preserved manuscript title");
+    expect(after.citationStyleId).toBe("apa");
+    expect(after.isPicoSubProject).toBe(true);
+    expect(after.usesPicoDefaultSections).toBe(true);
+    expect(after.canResetToPicoDefaults).toBe(false);
+    expect(after.sections.map(({ title, kind }) => ({ title, kind }))).toEqual(PICO_SECTIONS);
+    expect(
+      after.sections.every(
+        (row) =>
+          row.status === "DRAFT" &&
+          row.wordCount === 0 &&
+          row.version === 0 &&
+          row.assignee === null &&
+          row.lock === null,
+      ),
+    ).toBe(true);
+    await expect(
+      prisma.manuscriptSection.findUnique({ where: { id: section.id } }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.manuscriptSectionVersion.findUnique({ where: { id: version.id } }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.manuscriptComment.findUnique({ where: { id: comment.id } }),
+    ).resolves.toBeNull();
+
+    const resetEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        projectId: standalone.id,
+        entityId: before.id,
+        action: "manuscript.reset_to_pico_defaults",
+      },
+    });
+    expect(resetEvent.metadata).toMatchObject({
+      trigger: "PROJECT_CONVERSION",
+      deletedSectionCount: 8,
+      deletedCommentCount: 1,
+      deletedVersionCount: 1,
+      deletedAssignedSectionCount: 1,
+      deletedLockedSectionCount: 1,
+    });
+    const conversionEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        projectId: standalone.id,
+        entityId: standalone.id,
+        action: "project.subproject.converted",
+      },
+    });
+    expect(conversionEvent.metadata).toMatchObject({
+      manuscriptResetToPicoDefaults: true,
+      deletedManuscriptSections: 8,
+      deletedManuscriptComments: 1,
+      deletedManuscriptVersions: 1,
+    });
+  });
+
+  it("lets only an owner reset a legacy sub-project manuscript after separate confirmation", async () => {
+    const owner = await createTestUser({ name: "Legacy Subproject Owner" });
+    const admin = await createTestUser({ name: "Legacy Subproject Admin" });
+    const org = await createTestOrg(owner.id);
+    await addOrgMember(org.id, admin.id);
+    const guideline = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Legacy Layout Guideline",
+      reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+      isGuideline: true,
+    });
+    await addProjectMember(guideline.id, admin.id, ["ADMIN"]);
+    const standalone = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Already-moved Legacy PICO",
+      reviewType: "SYSTEMATIC_REVIEW",
+    });
+    const before = await manuscript.getManuscript(ctx(owner.id), standalone.id);
+    await manuscript.updateManuscript(ctx(owner.id), standalone.id, {
+      title: "Legacy PICO manuscript",
+      citationStyleId: "nlm",
+    });
+    const legacySection = before.sections[2]!;
+    const lock = await manuscript.acquireLock(
+      ctx(owner.id),
+      standalone.id,
+      legacySection.id,
+      {},
+    );
+    await manuscript.saveSectionContent(ctx(owner.id), standalone.id, legacySection.id, {
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Legacy full-review introduction." }],
+          },
+        ],
+      },
+      baseVersion: lock.version,
+    });
+    await manuscript.createVersion(ctx(owner.id), standalone.id, legacySection.id, {});
+    const rootComment = await manuscript.createComment(
+      ctx(owner.id),
+      standalone.id,
+      legacySection.id,
+      { body: "Root comment" },
+    );
+    await manuscript.createComment(ctx(owner.id), standalone.id, legacySection.id, {
+      body: "Reply comment",
+      parentId: rootComment.id,
+    });
+
+    // Preserve the full standalone manuscript first, producing the legacy state this action
+    // is intended to repair. The guideline ADMIN is copied in but does not become an owner.
+    await projects.convertProjectToSubProject(ctx(owner.id), guideline.id, {
+      sourceProjectId: standalone.id,
+    });
+    const legacy = await manuscript.getManuscript(ctx(owner.id), standalone.id);
+    expect(legacy.usesPicoDefaultSections).toBe(false);
+    expect(legacy.canResetToPicoDefaults).toBe(true);
+    const adminView = await manuscript.getManuscript(ctx(admin.id), standalone.id);
+    expect(adminView.canManage).toBe(true);
+    expect(adminView.canResetToPicoDefaults).toBe(false);
+
+    await expectAppError(
+      manuscript.resetManuscriptToPicoDefaults(ctx(admin.id), standalone.id, {
+        confirmDataLoss: true,
+      }),
+      "FORBIDDEN",
+    );
+    await expect(
+      manuscript.resetManuscriptToPicoDefaults(
+        ctx(owner.id),
+        standalone.id,
+        {} as never,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.manuscriptSection.findUnique({ where: { id: legacySection.id } }),
+    ).resolves.not.toBeNull();
+
+    const reset = await manuscript.resetManuscriptToPicoDefaults(
+      ctx(owner.id),
+      standalone.id,
+      { confirmDataLoss: true },
+    );
+    expect(reset).toMatchObject({
+      trigger: "EXISTING_SUBPROJECT",
+      deletedSectionCount: 8,
+      deletedCommentCount: 2,
+      deletedVersionCount: 1,
+    });
+    const after = await manuscript.getManuscript(ctx(owner.id), standalone.id);
+    expect(after.id).toBe(before.id);
+    expect(after.title).toBe("Legacy PICO manuscript");
+    expect(after.citationStyleId).toBe("nlm");
+    expect(after.sections.map(({ title, kind }) => ({ title, kind }))).toEqual(PICO_SECTIONS);
+
+    const unrelatedStandalone = await projects.createProject(ctx(owner.id), org.id, {
+      title: "Still Standalone",
+      reviewType: "SYSTEMATIC_REVIEW",
+    });
+    await expectAppError(
+      manuscript.resetManuscriptToPicoDefaults(ctx(owner.id), unrelatedStandalone.id, {
+        confirmDataLoss: true,
+      }),
+      "INVALID_STATE",
+    );
   });
 
   it("requires ownership of both projects", async () => {
@@ -367,10 +609,14 @@ describe("guideline sub-projects", () => {
     const standaloneReference = await references.createReference(ctx(owner.id), standalone.id, {
       csl: cslFor("Standalone copy", "10.9000/conversion-collision"),
     });
+    const standaloneManuscript = await manuscript.getManuscript(ctx(owner.id), standalone.id);
+    const preservedSectionId = standaloneManuscript.sections[0]!.id;
 
     const err = await expectAppError(
       projects.convertProjectToSubProject(ctx(owner.id), guideline.id, {
         sourceProjectId: standalone.id,
+        resetManuscriptToPicoDefaults: true,
+        confirmManuscriptDataLoss: true,
       }),
       "CONFLICT",
     );
@@ -383,9 +629,20 @@ describe("guideline sub-projects", () => {
       where: { id: standaloneReference.id },
     });
     expect(unchangedReference.projectId).toBe(standalone.id);
+    await expect(
+      prisma.manuscriptSection.findUnique({ where: { id: preservedSectionId } }),
+    ).resolves.not.toBeNull();
     expect(
       await prisma.auditEvent.count({
         where: { action: "project.subproject.converted", entityId: standalone.id },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.auditEvent.count({
+        where: {
+          action: "manuscript.reset_to_pico_defaults",
+          entityId: standaloneManuscript.id,
+        },
       }),
     ).toBe(0);
   });

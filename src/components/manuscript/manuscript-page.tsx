@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/misc";
 import { CiteMapContext } from "./cite-map-context";
 import { CommentsPanel } from "./comments-panel";
 import { GuidelineCompileDialog } from "./guideline-compile-dialog";
+import { ResetPicoDefaultsDialog } from "./reset-pico-defaults-dialog";
 import { SectionEditor } from "./section-editor";
 import { SectionList } from "./section-list";
 import type { CiteMapResponse, ManuscriptView, MemberRef, UserRef } from "./types";
@@ -99,6 +100,11 @@ export function ManuscriptClient({ projectId }: { projectId: string }) {
     }
   }
 
+  async function refreshAfterPicoReset() {
+    setSelectedId(null);
+    await Promise.all([load(), loadCiteMap()]);
+  }
+
   if (!manuscript) {
     return (
       <div className="mx-auto w-full max-w-6xl">
@@ -123,6 +129,17 @@ export function ManuscriptClient({ projectId }: { projectId: string }) {
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {family?.isGuideline && <GuidelineCompileDialog projectId={projectId} />}
+              {manuscript.canResetToPicoDefaults && (
+                <ResetPicoDefaultsDialog
+                  projectId={projectId}
+                  sectionCount={manuscript.sections.length}
+                  wordCount={manuscript.sections.reduce(
+                    (sum, section) => sum + section.wordCount,
+                    0,
+                  )}
+                  onReset={refreshAfterPicoReset}
+                />
+              )}
               {manuscript.canManage && (
                 <Select
                   aria-label="Citation style"

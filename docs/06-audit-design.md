@@ -57,7 +57,7 @@ the log human-readable and diffable in the UI.
 | PRISMA/exports | `prisma.snapshot.created`, `export.created` |
 | Library/OA fetch | `org.library_settings.updated`, `fulltext.autofetch.{started,completed,failed,canceled}` (run-level; engine-created retrieval-attempt rows are unaudited machine output — AI-suggestion precedent) |
 | References | `reference.{created,updated,deleted,imported,exported}` (bibliography formatting is an unaudited read) |
-| Manuscript | `manuscript.{created,updated,exported}`, `manuscript.section.{created,updated,deleted,assigned,status_changed}`, `manuscript.sections.reordered`, `manuscript.section.version.{created,restored}`, `manuscript.section.lock.taken_over`, `manuscript.comment.{created,resolved,reopened,deleted}` |
+| Manuscript | `manuscript.{created,updated,reset_to_pico_defaults,exported}`, `manuscript.section.{created,updated,deleted,assigned,status_changed}`, `manuscript.sections.reordered`, `manuscript.section.version.{created,restored}`, `manuscript.section.lock.taken_over`, `manuscript.comment.{created,resolved,reopened,deleted}` |
 | Team chat | `chat.channel.{created,archived}`, `chat.message.deleted`, `chat.assignment.{created,completed,voided}` |
 
 Action strings are constants in `src/server/services/audit/actions.ts` (typo-proof, greppable,

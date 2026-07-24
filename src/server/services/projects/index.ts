@@ -17,6 +17,8 @@ import { capabilitiesFor } from "@/server/permissions/matrix";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { getAiConfig } from "@/server/ai/config";
+import { resetManuscriptToPicoDefaultsInTransaction } from "@/server/services/manuscript";
+import { hasPicoDefaultSectionStructure } from "@/server/services/manuscript/default-sections";
 
 const INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
@@ -81,9 +83,21 @@ export const createSubProjectSchema = z.object({
   blindedScreening: z.boolean().optional(),
 });
 
-export const convertSubProjectSchema = z.object({
-  sourceProjectId: z.string().trim().min(1),
-});
+export const convertSubProjectSchema = z
+  .object({
+    sourceProjectId: z.string().trim().min(1),
+    resetManuscriptToPicoDefaults: z.boolean().optional().default(false),
+    confirmManuscriptDataLoss: z.literal(true).optional(),
+  })
+  .superRefine((input, refinement) => {
+    if (input.resetManuscriptToPicoDefaults && input.confirmManuscriptDataLoss !== true) {
+      refinement.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confirmManuscriptDataLoss"],
+        message: "Confirm manuscript data loss before replacing the sections",
+      });
+    }
+  });
 
 export const updateProjectSchema = z.object({
   title: z.string().trim().min(2).max(300).optional(),
@@ -336,7 +350,7 @@ export async function listConvertibleProjects(ctx: Ctx, parentProjectId: string)
     throw invalidState("Only a top-level guideline can accept existing projects");
   }
 
-  return prisma.project.findMany({
+  const projects = await prisma.project.findMany({
     where: {
       id: { not: parent.id },
       orgId: parent.orgId,
@@ -359,6 +373,21 @@ export async function listConvertibleProjects(ctx: Ctx, parentProjectId: string)
       status: true,
       createdAt: true,
       protocol: { select: { reviewQuestion: true } },
+      manuscript: {
+        select: {
+          id: true,
+          sections: {
+            select: {
+              title: true,
+              kind: true,
+              order: true,
+              wordCount: true,
+              _count: { select: { comments: true, versions: true } },
+            },
+            orderBy: { order: "asc" },
+          },
+        },
+      },
       _count: {
         select: {
           citations: true,
@@ -370,6 +399,17 @@ export async function listConvertibleProjects(ctx: Ctx, parentProjectId: string)
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
+  return projects.map((project) => ({
+    ...project,
+    manuscript: project.manuscript
+      ? {
+          ...project.manuscript,
+          usesPicoDefaultSections: hasPicoDefaultSectionStructure(
+            project.manuscript.sections,
+          ),
+        }
+      : null,
+  }));
 }
 
 type ReferenceCollisionRow = {
@@ -558,11 +598,27 @@ export async function convertProjectToSubProject(
       });
     }
 
+    const manuscriptReset =
+      input.resetManuscriptToPicoDefaults && input.confirmManuscriptDataLoss === true
+      ? await resetManuscriptToPicoDefaultsInTransaction(ctx, source.id, tx, {
+          confirmDataLoss: input.confirmManuscriptDataLoss,
+          trigger: "PROJECT_CONVERSION",
+        })
+      : null;
+
     const conversionMetadata = {
       guidelineProjectId: parent.id,
       movedReferences: movedReferences.count,
       addedGuidelineMembers: membersToAdd.length,
       preservedExistingMembers: source.members.length,
+      manuscriptResetToPicoDefaults: manuscriptReset !== null,
+      ...(manuscriptReset
+        ? {
+            deletedManuscriptSections: manuscriptReset.deletedSectionCount,
+            deletedManuscriptComments: manuscriptReset.deletedCommentCount,
+            deletedManuscriptVersions: manuscriptReset.deletedVersionCount,
+          }
+        : {}),
     };
     await audit.record(tx, {
       projectId: source.id,

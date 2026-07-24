@@ -13,20 +13,31 @@ sub-projects without recreating or copying the review.
   the standalone source project, and both must belong to the same organization. The guideline
   dashboard's new **Add existing project** dialog lists only eligible projects owned by the
   current user (`GET/POST /api/projects/[projectId]/subprojects/convert`).
-- **Data preservation:** conversion changes only the family relationship (plus filling a
-  missing project-level research question from the existing protocol). Protocol, screening
-  configuration and decisions, citations/files, extraction, RoB, analysis/GRADE, manuscript
-  sections and versions, invitations, settings, and existing membership rows retain their IDs
-  and content. Missing active guideline members are added with their guideline roles; existing
-  source roles and prior removals are preserved.
+- **Safe manuscript choice:** conversion preserves the existing manuscript by default. Owners
+  may instead replace a standalone manuscript with the five PICO-specific default sections,
+  but only after choosing the destructive option and separately acknowledging that all current
+  section content, comments, versions, assignments, statuses, and edit locks will be deleted.
+  The server requires the same explicit confirmation and performs the reset inside the
+  conversion transaction, so a failed conversion cannot partially erase manuscript work.
+- **Legacy sub-project repair:** an owner-only **Use PICO defaults** action appears on a PICO
+  manuscript whose section structure does not match the five defaults. It uses the same
+  confirmation-gated reset while preserving the Manuscript row, title, citation style, and all
+  non-manuscript review data. `manuscript.reset_to_pico_defaults` records section summaries and
+  deletion counts in the audit trail.
+- **Other data preservation:** protocol, screening configuration and decisions, citations/files,
+  extraction, RoB, analysis/GRADE, invitations, settings, and existing membership rows retain
+  their IDs and content. Missing active guideline members are added with their guideline roles;
+  existing source roles and prior removals are preserved.
 - **Shared references:** source `ReferenceEntry` rows move transactionally to the guideline
   root while keeping their IDs, so existing manuscript citation nodes continue to resolve.
   DOI/PMID/mirrored-citation collisions reject the whole conversion with a clear error rather
   than dropping or silently merging bibliography data.
 - **Audit + tests:** `project.subproject.converted` is recorded in both project trails with
-  moved-reference and member-copy counts. Integration coverage pins preservation, ownership,
+  moved-reference, member-copy, and optional manuscript-reset counts; destructive replacement
+  also records `manuscript.reset_to_pico_defaults`. Integration coverage pins preservation,
+  confirmation and ownership guards, dependent manuscript-row deletion, PICO defaults,
   candidate filtering, audit events, shared-library behavior, and atomic collision rollback.
-- Verification: typecheck and production build clean; **612 unit** and **303 integration**
+- Verification: typecheck and production build clean; **612 unit** and **305 integration**
   tests pass.
 
 ## Current state (2026-07-22) — guideline projects with PICO sub-projects — DONE

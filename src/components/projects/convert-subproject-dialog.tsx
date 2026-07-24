@@ -26,6 +26,17 @@ interface ConvertibleProject {
   description: string | null;
   status: string;
   protocol: { reviewQuestion: string | null } | null;
+  manuscript: {
+    id: string;
+    usesPicoDefaultSections: boolean;
+    sections: {
+      title: string;
+      kind: string;
+      order: number;
+      wordCount: number;
+      _count: { comments: number; versions: number };
+    }[];
+  } | null;
   _count: {
     citations: number;
     studies: number;
@@ -44,14 +55,36 @@ export function ConvertSubProjectDialog({
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<ConvertibleProject[] | null>(null);
   const [selectedId, setSelectedId] = useState("");
+  const [manuscriptChoice, setManuscriptChoice] = useState<"KEEP" | "RESET">("KEEP");
+  const [acceptedDataLoss, setAcceptedDataLoss] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selected = projects?.find((project) => project.id === selectedId) ?? null;
+  const canResetManuscript =
+    selected?.manuscript !== null &&
+    selected?.manuscript !== undefined &&
+    !selected.manuscript.usesPicoDefaultSections;
+  const willResetManuscript = canResetManuscript && manuscriptChoice === "RESET";
+  const manuscriptSectionCount = selected?.manuscript?.sections.length ?? 0;
+  const manuscriptWordCount =
+    selected?.manuscript?.sections.reduce((sum, section) => sum + section.wordCount, 0) ?? 0;
+  const manuscriptCommentCount =
+    selected?.manuscript?.sections.reduce(
+      (sum, section) => sum + section._count.comments,
+      0,
+    ) ?? 0;
+  const manuscriptVersionCount =
+    selected?.manuscript?.sections.reduce(
+      (sum, section) => sum + section._count.versions,
+      0,
+    ) ?? 0;
 
   function loadProjects() {
     setProjects(null);
     setSelectedId("");
+    setManuscriptChoice("KEEP");
+    setAcceptedDataLoss(false);
     setError(null);
     api<ConvertibleProject[]>(`/api/projects/${projectId}/subprojects/convert`)
       .then(setProjects)
@@ -63,11 +96,16 @@ export function ConvertSubProjectDialog({
 
   async function convert() {
     if (!selectedId) return;
+    if (willResetManuscript && !acceptedDataLoss) return;
     setBusy(true);
     setError(null);
     try {
       await apiPost(`/api/projects/${projectId}/subprojects/convert`, {
         sourceProjectId: selectedId,
+        resetManuscriptToPicoDefaults: willResetManuscript,
+        ...(willResetManuscript
+          ? { confirmManuscriptDataLoss: acceptedDataLoss }
+          : {}),
       });
       toast.success("Existing project converted to a PICO sub-project");
       setOpen(false);
@@ -140,7 +178,11 @@ export function ConvertSubProjectDialog({
                       name="convert-project"
                       value={project.id}
                       checked={selectedProject}
-                      onChange={() => setSelectedId(project.id)}
+                      onChange={() => {
+                        setSelectedId(project.id);
+                        setManuscriptChoice("KEEP");
+                        setAcceptedDataLoss(false);
+                      }}
                       className="mt-1 h-4 w-4 accent-[var(--color-primary)]"
                     />
                     <span className="min-w-0 flex-1">
@@ -167,18 +209,111 @@ export function ConvertSubProjectDialog({
         ) : null}
 
         {selected && (
-          <Alert variant="warning">
-            <span className="font-medium">What will change:</span> “{selected.title}” will move
-            under this guideline and its references will join the shared library. Missing
-            guideline members will be added with their current guideline roles. Its protocol,
-            citations, decisions, files, extraction, analysis, manuscript, settings, and
-            existing team will stay intact. This structural change cannot currently be undone
-            in the app.
-          </Alert>
+          <>
+            <Alert variant="warning">
+              <span className="font-medium">What will change:</span> “{selected.title}” will
+              move under this guideline and its references will join the shared library.
+              Missing guideline members will be added with their current guideline roles. Its
+              protocol, citations, decisions, files, extraction, analysis, settings, and
+              existing team will stay intact. This structural change cannot currently be
+              undone in the app.
+            </Alert>
+
+            {!selected.manuscript ? (
+              <Alert>
+                A manuscript has not been started. The five PICO default sections will be
+                created automatically the first time its manuscript is opened.
+              </Alert>
+            ) : selected.manuscript.usesPicoDefaultSections ? (
+              <Alert variant="success">
+                This manuscript already uses the five PICO default sections and will stay
+                intact.
+              </Alert>
+            ) : (
+              <fieldset className="space-y-3 rounded-md border border-border p-4">
+                <legend className="px-1 text-sm font-medium">Manuscript section layout</legend>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="manuscript-conversion"
+                    className="mt-0.5 h-4 w-4 accent-[var(--color-primary)]"
+                    checked={manuscriptChoice === "KEEP"}
+                    onChange={() => {
+                      setManuscriptChoice("KEEP");
+                      setAcceptedDataLoss(false);
+                    }}
+                  />
+                  <span>
+                    Keep the current manuscript
+                    <span className="block text-xs text-muted-foreground">
+                      Preserve all {manuscriptSectionCount} sections, writing, comments, and
+                      version history.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="manuscript-conversion"
+                    className="mt-0.5 h-4 w-4 accent-[var(--color-destructive)]"
+                    checked={manuscriptChoice === "RESET"}
+                    onChange={() => {
+                      setManuscriptChoice("RESET");
+                      setAcceptedDataLoss(false);
+                    }}
+                  />
+                  <span>
+                    Replace with PICO defaults
+                    <span className="block text-xs text-muted-foreground">
+                      Start with Question, Evidence summary, Certainty of evidence,
+                      Recommendation, and Rationale and considerations.
+                    </span>
+                  </span>
+                </label>
+
+                {willResetManuscript && (
+                  <Alert variant="error">
+                    <p className="font-semibold">Manuscript data will be permanently deleted.</p>
+                    <p className="mt-1">
+                      The current {manuscriptSectionCount} sections and all written content
+                      {manuscriptWordCount > 0
+                        ? ` (${manuscriptWordCount.toLocaleString()} words)`
+                        : ""}
+                      , {manuscriptCommentCount} comments, {manuscriptVersionCount} saved
+                      versions, assignments, review statuses, and active edit locks will be
+                      removed. This cannot be undone. Other review data and the reference
+                      library are unaffected.
+                    </p>
+                    <label className="mt-3 flex items-start gap-2 rounded-md border border-exclude/30 bg-background/60 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 accent-[var(--color-destructive)]"
+                        checked={acceptedDataLoss}
+                        onChange={(event) => setAcceptedDataLoss(event.target.checked)}
+                      />
+                      <span>
+                        I understand that the current manuscript sections and their data will
+                        be deleted.
+                      </span>
+                    </label>
+                  </Alert>
+                )}
+              </fieldset>
+            )}
+          </>
         )}
 
         <DialogFooter>
-          <Button onClick={convert} disabled={busy || !selectedId || projects === null}>
+          <Button
+            variant={willResetManuscript ? "destructive" : "default"}
+            onClick={convert}
+            disabled={
+              busy ||
+              !selectedId ||
+              projects === null ||
+              (willResetManuscript && !acceptedDataLoss)
+            }
+          >
             {busy && <Spinner />} Convert to PICO sub-project
           </Button>
         </DialogFooter>

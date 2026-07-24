@@ -48,6 +48,9 @@ export interface ManuscriptView {
   canEditAny: boolean;
   canManage: boolean;
   canComment: boolean;
+  isPicoSubProject: boolean;
+  usesPicoDefaultSections: boolean;
+  canResetToPicoDefaults: boolean;
   sections: SectionSummary[];
 }
 

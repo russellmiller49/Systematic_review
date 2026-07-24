@@ -24,3 +24,16 @@ export const PICO_SECTIONS: { title: string; kind: ManuscriptSectionKind }[] = [
   { title: "Recommendation", kind: "CUSTOM" },
   { title: "Rationale and considerations", kind: "DISCUSSION" },
 ];
+
+export function hasPicoDefaultSectionStructure(
+  sections: readonly { title: string; kind: ManuscriptSectionKind }[],
+) {
+  return (
+    sections.length === PICO_SECTIONS.length &&
+    sections.every(
+      (section, index) =>
+        section.title === PICO_SECTIONS[index]?.title &&
+        section.kind === PICO_SECTIONS[index]?.kind,
+    )
+  );
+}
