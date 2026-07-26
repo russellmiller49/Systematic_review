@@ -1,0 +1,18 @@
+.git/
+.next/
+node_modules/
+.env
+.env.local
+storage/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.DS_Store
+
+# Source/provenance renders used to rebuild the guide video. Production serves only
+# synthesis-current-overview.mp4 plus its poster and caption/chapter tracks.
+public/guide/synthesis-overview.mp4
+public/guide/updated_overview.mp4
+public/guide/updated_overview_stabilized.mp4
+public/guide/ai-insert/synthesis-ai-insert-silent.mp4
