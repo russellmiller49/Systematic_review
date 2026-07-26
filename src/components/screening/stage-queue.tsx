@@ -480,7 +480,7 @@ export function StageQueue({
           description={
             done > 0
               ? `You screened ${done} citation${done === 1 ? "" : "s"} this session. Disagreements, if any, move to adjudication.`
-              : "Nothing is assigned to you at this stage right now. New assignments appear here automatically."
+              : "Nothing is assigned to you at this stage right now. Work appears here after an Owner or Admin assigns citations to you."
           }
           action={
             <div className="flex items-center gap-2">

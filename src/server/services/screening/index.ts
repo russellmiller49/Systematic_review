@@ -56,6 +56,25 @@ export const listConflictsQuerySchema = z.object({
   status: z.enum(["OPEN", "RESOLVED", "VOIDED"]).optional(),
 });
 
+export const adminOverviewQuerySchema = z.object({
+  q: z.string().trim().max(500).optional(),
+  status: z
+    .enum([
+      "ALL",
+      "UNASSIGNED",
+      "NOT_STARTED",
+      "IN_PROGRESS",
+      "CONFLICT",
+      "INCLUDED",
+      "EXCLUDED",
+    ])
+    .default("ALL"),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export type AdminOverviewQuery = z.infer<typeof adminOverviewQuerySchema>;
+
 // R7: adjudication is restricted to a decisive outcome.
 export const adjudicateSchema = z.object({
   finalDecision: z.enum(["INCLUDE", "EXCLUDE"]),
@@ -628,6 +647,213 @@ export async function getQueue(ctx: Ctx, projectId: string, stageId: string) {
               rationale: suggestion.rationale,
             }
           : null,
+      };
+    }),
+  };
+}
+
+type AdminOverviewState =
+  | "UNASSIGNED"
+  | "NOT_STARTED"
+  | "IN_PROGRESS"
+  | "CONFLICT"
+  | "INCLUDED"
+  | "EXCLUDED";
+
+function overviewStatusWhere(
+  stageId: string,
+  status: AdminOverviewQuery["status"],
+): Prisma.CitationWhereInput | undefined {
+  const activeAssignment = { stageId, status: { not: "VOIDED" as const } };
+  switch (status) {
+    case "UNASSIGNED":
+      return { assignments: { none: activeAssignment } };
+    case "NOT_STARTED":
+      return {
+        assignments: { some: activeAssignment },
+        decisions: { none: { stageId } },
+        stageResults: { none: { stageId } },
+      };
+    case "IN_PROGRESS":
+      return {
+        decisions: { some: { stageId } },
+        stageResults: { none: { stageId } },
+        conflicts: { none: { stageId, status: "OPEN" } },
+      };
+    case "CONFLICT":
+      return { conflicts: { some: { stageId, status: "OPEN" } } };
+    case "INCLUDED":
+      return { stageResults: { some: { stageId, outcome: "INCLUDE" } } };
+    case "EXCLUDED":
+      return { stageResults: { some: { stageId, outcome: "EXCLUDE" } } };
+    case "ALL":
+      return undefined;
+  }
+}
+
+// Owner/Admin oversight across the complete stage pool. This is deliberately not an
+// actionable queue and never returns decision values, notes, labels, or exclusion reasons:
+// an admin may also be a blinded reviewer. Only assignment progress, open-conflict state, and
+// materialized final stage outcomes are exposed.
+export async function getAdminOverview(
+  ctx: Ctx,
+  projectId: string,
+  stageId: string,
+  query: AdminOverviewQuery,
+) {
+  await requirePermission(ctx, projectId, "screening.configure");
+  const stage = await getStageOr404(prisma, projectId, stageId);
+
+  const eligibleWhere: Prisma.CitationWhereInput = {
+    projectId,
+    status: "ACTIVE",
+  };
+  if (stage.type === "FULL_TEXT") {
+    const titleAbstractStage = await prisma.screeningStage.findUnique({
+      where: { projectId_type: { projectId, type: "TITLE_ABSTRACT" } },
+      select: { id: true },
+    });
+    if (titleAbstractStage) {
+      eligibleWhere.stageResults = {
+        some: { stageId: titleAbstractStage.id, outcome: "INCLUDE" },
+      };
+    } else {
+      eligibleWhere.id = { in: [] };
+    }
+  }
+  if (query.q) eligibleWhere.title = { contains: query.q, mode: "insensitive" };
+
+  const statusWhere = overviewStatusWhere(stage.id, query.status);
+  const filteredWhere: Prisma.CitationWhereInput = statusWhere
+    ? { AND: [eligibleWhere, statusWhere] }
+    : eligibleWhere;
+
+  const statusCount = (status: Exclude<AdminOverviewQuery["status"], "ALL">) =>
+    prisma.citation.count({
+      where: { AND: [eligibleWhere, overviewStatusWhere(stage.id, status)!] },
+    });
+
+  const [
+    total,
+    totalEligible,
+    unassigned,
+    notStarted,
+    inProgress,
+    conflicts,
+    included,
+    excluded,
+  ] = await Promise.all([
+    prisma.citation.count({ where: filteredWhere }),
+    prisma.citation.count({ where: eligibleWhere }),
+    statusCount("UNASSIGNED"),
+    statusCount("NOT_STARTED"),
+    statusCount("IN_PROGRESS"),
+    statusCount("CONFLICT"),
+    statusCount("INCLUDED"),
+    statusCount("EXCLUDED"),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / query.limit));
+  const page = Math.min(query.page, totalPages);
+  const citations = await prisma.citation.findMany({
+    where: filteredWhere,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip: (page - 1) * query.limit,
+    take: query.limit,
+    select: {
+      id: true,
+      title: true,
+      authors: true,
+      year: true,
+      journal: true,
+      abstract: true,
+      doi: true,
+      pmid: true,
+      createdAt: true,
+      sourceRecords: {
+        select: { batch: { select: { source: { select: { name: true } } } } },
+      },
+      assignments: {
+        where: { stageId: stage.id, status: { not: "VOIDED" } },
+        orderBy: { createdAt: "asc" },
+        select: {
+          status: true,
+          reviewer: { select: { id: true, name: true, email: true } },
+        },
+      },
+      stageResults: {
+        where: { stageId: stage.id },
+        select: { outcome: true },
+        take: 1,
+      },
+      conflicts: {
+        where: { stageId: stage.id, status: "OPEN" },
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+
+  return {
+    stage: {
+      id: stage.id,
+      type: stage.type,
+      blinded: stage.blinded,
+      reviewersPerCitation: stage.reviewersPerCitation,
+    },
+    summary: {
+      totalEligible,
+      unassigned,
+      notStarted,
+      inProgress,
+      conflicts,
+      included,
+      excluded,
+    },
+    pagination: {
+      page,
+      limit: query.limit,
+      total,
+      totalPages,
+    },
+    items: citations.map((citation) => {
+      const result = citation.stageResults[0]?.outcome;
+      const completedReviews = citation.assignments.filter(
+        (assignment) => assignment.status === "COMPLETED",
+      ).length;
+      let state: AdminOverviewState;
+      if (result === "INCLUDE") state = "INCLUDED";
+      else if (result === "EXCLUDE") state = "EXCLUDED";
+      else if (citation.conflicts.length > 0) state = "CONFLICT";
+      else if (citation.assignments.length === 0) state = "UNASSIGNED";
+      else if (completedReviews === 0) state = "NOT_STARTED";
+      else state = "IN_PROGRESS";
+
+      return {
+        citation: {
+          id: citation.id,
+          title: citation.title,
+          authors: citation.authors,
+          year: citation.year,
+          journal: citation.journal,
+          abstract: citation.abstract,
+          doi: citation.doi,
+          pmid: citation.pmid,
+          sources: [
+            ...new Set(citation.sourceRecords.map((row) => row.batch.source.name)),
+          ],
+          createdAt: citation.createdAt,
+        },
+        state,
+        assignmentProgress: {
+          assigned: citation.assignments.length,
+          completed: completedReviews,
+          required: stage.reviewersPerCitation,
+        },
+        reviewers: citation.assignments.map((assignment) => ({
+          ...assignment.reviewer,
+          status: assignment.status,
+        })),
       };
     }),
   };

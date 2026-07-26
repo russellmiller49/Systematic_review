@@ -172,7 +172,8 @@ export function BatchDetail({
                 {batch.failedRecords > 0
                   ? `, ${batch.failedRecords.toLocaleString()} failed to parse`
                   : ""}
-                .
+                . An Owner or Admin must assign reviewers before these citations enter a
+                personal screening queue.
               </span>
             </span>
             <span className="flex items-center gap-2">
@@ -186,7 +187,7 @@ export function BatchDetail({
                 href={`/projects/${projectId}/screening`}
                 className={buttonVariants({ variant: "outline", size: "sm" })}
               >
-                Go to screening
+                Assign in screening
               </Link>
             </span>
           </div>

@@ -12,6 +12,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { StageQueue } from "./stage-queue";
 import { AssignReviewersDialog } from "./assign-dialog";
 import { ManageAssignmentsDialog } from "./manage-assignments-dialog";
+import { AdminScreeningOverview } from "./admin-screening-overview";
 import { PrescreenPanel } from "./prescreen-panel";
 import { STAGE_LABELS, type ProjectAiStatus, type ScreeningStageSummary } from "./types";
 
@@ -111,7 +112,28 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
                   onSuggestionsChanged={() => setReloadKey((k) => k + 1)}
                 />
               )}
-              <StageQueue key={`${stage.id}:${reloadKey}`} projectId={projectId} stage={stage} />
+              <Tabs defaultValue="my-screening">
+                <TabsList>
+                  <TabsTrigger value="my-screening">My screening</TabsTrigger>
+                  {canConfigure && <TabsTrigger value="admin-view">Admin view</TabsTrigger>}
+                </TabsList>
+                <TabsContent value="my-screening" className="pt-3">
+                  <StageQueue
+                    key={`${stage.id}:${reloadKey}`}
+                    projectId={projectId}
+                    stage={stage}
+                  />
+                </TabsContent>
+                {canConfigure && (
+                  <TabsContent value="admin-view" className="pt-3">
+                    <AdminScreeningOverview
+                      key={`${stage.id}:admin:${reloadKey}`}
+                      projectId={projectId}
+                      stage={stage}
+                    />
+                  </TabsContent>
+                )}
+              </Tabs>
             </TabsContent>
           ))}
         </Tabs>

@@ -125,7 +125,8 @@ export function AssignReviewersDialog({
             {stage.type === "FULL_TEXT"
               ? "Only citations included at title/abstract are eligible. "
               : "Every active, non-duplicate citation is eligible. "}
-            Existing assignments are skipped.
+            Run this again after a new import to add those citations to screening. Existing
+            assignments are skipped.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">

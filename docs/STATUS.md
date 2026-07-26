@@ -4,6 +4,31 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-26) — screening administration overview — DONE
+
+Owners and Admins can now oversee the complete screening corpus without assigning themselves
+as reviewers or mixing administration with their personal screening queue.
+
+- **Separate screening modes:** each title/abstract and full-text stage now has **My screening**
+  (the existing assignment-gated actionable queue) and an Owner/Admin-only **Admin view**.
+- **Complete, searchable oversight:** the admin view includes every active citation eligible
+  for the selected stage, including citations that have never been assigned. It is paginated,
+  searchable by title, and filterable by unassigned, not started, in progress, conflict,
+  included, and excluded status.
+- **Per-article status:** each row shows source provenance, citation metadata and abstract,
+  required/completed review progress, assigned reviewer identities, assignment status, open
+  conflict state, and the final materialized stage outcome.
+- **Blinding preserved:** the admin response deliberately omits individual decision choices,
+  notes, labels, and exclusion reasons. An Admin who is also a blinded screener can monitor
+  workflow progress without seeing another reviewer's vote.
+- **Import workflow clarified:** committed imports create citations but do not silently assign
+  screening work. The committed-batch message and assignment dialog now explain that an
+  Owner/Admin must run **Assign reviewers** after an import; existing citation/reviewer pairs
+  are skipped when the assignment action is repeated.
+- **Verification:** browser-checked the nested stage/mode tabs, summary counts, per-citation
+  progress table, conflict link, filters, and empty states with a seeded Owner account. Console
+  clean; typecheck clean; **615 unit** and **310 integration** tests pass.
+
 ## Current state (2026-07-25) — pilot invitation access + protocol validation repairs — DONE
 
 Two production-pilot failures reported from the guideline workspace are fixed and regression

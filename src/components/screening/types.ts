@@ -118,6 +118,59 @@ export interface QueueResponse {
   items: QueueItem[];
 }
 
+export type AdminOverviewState =
+  | "UNASSIGNED"
+  | "NOT_STARTED"
+  | "IN_PROGRESS"
+  | "CONFLICT"
+  | "INCLUDED"
+  | "EXCLUDED";
+
+export type AdminOverviewFilter = "ALL" | AdminOverviewState;
+
+export interface AdminOverviewItem {
+  citation: QueueCitation & { createdAt: string };
+  state: AdminOverviewState;
+  assignmentProgress: {
+    assigned: number;
+    completed: number;
+    required: number;
+  };
+  reviewers: {
+    id: string;
+    name: string;
+    email: string;
+    status: "PENDING" | "COMPLETED";
+  }[];
+}
+
+// GET /api/projects/:id/screening/stages/:stageId/admin-overview (OWNER/ADMIN only).
+// Blind-safe: contains assignment progress and final outcomes, never reviewer decisions.
+export interface AdminOverviewResponse {
+  stage: {
+    id: string;
+    type: StageType;
+    blinded: boolean;
+    reviewersPerCitation: number;
+  };
+  summary: {
+    totalEligible: number;
+    unassigned: number;
+    notStarted: number;
+    inProgress: number;
+    conflicts: number;
+    included: number;
+    excluded: number;
+  };
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  items: AdminOverviewItem[];
+}
+
 // GET /api/projects/:id/exclusion-reasons?stage=FULL_TEXT
 export interface ExclusionReasonOption {
   id: string;

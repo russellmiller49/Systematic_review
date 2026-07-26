@@ -213,6 +213,117 @@ describe("screening service", () => {
     );
   });
 
+  it("gives admins a blind-safe per-citation overview across every screening status", async () => {
+    const { owner, reviewer1, reviewer2, project } = await createProjectWithTeam();
+    const stage = await makeStage(project.id, { reviewersPerCitation: 2, blinded: true });
+    const unassigned = await createTestCitation(project.id, {
+      title: "Admin overview unassigned article",
+    });
+    const notStarted = await createTestCitation(project.id, {
+      title: "Admin overview not started article",
+    });
+    const inProgress = await createTestCitation(project.id, {
+      title: "Admin overview in progress article",
+    });
+    const conflict = await createTestCitation(project.id, {
+      title: "Admin overview conflict article",
+    });
+    const included = await createTestCitation(project.id, {
+      title: "Admin overview included article",
+    });
+    const excluded = await createTestCitation(project.id, {
+      title: "Admin overview excluded article",
+    });
+
+    for (const citation of [notStarted, inProgress, conflict, included, excluded]) {
+      await assign(stage.id, citation.id, reviewer1.id);
+      await assign(stage.id, citation.id, reviewer2.id);
+    }
+    await screening.createDecision(ctx(reviewer1.id), project.id, stage.id, {
+      citationId: inProgress.id,
+      decision: "INCLUDE",
+      notes: "secret blinded vote note",
+    });
+    await screening.createDecision(ctx(reviewer1.id), project.id, stage.id, {
+      citationId: conflict.id,
+      decision: "INCLUDE",
+    });
+    await screening.createDecision(ctx(reviewer2.id), project.id, stage.id, {
+      citationId: conflict.id,
+      decision: "EXCLUDE",
+    });
+    for (const reviewer of [reviewer1, reviewer2]) {
+      await screening.createDecision(ctx(reviewer.id), project.id, stage.id, {
+        citationId: included.id,
+        decision: "INCLUDE",
+      });
+      await screening.createDecision(ctx(reviewer.id), project.id, stage.id, {
+        citationId: excluded.id,
+        decision: "EXCLUDE",
+      });
+    }
+
+    const overview = await screening.getAdminOverview(
+      ctx(owner.id),
+      project.id,
+      stage.id,
+      screening.adminOverviewQuerySchema.parse({ limit: 100 }),
+    );
+    expect(overview.summary).toEqual({
+      totalEligible: 6,
+      unassigned: 1,
+      notStarted: 1,
+      inProgress: 1,
+      conflicts: 1,
+      included: 1,
+      excluded: 1,
+    });
+    expect(
+      Object.fromEntries(overview.items.map((item) => [item.citation.id, item.state])),
+    ).toMatchObject({
+      [unassigned.id]: "UNASSIGNED",
+      [notStarted.id]: "NOT_STARTED",
+      [inProgress.id]: "IN_PROGRESS",
+      [conflict.id]: "CONFLICT",
+      [included.id]: "INCLUDED",
+      [excluded.id]: "EXCLUDED",
+    });
+    expect(
+      overview.items.find((item) => item.citation.id === inProgress.id),
+    ).toMatchObject({
+      assignmentProgress: { assigned: 2, completed: 1, required: 2 },
+      reviewers: expect.arrayContaining([
+        expect.objectContaining({ id: reviewer1.id, status: "COMPLETED" }),
+        expect.objectContaining({ id: reviewer2.id, status: "PENDING" }),
+      ]),
+    });
+    expect(JSON.stringify(overview)).not.toContain("secret blinded vote note");
+    expect(JSON.stringify(overview)).not.toContain('"decision"');
+
+    const filtered = await screening.getAdminOverview(
+      ctx(owner.id),
+      project.id,
+      stage.id,
+      screening.adminOverviewQuerySchema.parse({
+        q: "unassigned",
+        status: "UNASSIGNED",
+        limit: 2,
+      }),
+    );
+    expect(filtered.pagination).toMatchObject({ page: 1, total: 1, totalPages: 1 });
+    expect(filtered.items.map((item) => item.citation.id)).toEqual([unassigned.id]);
+
+    await expectAppError(
+      screening.getAdminOverview(
+        ctx(reviewer1.id),
+        project.id,
+        stage.id,
+        screening.adminOverviewQuerySchema.parse({}),
+      ),
+      "FORBIDDEN",
+    );
+  });
+
   it("resets only undecided pending assignments, supports reviewer scope, and audits the reason", async () => {
     const { owner, reviewer1, reviewer2, project } = await createProjectWithTeam();
     const stage = await makeStage(project.id, { reviewersPerCitation: 2 });
@@ -292,6 +403,15 @@ describe("screening service", () => {
       citationIds: [notIncluded.id],
     });
     expect(explicit).toMatchObject({ created: 0, eligibleCitations: 0 });
+
+    const overview = await screening.getAdminOverview(
+      ctx(owner.id),
+      project.id,
+      ft.id,
+      screening.adminOverviewQuerySchema.parse({}),
+    );
+    expect(overview.summary).toMatchObject({ totalEligible: 1, unassigned: 0, notStarted: 1 });
+    expect(overview.items.map((item) => item.citation.id)).toEqual([included.id]);
   });
 
   // -------------------------------------------------------------------------
