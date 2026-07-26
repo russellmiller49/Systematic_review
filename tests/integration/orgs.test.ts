@@ -7,7 +7,7 @@ import { AppError } from "@/server/errors";
 import * as orgs from "@/server/services/orgs";
 import * as projects from "@/server/services/projects";
 import { resetDb } from "../db-utils";
-import { createTestUser, createTestOrg, uniq } from "../factories";
+import { addOrgMember, createTestUser, createTestOrg, uniq } from "../factories";
 
 const ctx = (userId: string) => ({ userId });
 
@@ -151,6 +151,30 @@ describe("orgs service", () => {
       orgs.acceptOrganizationInvitation(ctx(invitee.id), invitation.token),
       "INVALID_STATE",
     );
+  });
+
+  it("applies an invited workspace role when project access already created a member row", async () => {
+    const owner = await createTestUser();
+    const invitee = await createTestUser();
+    const org = await createTestOrg(owner.id);
+    const invitation = await orgs.createOrganizationInvitation(ctx(owner.id), org.id, {
+      email: invitee.email,
+      role: "ADMIN",
+    });
+    await addOrgMember(org.id, invitee.id);
+
+    const accepted = await orgs.acceptOrganizationInvitation(ctx(invitee.id), invitation.token);
+    expect(accepted.membership).toMatchObject({ role: "ADMIN", status: "ACTIVE" });
+    await expect(orgs.getOrg(ctx(invitee.id), org.id)).resolves.toMatchObject({
+      myRole: "ADMIN",
+    });
+    await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        entityType: "OrganizationMember",
+        entityId: accepted.membership.id,
+        action: "member.roles_changed",
+      },
+    });
   });
 
   it("limits organization invitations to managers and scopes revocation to the organization", async () => {

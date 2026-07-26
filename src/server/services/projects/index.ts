@@ -8,8 +8,8 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import type { Prisma, ProjectRole } from "@prisma/client";
-import { prisma } from "@/server/db";
+import type { OrgRole, Prisma, ProjectRole } from "@prisma/client";
+import { prisma, type Tx } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { getOrgMembership, requirePermission } from "@/server/permissions";
@@ -137,6 +137,254 @@ const invitationPublicSelect = {
   invitedBy: { select: { id: true, name: true, email: true } },
 } satisfies Prisma.ProjectInvitationSelect;
 
+const ORG_ROLE_RANK: Record<OrgRole, number> = {
+  MEMBER: 0,
+  ADMIN: 1,
+  OWNER: 2,
+};
+
+function strongestOrgRole(roles: readonly OrgRole[]): OrgRole {
+  return roles.reduce<OrgRole>(
+    (strongest, role) => (ORG_ROLE_RANK[role] > ORG_ROLE_RANK[strongest] ? role : strongest),
+    "MEMBER",
+  );
+}
+
+function mergeProjectRoles(...roleSets: ReadonlyArray<readonly ProjectRole[]>): ProjectRole[] {
+  return [...new Set(roleSets.flat())];
+}
+
+function sameRoles(a: readonly ProjectRole[], b: readonly ProjectRole[]): boolean {
+  return a.length === b.length && a.every((role) => b.includes(role));
+}
+
+type GuidelineInvitationResolution = "accepted" | "revoked";
+
+// Guideline membership is family-wide: existing PICO projects receive the same access,
+// while PICO-specific roles already granted to a member are preserved. Matching pending
+// PICO invitations are settled in the same transaction so settings never show an active
+// member beside a stale invitation.
+async function syncGuidelineMemberToSubProjects(
+  tx: Tx,
+  input: {
+    guidelineId: string;
+    userId: string;
+    email: string;
+    roles: readonly ProjectRole[];
+    actorUserId: string;
+    now: Date;
+    invitationResolution: GuidelineInvitationResolution;
+    sourceInvitationId?: string;
+  },
+): Promise<{ projectCount: number; invitationCount: number }> {
+  const subProjects = await tx.project.findMany({
+    where: { parentProjectId: input.guidelineId },
+    select: { id: true },
+  });
+  if (subProjects.length === 0) return { projectCount: 0, invitationCount: 0 };
+
+  const projectIds = subProjects.map((project) => project.id);
+  const pendingInvitations = await tx.projectInvitation.findMany({
+    where: {
+      projectId: { in: projectIds },
+      email: input.email,
+      acceptedAt: null,
+      revokedAt: null,
+      expiresAt: { gt: input.now },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const invitationsByProject = new Map<string, typeof pendingInvitations>();
+  for (const invitation of pendingInvitations) {
+    const rows = invitationsByProject.get(invitation.projectId) ?? [];
+    rows.push(invitation);
+    invitationsByProject.set(invitation.projectId, rows);
+  }
+
+  for (const project of subProjects) {
+    const inheritedInvitationRoles =
+      input.invitationResolution === "accepted"
+        ? (invitationsByProject.get(project.id) ?? []).flatMap((row) => row.roles)
+        : [];
+    const inheritedRoles = mergeProjectRoles(input.roles, inheritedInvitationRoles);
+    const existing = await tx.projectMember.findUnique({
+      where: { projectId_userId: { projectId: project.id, userId: input.userId } },
+    });
+    const roles = existing
+      ? mergeProjectRoles(existing.roles, inheritedRoles)
+      : inheritedRoles;
+
+    if (!existing) {
+      const member = await tx.projectMember.create({
+        data: { projectId: project.id, userId: input.userId, roles },
+      });
+      await audit.record(tx, {
+        projectId: project.id,
+        userId: input.actorUserId,
+        entityType: "ProjectMember",
+        entityId: member.id,
+        action: AuditActions.MEMBER_ADDED,
+        newValue: { userId: input.userId, roles },
+        metadata: { inheritedFromGuidelineId: input.guidelineId },
+      });
+    } else if (existing.status !== "ACTIVE") {
+      const member = await tx.projectMember.update({
+        where: { id: existing.id },
+        data: { status: "ACTIVE", roles },
+      });
+      await audit.record(tx, {
+        projectId: project.id,
+        userId: input.actorUserId,
+        entityType: "ProjectMember",
+        entityId: member.id,
+        action: AuditActions.MEMBER_ADDED,
+        previousValue: { status: existing.status, roles: existing.roles },
+        newValue: { status: member.status, roles: member.roles },
+        metadata: { inheritedFromGuidelineId: input.guidelineId, reactivated: true },
+      });
+    } else if (!sameRoles(existing.roles, roles)) {
+      const member = await tx.projectMember.update({
+        where: { id: existing.id },
+        data: { roles },
+      });
+      await audit.record(tx, {
+        projectId: project.id,
+        userId: input.actorUserId,
+        entityType: "ProjectMember",
+        entityId: member.id,
+        action: AuditActions.MEMBER_ROLES_CHANGED,
+        previousValue: { roles: existing.roles },
+        newValue: { roles: member.roles },
+        metadata: { inheritedFromGuidelineId: input.guidelineId },
+      });
+    }
+  }
+
+  for (const invitation of pendingInvitations) {
+    const accepting = input.invitationResolution === "accepted";
+    await tx.projectInvitation.update({
+      where: { id: invitation.id },
+      data: accepting ? { acceptedAt: input.now } : { revokedAt: input.now },
+    });
+    await audit.record(tx, {
+      projectId: invitation.projectId,
+      userId: input.actorUserId,
+      entityType: "ProjectInvitation",
+      entityId: invitation.id,
+      action: accepting ? AuditActions.INVITATION_ACCEPTED : AuditActions.INVITATION_REVOKED,
+      previousValue: { email: invitation.email, roles: invitation.roles },
+      newValue: accepting ? { acceptedAt: input.now } : { revokedAt: input.now },
+      metadata: {
+        guidelineId: input.guidelineId,
+        ...(input.sourceInvitationId
+          ? { satisfiedByGuidelineInvitationId: input.sourceInvitationId }
+          : { supersededByGuidelineMembership: true }),
+      },
+    });
+  }
+
+  return {
+    projectCount: subProjects.length,
+    invitationCount: pendingInvitations.length,
+  };
+}
+
+// A project invitation also satisfies any still-valid workspace invitation for the
+// same email. The strongest invited workspace role wins, without ever demoting an
+// existing role.
+async function reconcileOrganizationInvitations(
+  tx: Tx,
+  input: {
+    orgId: string;
+    userId: string;
+    email: string;
+    actorUserId: string;
+    now: Date;
+    sourceProjectInvitationId?: string;
+  },
+) {
+  const invitations = await tx.organizationInvitation.findMany({
+    where: {
+      orgId: input.orgId,
+      email: input.email,
+      acceptedAt: null,
+      revokedAt: null,
+      expiresAt: { gt: input.now },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const invitedRole = strongestOrgRole(invitations.map((row) => row.role));
+  const existing = await tx.organizationMember.findUnique({
+    where: { orgId_userId: { orgId: input.orgId, userId: input.userId } },
+  });
+  const role = strongestOrgRole([existing?.role ?? "MEMBER", invitedRole]);
+  const membership =
+    existing === null
+      ? await tx.organizationMember.create({
+          data: { orgId: input.orgId, userId: input.userId, role },
+        })
+      : existing.status !== "ACTIVE" || existing.role !== role
+        ? await tx.organizationMember.update({
+            where: { id: existing.id },
+            data: { status: "ACTIVE", role },
+          })
+        : existing;
+
+  if (!existing || existing.status !== "ACTIVE") {
+    await audit.record(tx, {
+      userId: input.actorUserId,
+      entityType: "OrganizationMember",
+      entityId: membership.id,
+      action: AuditActions.MEMBER_ADDED,
+      previousValue: existing
+        ? { status: existing.status, role: existing.role }
+        : undefined,
+      newValue: {
+        orgId: input.orgId,
+        userId: input.userId,
+        status: membership.status,
+        role: membership.role,
+      },
+      metadata: existing ? { reactivated: true } : { createdByProjectInvitation: true },
+    });
+  } else if (existing.role !== membership.role) {
+    await audit.record(tx, {
+      userId: input.actorUserId,
+      entityType: "OrganizationMember",
+      entityId: membership.id,
+      action: AuditActions.MEMBER_ROLES_CHANGED,
+      previousValue: { role: existing.role },
+      newValue: { role: membership.role },
+      metadata: { reconciledWithOrganizationInvitation: true },
+    });
+  }
+
+  for (const invitation of invitations) {
+    await tx.organizationInvitation.update({
+      where: { id: invitation.id },
+      data: { acceptedAt: input.now },
+    });
+    await audit.record(tx, {
+      userId: input.actorUserId,
+      entityType: "OrganizationInvitation",
+      entityId: invitation.id,
+      action: AuditActions.INVITATION_ACCEPTED,
+      previousValue: { orgId: input.orgId, email: invitation.email, role: invitation.role },
+      newValue: { acceptedAt: input.now },
+      metadata: input.sourceProjectInvitationId
+        ? { satisfiedByProjectInvitationId: input.sourceProjectInvitationId }
+        : { reconciledByGuidelineMemberSync: true },
+    });
+  }
+
+  return {
+    membership,
+    membershipChanged:
+      existing === null || existing.status !== "ACTIVE" || existing.role !== membership.role,
+    invitationsAccepted: invitations.length,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------
@@ -211,8 +459,7 @@ export async function createProject(
 // Creates a PICO sub-project under a guideline. The sub-project is a complete review
 // project (own protocol, screening stages, extraction, analysis, manuscript) that shares
 // the guideline's reference library. The parent's ACTIVE members are copied in with
-// their roles so the team keeps working without re-inviting; membership is managed
-// independently per project afterwards.
+// their roles; later additions to the guideline are synchronized to existing PICOs.
 export async function createSubProject(
   ctx: Ctx,
   parentProjectId: string,
@@ -776,6 +1023,70 @@ export async function listProjectMembers(ctx: Ctx, projectId: string) {
   });
 }
 
+// Idempotent repair path for guideline members created before family-wide synchronization
+// existed. It is intentionally service-only: callers must already manage the guideline.
+export async function synchronizeGuidelineMemberAccess(
+  ctx: Ctx,
+  guidelineId: string,
+  targetUserId: string,
+) {
+  await requirePermission(ctx, guidelineId, "project.members");
+  return prisma.$transaction(async (tx) => {
+    const guideline = await tx.project.findUnique({
+      where: { id: guidelineId },
+      select: { id: true, orgId: true, isGuideline: true },
+    });
+    if (!guideline) throw notFound("Project");
+    if (!guideline.isGuideline) {
+      throw invalidState("Only guideline projects have family-wide member access");
+    }
+    const member = await tx.projectMember.findFirst({
+      where: { projectId: guidelineId, userId: targetUserId, status: "ACTIVE" },
+    });
+    if (!member) throw notFound("Active guideline member");
+    const user = await tx.user.findUniqueOrThrow({
+      where: { id: targetUserId },
+      select: { email: true },
+    });
+    const acceptedGuidelineInvitation = await tx.projectInvitation.findFirst({
+      where: {
+        projectId: guidelineId,
+        email: user.email.toLowerCase(),
+        acceptedAt: { not: null },
+      },
+      orderBy: { acceptedAt: "desc" },
+      select: { id: true },
+    });
+    const now = new Date();
+    const organizationResult = acceptedGuidelineInvitation
+      ? await reconcileOrganizationInvitations(tx, {
+          orgId: guideline.orgId,
+          userId: targetUserId,
+          email: user.email.toLowerCase(),
+          actorUserId: ctx.userId,
+          now,
+          sourceProjectInvitationId: acceptedGuidelineInvitation.id,
+        })
+      : null;
+    const familyResult = await syncGuidelineMemberToSubProjects(tx, {
+      guidelineId,
+      userId: targetUserId,
+      email: user.email.toLowerCase(),
+      roles: member.roles,
+      actorUserId: ctx.userId,
+      now,
+      invitationResolution: acceptedGuidelineInvitation ? "accepted" : "revoked",
+      sourceInvitationId: acceptedGuidelineInvitation?.id,
+    });
+    return {
+      member,
+      subProjectMembershipsSynchronized: familyResult.projectCount,
+      projectInvitationsSettled: familyResult.invitationCount,
+      organizationInvitationsSettled: organizationResult?.invitationsAccepted ?? 0,
+    };
+  });
+}
+
 // Adds an EXISTING user (by email) who is already an ACTIVE member of the project's org (R10).
 export async function addProjectMember(
   ctx: Ctx,
@@ -787,7 +1098,7 @@ export async function addProjectMember(
   return prisma.$transaction(async (tx) => {
     const project = await tx.project.findUniqueOrThrow({
       where: { id: projectId },
-      select: { orgId: true },
+      select: { id: true, orgId: true, isGuideline: true },
     });
     const user = await tx.user.findUnique({ where: { email } });
     if (!user) throw notFound("User with this email");
@@ -818,6 +1129,17 @@ export async function addProjectMember(
       newValue: { userId: user.id, roles: member.roles },
       metadata: existing ? { reactivated: true } : undefined,
     });
+    if (project.isGuideline) {
+      await syncGuidelineMemberToSubProjects(tx, {
+        guidelineId: project.id,
+        userId: user.id,
+        email,
+        roles: member.roles,
+        actorUserId: ctx.userId,
+        now: new Date(),
+        invitationResolution: "revoked",
+      });
+    }
     return member;
   });
 }
@@ -976,50 +1298,62 @@ export async function acceptInvitation(ctx: Ctx, token: string) {
     if (invitation.expiresAt.getTime() < Date.now()) throw invalidState("Invitation has expired");
 
     // Atomic consume — guards double-accept even under concurrent requests.
+    const now = new Date();
     const consumed = await tx.projectInvitation.updateMany({
       where: { id: invitation.id, acceptedAt: null, revokedAt: null },
-      data: { acceptedAt: new Date() },
+      data: { acceptedAt: now },
     });
     if (consumed.count === 0) throw invalidState("Invitation is no longer valid");
 
     const project = await tx.project.findUniqueOrThrow({
       where: { id: invitation.projectId },
-      select: { id: true, orgId: true, title: true },
+      select: { id: true, orgId: true, title: true, isGuideline: true },
     });
 
-    // Ensure ACTIVE org membership (R10): absent → create MEMBER; REMOVED → reactivate as MEMBER.
-    const orgMember = await tx.organizationMember.findUnique({
-      where: { orgId_userId: { orgId: project.orgId, userId: ctx.userId } },
+    // Ensure ACTIVE org membership (R10) and settle a matching workspace invitation,
+    // applying its role so an accepted ADMIN invite cannot remain a MEMBER row.
+    const orgResult = await reconcileOrganizationInvitations(tx, {
+      orgId: project.orgId,
+      userId: ctx.userId,
+      email: invitation.email,
+      actorUserId: ctx.userId,
+      now,
+      sourceProjectInvitationId: invitation.id,
     });
-    let orgMembershipEnsured = false;
-    if (!orgMember) {
-      await tx.organizationMember.create({
-        data: { orgId: project.orgId, userId: ctx.userId, role: "MEMBER" },
-      });
-      orgMembershipEnsured = true;
-    } else if (orgMember.status !== "ACTIVE") {
-      await tx.organizationMember.update({
-        where: { id: orgMember.id },
-        data: { status: "ACTIVE", role: "MEMBER" },
-      });
-      orgMembershipEnsured = true;
-    }
 
-    // Create / reactivate the project membership with the invitation's roles.
+    // Create / reactivate the project membership and merge roles when the user already
+    // has access; accepting an invitation must never silently discard its role grant.
     const existing = await tx.projectMember.findUnique({
       where: { projectId_userId: { projectId: project.id, userId: ctx.userId } },
     });
+    const roles =
+      existing?.status === "ACTIVE"
+        ? mergeProjectRoles(existing.roles, invitation.roles)
+        : invitation.roles;
     const membership =
       existing === null
         ? await tx.projectMember.create({
-            data: { projectId: project.id, userId: ctx.userId, roles: invitation.roles },
+            data: { projectId: project.id, userId: ctx.userId, roles },
           })
-        : existing.status === "ACTIVE"
-          ? existing // already an active member — invitation consumed, roles untouched
+        : existing.status === "ACTIVE" && sameRoles(existing.roles, roles)
+          ? existing
           : await tx.projectMember.update({
               where: { id: existing.id },
-              data: { status: "ACTIVE", roles: invitation.roles },
+              data: { status: "ACTIVE", roles },
             });
+
+    const familyResult = project.isGuideline
+      ? await syncGuidelineMemberToSubProjects(tx, {
+          guidelineId: project.id,
+          userId: ctx.userId,
+          email: invitation.email,
+          roles: membership.roles,
+          actorUserId: ctx.userId,
+          now,
+          invitationResolution: "accepted",
+          sourceInvitationId: invitation.id,
+        })
+      : { projectCount: 0, invitationCount: 0 };
 
     await audit.record(tx, {
       projectId: project.id,
@@ -1028,7 +1362,12 @@ export async function acceptInvitation(ctx: Ctx, token: string) {
       entityId: invitation.id,
       action: AuditActions.INVITATION_ACCEPTED,
       newValue: { email: invitation.email, roles: invitation.roles },
-      metadata: { orgMembershipEnsured },
+      metadata: {
+        orgMembershipEnsured: orgResult.membershipChanged,
+        organizationInvitationsAccepted: orgResult.invitationsAccepted,
+        subProjectMembershipsSynchronized: familyResult.projectCount,
+        subProjectInvitationsAccepted: familyResult.invitationCount,
+      },
     });
 
     return {

@@ -3,7 +3,9 @@
 // computed results); stats shapes mirror the stats-lib display contract. Nothing
 // here is authoritative — the server recomputes and re-validates everything.
 
-import { ApiError } from "@/lib/api";
+import { apiErrorMessages } from "@/lib/api";
+
+export { apiErrorMessages };
 
 // --- Outcomes ------------------------------------------------------------------
 
@@ -320,40 +322,6 @@ export function slugify(name: string): string {
     .replaceAll(/[^a-z0-9]+/g, "-")
     .replaceAll(/^-+|-+$/g, "");
   return slug || "outcome";
-}
-
-// Flattens ApiError.details (zod flatten() or service-provided lists) into messages
-// suitable for inline display; falls back to the top-level message.
-export function apiErrorMessages(err: unknown): string[] {
-  if (!(err instanceof ApiError)) {
-    return [err instanceof Error ? err.message : "Request failed"];
-  }
-  const messages: string[] = [];
-  const details = err.details;
-  if (Array.isArray(details)) {
-    for (const item of details) {
-      if (typeof item === "string") messages.push(item);
-      else if (
-        item !== null &&
-        typeof item === "object" &&
-        typeof (item as { message?: unknown }).message === "string"
-      ) {
-        messages.push((item as { message: string }).message);
-      }
-    }
-  } else if (details !== null && typeof details === "object") {
-    const flat = details as { formErrors?: unknown; fieldErrors?: unknown };
-    if (Array.isArray(flat.formErrors)) {
-      messages.push(...flat.formErrors.filter((m): m is string => typeof m === "string"));
-    }
-    if (flat.fieldErrors !== null && typeof flat.fieldErrors === "object") {
-      for (const [key, value] of Object.entries(flat.fieldErrors as Record<string, unknown>)) {
-        if (!Array.isArray(value)) continue;
-        for (const m of value) if (typeof m === "string") messages.push(`${key}: ${m}`);
-      }
-    }
-  }
-  return messages.length > 0 ? messages : [err.message];
 }
 
 // --- Capability gating -------------------------------------------------------

@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/misc";
 import { Textarea } from "@/components/ui/textarea";
 import type { AmendmentGate } from "./amendment-gate";
+import { validateOverviewPatch } from "./overview-validation";
 import type { AmendmentFields, ProtocolDetail } from "./types";
 import { toNullableText } from "./types";
 
@@ -94,6 +95,7 @@ function buildPatch(
     }
     if ((p[key] ?? null) !== next) patch[key] = next;
   }
+  if (!error) error = validateOverviewPatch(patch);
   return { patch, error };
 }
 

@@ -12,6 +12,44 @@ export class ApiError extends Error {
   }
 }
 
+// Flattens structured API details (including zod flatten()) into messages that can
+// be shown to a person instead of discarding the useful reason behind "Invalid request".
+export function apiErrorMessages(err: unknown): string[] {
+  if (!(err instanceof ApiError)) {
+    return [err instanceof Error ? err.message : "Request failed"];
+  }
+  const messages: string[] = [];
+  const details = err.details;
+  if (Array.isArray(details)) {
+    for (const item of details) {
+      if (typeof item === "string") messages.push(item);
+      else if (
+        item !== null &&
+        typeof item === "object" &&
+        typeof (item as { message?: unknown }).message === "string"
+      ) {
+        messages.push((item as { message: string }).message);
+      }
+    }
+  } else if (details !== null && typeof details === "object") {
+    const flat = details as { formErrors?: unknown; fieldErrors?: unknown };
+    if (Array.isArray(flat.formErrors)) {
+      messages.push(
+        ...flat.formErrors.filter((message): message is string => typeof message === "string"),
+      );
+    }
+    if (flat.fieldErrors !== null && typeof flat.fieldErrors === "object") {
+      for (const [key, value] of Object.entries(flat.fieldErrors as Record<string, unknown>)) {
+        if (!Array.isArray(value)) continue;
+        for (const message of value) {
+          if (typeof message === "string") messages.push(`${key}: ${message}`);
+        }
+      }
+    }
+  }
+  return messages.length > 0 ? messages : [err.message];
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,

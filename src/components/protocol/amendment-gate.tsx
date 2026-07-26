@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiErrorMessages } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,7 +27,7 @@ import type { AmendmentFields } from "./types";
 type GuardedAction = (fields: AmendmentFields) => Promise<void>;
 
 export function toastApiError(err: unknown, fallback: string) {
-  toast.error(err instanceof ApiError ? err.message : fallback);
+  toast.error(err instanceof ApiError ? apiErrorMessages(err).join("; ") : fallback);
 }
 
 function isAmendmentRequired(err: unknown): boolean {

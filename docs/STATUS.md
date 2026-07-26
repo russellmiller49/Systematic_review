@@ -4,6 +4,37 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-25) — pilot invitation access + protocol validation repairs — DONE
+
+Two production-pilot failures reported from the guideline workspace are fixed and regression
+covered.
+
+- **Guideline access is family-wide:** adding a member to a guideline or accepting its project
+  invitation now creates/reactivates that membership on every existing PICO sub-project while
+  preserving any additional PICO-specific roles. Future PICOs continue to copy the active
+  guideline team when created. Matching pending PICO invitations are settled atomically, so a
+  user no longer appears active on the guideline while remaining unable to upload references
+  through a PICO.
+- **Workspace invitation reconciliation:** accepting a project invitation also settles a
+  still-valid workspace invitation for the same organization/email and applies its strongest
+  role without demoting existing access. Direct workspace-invitation acceptance likewise
+  promotes an existing active member row instead of consuming an ADMIN invitation while leaving
+  the user as MEMBER. All membership and invitation changes stay in one transaction with audit
+  events.
+- **Existing-state repair:** `synchronizeGuidelineMemberAccess` is an idempotent, permission-
+  checked service repair for guideline members created before family-wide synchronization. It
+  reconciles their current PICO memberships and the matching valid invitations without schema
+  changes.
+- **Useful protocol errors:** the overview form mirrors the API's text/list limits and reports
+  the exact offending field, character count, line, or entry count before submission. Structured
+  API validation details are now surfaced globally by the protocol amendment gate, replacing
+  the unhelpful standalone “Invalid request” toast while preserving unsaved edits.
+- **Regression coverage:** guideline direct-add propagation, family invitation acceptance,
+  reference-write authorization through a PICO, stale-state repair/idempotency, workspace role
+  promotion, protocol boundary acceptance, and over-limit field/list messages.
+- Verification: typecheck and production build clean; **615 unit** and **309 integration**
+  tests pass.
+
 ## Current state (2026-07-23) — user guide and current-product overview refreshed — DONE
 
 The public guide and narrated overview now cover the feature waves that landed after the prior

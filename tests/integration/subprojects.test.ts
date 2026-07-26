@@ -5,6 +5,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/server/db";
 import { AppError } from "@/server/errors";
+import * as orgs from "@/server/services/orgs";
 import * as projects from "@/server/services/projects";
 import * as references from "@/server/services/references";
 import * as manuscript from "@/server/services/manuscript";
@@ -119,6 +120,145 @@ describe("guideline sub-projects", () => {
       where: { projectId: sub.id, action: "project.created" },
     });
     expect(subEvent.newValue).toMatchObject({ parentProjectId: guideline.id });
+  });
+
+  it("adds a guideline member to every existing PICO project", async () => {
+    const { owner, org, guideline, kq1, kq2 } = await createGuidelineFamily();
+    const admin = await createTestUser({ name: "Family Admin" });
+    await addOrgMember(org.id, admin.id);
+
+    await projects.addProjectMember(ctx(owner.id), guideline.id, {
+      email: admin.email,
+      roles: ["ADMIN"],
+    });
+
+    const memberships = await prisma.projectMember.findMany({
+      where: {
+        userId: admin.id,
+        projectId: { in: [guideline.id, kq1.id, kq2.id] },
+        status: "ACTIVE",
+      },
+      orderBy: { projectId: "asc" },
+    });
+    expect(memberships).toHaveLength(3);
+    expect(memberships.every((membership) => membership.roles.includes("ADMIN"))).toBe(true);
+    await expect(projects.getProject(ctx(admin.id), kq1.id)).resolves.toMatchObject({ id: kq1.id });
+    await expect(projects.getProject(ctx(admin.id), kq2.id)).resolves.toMatchObject({ id: kq2.id });
+  });
+
+  it("accepts a guideline invitation family-wide and reconciles matching pending invitations", async () => {
+    const { owner, org, guideline, kq1, kq2 } = await createGuidelineFamily();
+    const admin = await createTestUser({ name: "Invited Family Admin" });
+    const orgInvitation = await orgs.createOrganizationInvitation(ctx(owner.id), org.id, {
+      email: admin.email,
+      role: "ADMIN",
+    });
+    const guidelineInvitation = await projects.createInvitation(ctx(owner.id), guideline.id, {
+      email: admin.email,
+      roles: ["ADMIN"],
+    });
+    const picoInvitations = await Promise.all(
+      [kq1.id, kq2.id].map((projectId) =>
+        projects.createInvitation(ctx(owner.id), projectId, {
+          email: admin.email,
+          roles: ["ADMIN"],
+        }),
+      ),
+    );
+
+    await projects.acceptInvitation(ctx(admin.id), guidelineInvitation.token);
+
+    const orgMembership = await prisma.organizationMember.findUniqueOrThrow({
+      where: { orgId_userId: { orgId: org.id, userId: admin.id } },
+    });
+    expect(orgMembership).toMatchObject({ role: "ADMIN", status: "ACTIVE" });
+    await expect(
+      prisma.organizationInvitation.findUniqueOrThrow({ where: { id: orgInvitation.id } }),
+    ).resolves.toMatchObject({ acceptedAt: expect.any(Date), revokedAt: null });
+
+    const memberships = await prisma.projectMember.findMany({
+      where: {
+        userId: admin.id,
+        projectId: { in: [guideline.id, kq1.id, kq2.id] },
+        status: "ACTIVE",
+      },
+    });
+    expect(memberships).toHaveLength(3);
+    expect(memberships.every((membership) => membership.roles.includes("ADMIN"))).toBe(true);
+
+    const settledPicoInvitations = await prisma.projectInvitation.findMany({
+      where: { id: { in: picoInvitations.map((invitation) => invitation.id) } },
+    });
+    expect(settledPicoInvitations).toHaveLength(2);
+    expect(settledPicoInvitations.every((invitation) => invitation.acceptedAt !== null)).toBe(true);
+
+    // Reference rows remain guideline-scoped, but permission is checked through the PICO.
+    const reference = await references.createReference(ctx(admin.id), kq1.id, {
+      csl: cslFor("Family-wide admin upload", "10.9000/family-admin"),
+    });
+    await expect(
+      prisma.referenceEntry.findUniqueOrThrow({ where: { id: reference.id } }),
+    ).resolves.toMatchObject({ projectId: guideline.id });
+  });
+
+  it("repairs a pre-existing guideline-only member idempotently", async () => {
+    const { owner, org, guideline, kq1, kq2 } = await createGuidelineFamily();
+    const admin = await createTestUser({ name: "Legacy Guideline Admin" });
+    const orgInvitation = await orgs.createOrganizationInvitation(ctx(owner.id), org.id, {
+      email: admin.email,
+      role: "ADMIN",
+    });
+    const guidelineInvitation = await projects.createInvitation(ctx(owner.id), guideline.id, {
+      email: admin.email,
+      roles: ["ADMIN"],
+    });
+    const picoInvitations = await Promise.all(
+      [kq1.id, kq2.id].map((projectId) =>
+        projects.createInvitation(ctx(owner.id), projectId, {
+          email: admin.email,
+          roles: ["ADMIN"],
+        }),
+      ),
+    );
+
+    // Reproduce the old state: the guideline invite created only MEMBER workspace
+    // access and only a guideline project membership.
+    await addOrgMember(org.id, admin.id);
+    await addProjectMember(guideline.id, admin.id, ["ADMIN"]);
+    await prisma.projectInvitation.update({
+      where: { id: guidelineInvitation.id },
+      data: { acceptedAt: new Date() },
+    });
+
+    const repaired = await projects.synchronizeGuidelineMemberAccess(
+      ctx(owner.id),
+      guideline.id,
+      admin.id,
+    );
+    expect(repaired).toMatchObject({
+      subProjectMembershipsSynchronized: 2,
+      projectInvitationsSettled: 2,
+      organizationInvitationsSettled: 1,
+    });
+    const orgMembership = await prisma.organizationMember.findUniqueOrThrow({
+      where: { orgId_userId: { orgId: org.id, userId: admin.id } },
+    });
+    expect(orgMembership.role).toBe("ADMIN");
+    await expect(
+      prisma.organizationInvitation.findUniqueOrThrow({ where: { id: orgInvitation.id } }),
+    ).resolves.toMatchObject({ acceptedAt: expect.any(Date) });
+    const settled = await prisma.projectInvitation.findMany({
+      where: { id: { in: picoInvitations.map((invitation) => invitation.id) } },
+    });
+    expect(settled.every((invitation) => invitation.acceptedAt !== null)).toBe(true);
+
+    await expect(
+      projects.synchronizeGuidelineMemberAccess(ctx(owner.id), guideline.id, admin.id),
+    ).resolves.toMatchObject({
+      subProjectMembershipsSynchronized: 2,
+      projectInvitationsSettled: 0,
+      organizationInvitationsSettled: 0,
+    });
   });
 
   it("rejects sub-projects under non-guidelines, nesting, and callers without project.edit", async () => {

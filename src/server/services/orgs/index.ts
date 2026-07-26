@@ -7,7 +7,7 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import type { OrgRole, Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { conflict, forbidden, notFound, invalidState } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
@@ -17,6 +17,18 @@ import { AuditActions } from "@/server/services/audit";
 
 const ORGANIZATION_INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const orgRoleEnum = z.enum(["OWNER", "ADMIN", "MEMBER"]);
+const ORG_ROLE_RANK: Record<OrgRole, number> = {
+  MEMBER: 0,
+  ADMIN: 1,
+  OWNER: 2,
+};
+
+function strongestOrgRole(roles: readonly OrgRole[]): OrgRole {
+  return roles.reduce<OrgRole>(
+    (strongest, role) => (ORG_ROLE_RANK[role] > ORG_ROLE_RANK[strongest] ? role : strongest),
+    "MEMBER",
+  );
+}
 
 export const createOrgSchema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -434,17 +446,30 @@ export async function acceptOrganizationInvitation(ctx: Ctx, token: string) {
     const existing = await tx.organizationMember.findUnique({
       where: { orgId_userId: { orgId: invitation.orgId, userId: ctx.userId } },
     });
+    const role = strongestOrgRole([existing?.role ?? "MEMBER", invitation.role]);
     const membership =
       existing === null
         ? await tx.organizationMember.create({
-            data: { orgId: invitation.orgId, userId: ctx.userId, role: invitation.role },
+            data: { orgId: invitation.orgId, userId: ctx.userId, role },
           })
-        : existing.status === "ACTIVE"
+        : existing.status === "ACTIVE" && existing.role === role
           ? existing
           : await tx.organizationMember.update({
               where: { id: existing.id },
-              data: { status: "ACTIVE", role: invitation.role },
+              data: { status: "ACTIVE", role },
             });
+
+    if (existing?.status === "ACTIVE" && existing.role !== membership.role) {
+      await audit.record(tx, {
+        userId: ctx.userId,
+        entityType: "OrganizationMember",
+        entityId: membership.id,
+        action: AuditActions.MEMBER_ROLES_CHANGED,
+        previousValue: { role: existing.role },
+        newValue: { role: membership.role },
+        metadata: { organizationInvitationId: invitation.id },
+      });
+    }
 
     await audit.record(tx, {
       userId: ctx.userId,
@@ -456,7 +481,10 @@ export async function acceptOrganizationInvitation(ctx: Ctx, token: string) {
         email: invitation.email,
         role: invitation.role,
       },
-      metadata: { membershipReactivated: existing?.status === "REMOVED" },
+      metadata: {
+        membershipReactivated: existing?.status === "REMOVED",
+        membershipRoleApplied: membership.role,
+      },
     });
 
     return { organization: invitation.organization, membership };
