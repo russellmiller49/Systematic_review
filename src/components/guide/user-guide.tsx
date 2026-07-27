@@ -64,7 +64,7 @@ const STEP_ICONS: Record<string, LucideIcon> = {
 
 const SHORTCUTS = [
   { key: "I", action: "Include", tone: "bg-emerald-600 text-white" },
-  { key: "E", action: "Exclude", tone: "bg-rose-600 text-white" },
+  { key: "E", action: "Exclude + choose reason", tone: "bg-rose-600 text-white" },
   { key: "M", action: "Maybe", tone: "bg-amber-500 text-white" },
   { key: "N", action: "Open or close note", tone: "bg-slate-100 text-slate-800" },
   { key: "J / →", action: "Skip to next citation", tone: "bg-slate-100 text-slate-800" },
@@ -452,7 +452,7 @@ export function UserGuide() {
               <h2 className="mt-3 text-3xl font-semibold tracking-tight">Six quality checkpoints.</h2>
               <div className="mt-8 space-y-4">
                 {[
-                  "Publish the protocol and configure full-text exclusion reasons before screening.",
+                  "Review the default exclusion subgroups and add any project-specific full-text reasons before screening.",
                   "Resolve duplicates before assigning citations to reviewers.",
                   "Settle extraction and risk-of-bias conflicts before treating results as final.",
                   "Inspect every excluded or incomplete analysis row; nothing is silently dropped.",

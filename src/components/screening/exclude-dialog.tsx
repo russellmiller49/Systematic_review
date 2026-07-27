@@ -16,14 +16,15 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, Skeleton } from "@/components/ui/misc";
-import type { ExclusionReasonOption } from "./types";
+import type { ExclusionReasonOption, StageType } from "./types";
 
-// Full-text exclusions require a protocol exclusion reason (enforced server-side);
-// this dialog collects it plus an optional note before the decision is submitted.
+// Collects a project-defined exclusion subgroup plus an optional note before the
+// screening decision is submitted. Full-text reasons also feed the PRISMA report.
 export function ExcludeDialog({
   open,
   onOpenChange,
   projectId,
+  stageType,
   reasons,
   defaultNote,
   onConfirm,
@@ -31,12 +32,15 @@ export function ExcludeDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
+  stageType: StageType;
   reasons: ExclusionReasonOption[] | null;
   defaultNote: string;
   onConfirm: (exclusionReasonId: string, note: string) => void;
 }) {
   const [reasonId, setReasonId] = useState("");
   const [note, setNote] = useState(defaultNote);
+  const isFullText = stageType === "FULL_TEXT";
+  const fieldPrefix = isFullText ? "ft" : "ta";
 
   // Reset the form each time the dialog opens for a new citation.
   useEffect(() => {
@@ -56,9 +60,13 @@ export function ExcludeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Exclude at full text</DialogTitle>
+          <DialogTitle>
+            Exclude at {isFullText ? "full text" : "title & abstract"}
+          </DialogTitle>
           <DialogDescription>
-            Full-text exclusions require a reason — it feeds the PRISMA flow diagram.
+            {isFullText
+              ? "Choose the primary reason for exclusion. It feeds the PRISMA flow diagram."
+              : "Choose the primary reason subgroup so excluded citations stay organized."}
           </DialogDescription>
         </DialogHeader>
 
@@ -67,7 +75,8 @@ export function ExcludeDialog({
         ) : reasons.length === 0 ? (
           <div className="space-y-3">
             <Alert variant="warning">
-              No exclusion reasons are defined for full-text screening yet.
+              No active exclusion reasons are defined for{" "}
+              {isFullText ? "full-text" : "title and abstract"} screening yet.
             </Alert>
             <Link
               href={`/projects/${projectId}/protocol`}
@@ -79,9 +88,11 @@ export function ExcludeDialog({
         ) : (
           <form onSubmit={submit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="ft-exclusion-reason">Exclusion reason</Label>
+              <Label htmlFor={`${fieldPrefix}-exclusion-reason`}>
+                Exclusion reason subgroup
+              </Label>
               <Select
-                id="ft-exclusion-reason"
+                id={`${fieldPrefix}-exclusion-reason`}
                 required
                 value={reasonId}
                 onChange={(e) => setReasonId(e.target.value)}
@@ -97,16 +108,16 @@ export function ExcludeDialog({
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ft-exclusion-note">Note (optional)</Label>
+              <Label htmlFor={`${fieldPrefix}-exclusion-note`}>Note (optional)</Label>
               <Textarea
-                id="ft-exclusion-note"
+                id={`${fieldPrefix}-exclusion-note`}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 placeholder="Anything your co-reviewers or the adjudicator should know…"
               />
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => onOpenChange(false)}>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
               <Button type="submit" variant="exclude" disabled={!reasonId}>

@@ -158,11 +158,12 @@ export function StageQueue({
       });
   }
 
-  // Full-text excludes need the project's applicable exclusion reasons.
+  // Excludes at either stage use the project's applicable reason subgroups.
   useEffect(() => {
-    if (stage.type !== "FULL_TEXT") return;
     let cancelled = false;
-    api<ExclusionReasonOption[]>(`/api/projects/${projectId}/exclusion-reasons?stage=FULL_TEXT`)
+    api<ExclusionReasonOption[]>(
+      `/api/projects/${projectId}/exclusion-reasons?stage=${stage.type}`,
+    )
       .then((r) => {
         if (!cancelled) setReasons(r);
       })
@@ -219,8 +220,8 @@ export function StageQueue({
   function handleDecision(decision: DecisionValue) {
     const current = items?.[0];
     if (!current) return;
-    if (decision === "EXCLUDE" && stage.type === "FULL_TEXT") {
-      // Full-text exclusions require a reason — collect it in the dialog first.
+    if (decision === "EXCLUDE") {
+      // Collect the exclusion subgroup before advancing the queue.
       setExcludeOpen(true);
       return;
     }
@@ -505,6 +506,7 @@ export function StageQueue({
         open={excludeOpen}
         onOpenChange={setExcludeOpen}
         projectId={projectId}
+        stageType={stage.type}
         reasons={reasons}
         defaultNote={note.trim()}
         onConfirm={confirmExclude}

@@ -68,12 +68,31 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   await dialog.getByRole("button", { name: /^assign$/i }).click();
   await expect(page.getByText(/assignments? created/i)).toBeVisible({ timeout: 30_000 });
 
-  // Keyboard-first: include each citation with the "i" shortcut.
-  for (let i = 0; i < 3; i++) {
+  // Keyboard-first: exclude one citation with a standard reason subgroup, then include
+  // the remaining two citations with the "i" shortcut.
+  await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({ timeout: 15_000 });
+  await page.keyboard.press("e");
+  const exclusionDialog = page.getByRole("dialog", {
+    name: /exclude at title & abstract/i,
+  });
+  await expect(exclusionDialog).toBeVisible();
+  const reasonSelect = exclusionDialog.getByLabel(/exclusion reason subgroup/i);
+  await expect(reasonSelect.locator("option")).toHaveText([
+    "Select a reason…",
+    "Wrong population",
+    "Wrong intervention",
+    "Wrong publication type",
+    "Wrong outcomes",
+  ]);
+  await reasonSelect.selectOption({ label: "Wrong publication type" });
+  await exclusionDialog.getByRole("button", { name: /exclude citation/i }).click();
+
+  for (let i = 0; i < 2; i++) {
     await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({ timeout: 15_000 });
     await page.keyboard.press("i");
   }
   await expect(page.getByText(/Queue clear/i)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("1 excluded", { exact: true })).toBeVisible();
 
   // 6. PRISMA reflects the imported + screened counts.
   await page.getByRole("link", { name: "PRISMA", exact: true }).click();

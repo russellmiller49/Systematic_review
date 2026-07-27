@@ -32,8 +32,8 @@ export function ShortcutsDialog({
       keys: ["e"],
       action:
         stageType === "FULL_TEXT"
-          ? "Exclude — opens the exclusion-reason dialog"
-          : "Exclude",
+          ? "Exclude — choose a PRISMA reason"
+          : "Exclude — choose a reason subgroup",
     },
     { keys: ["m"], action: "Maybe" },
     { keys: ["n"], action: "Toggle the note field" },

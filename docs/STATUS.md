@@ -4,6 +4,31 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-26) — screening exclusion subgroups — DONE
+
+Screeners now classify exclusions directly from the title/abstract decision controls instead
+of recording an undifferentiated Exclude vote.
+
+- **Four standard subgroups:** every new review and PICO sub-project starts with Wrong
+  population, Wrong intervention, Wrong publication type, and Wrong outcomes. They apply at
+  both screening stages and remain editable in the existing protocol/settings reason manager.
+- **Keyboard-first selector:** clicking Exclude or pressing E at title/abstract now opens the
+  same stage-aware reason dialog pattern used at full text. The selected project-scoped reason
+  is saved on the blinded screening decision; notes remain optional and optimistic queue
+  advance is unchanged.
+- **Existing-project backfill:** data migration
+  `20260727000000_default_screening_exclusion_reasons` adds missing defaults to every existing
+  project and widens matching stage-specific reasons to BOTH without reactivating reasons a
+  project deliberately disabled. The local development database was migrated and all 4
+  projects verified complete.
+- **Audit + reporting:** default reasons created with new projects receive normal
+  `exclusion_reason.created` audit events. Full-text choices continue to feed PRISMA; the
+  title/abstract subgroup is retained on the decision without changing the R3/R5/R7 screening
+  lifecycle.
+- **Verification:** typecheck and production build clean; **615 unit** and **310 integration**
+  tests pass. The isolated Playwright happy path verifies E → the exact four choices → save
+  Wrong publication type → optimistic queue advance.
+
 ## Current state (2026-07-26) — screening administration overview — DONE
 
 Owners and Admins can now oversee the complete screening corpus without assigning themselves

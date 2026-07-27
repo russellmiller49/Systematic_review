@@ -653,7 +653,8 @@ async function main() {
     order: 0,
   });
 
-  // Full-text exclusion reasons (used at FT screening + PRISMA). Not under the amendment rule.
+  // Project creation provides the standard exclusion subgroups at both stages. Add the
+  // demo's more specific full-text reasons, then retain ids for the seeded decisions.
   const reasonSpecs = [
     "Wrong population",
     "Wrong intervention",
@@ -663,12 +664,17 @@ async function main() {
     "Full text not retrievable",
   ];
   const reasons: Record<string, string> = {};
+  const existingReasons = await protocols.listExclusionReasons(ownerCtx, projectId, {
+    includeInactive: true,
+  });
   for (const [i, label] of reasonSpecs.entries()) {
-    const reason = await protocols.createExclusionReason(ownerCtx, projectId, {
-      label,
-      stage: "FULL_TEXT",
-      order: i,
-    });
+    const reason =
+      existingReasons.find((row) => row.label === label) ??
+      (await protocols.createExclusionReason(ownerCtx, projectId, {
+        label,
+        stage: "FULL_TEXT",
+        order: i,
+      }));
     reasons[label] = reason.id;
   }
 

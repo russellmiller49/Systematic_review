@@ -132,11 +132,12 @@ export const guideSteps: GuideStep[] = [
       "Assign citations, work through a keyboard-first queue, and let consensus or adjudication move records between stages.",
     actions: [
       "Assign reviewers for title-and-abstract screening, then repeat for full text when records advance.",
-      "Use I to include, E to exclude, M for maybe, N for a note, and J or the right arrow to skip.",
+      "Use I to include, E to exclude and choose the primary reason subgroup, M for maybe, N for a note, and J or the right arrow to skip.",
       "Reviewers see only their own decisions while blinding is active.",
       "Resolve disagreements in Conflicts; settled decisions lock until an authorized user reopens them with a reason.",
     ],
-    remember: "A full-text exclusion always requires one of the project's configured exclusion reasons.",
+    remember:
+      "New projects include Wrong population, Wrong intervention, Wrong publication type, and Wrong outcomes; protocol editors can refine the exclusion-reason list.",
     image: "/guide/captures/05-screening.jpg",
   },
   {
@@ -363,7 +364,7 @@ export const videoChapters: VideoChapter[] = [
     title: "Fast, blinded screening",
     subtitle: "Keyboard-first queues, automatic consensus, and adjudication",
     narration:
-      "Assign title-and-abstract and full-text work to one or more reviewers. The queue is keyboard first: I includes, E excludes, M marks maybe, N opens a note, and J skips. When blinding is enabled, reviewers cannot see one another's decisions. Disagreements become conflicts for an adjudicator, while agreed decisions advance automatically.",
+      "Assign title-and-abstract and full-text work to one or more reviewers. The queue is keyboard first: I includes, E opens the exclusion-reason subgroups, M marks maybe, N opens a note, and J skips. When blinding is enabled, reviewers cannot see one another's decisions. Disagreements become conflicts for an adjudicator, while agreed decisions advance automatically.",
   },
   {
     image: "06-fulltext.jpg",

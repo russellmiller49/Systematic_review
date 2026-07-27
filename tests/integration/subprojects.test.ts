@@ -112,6 +112,15 @@ describe("guideline sub-projects", () => {
       expect(stage.blinded).toBe(false);
     }
 
+    const exclusionReasons = await prisma.exclusionReason.findMany({
+      where: { projectId: sub.id },
+      orderBy: { order: "asc" },
+    });
+    expect(exclusionReasons.map((reason) => reason.label)).toEqual([
+      ...projects.DEFAULT_SCREENING_EXCLUSION_REASONS,
+    ]);
+    expect(exclusionReasons.every((reason) => reason.stage === "BOTH")).toBe(true);
+
     const parentEvent = await prisma.auditEvent.findFirstOrThrow({
       where: { projectId: guideline.id, action: "project.subproject.created" },
     });

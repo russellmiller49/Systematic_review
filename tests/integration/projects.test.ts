@@ -38,7 +38,7 @@ describe("projects service", () => {
   });
 
   describe("creation", () => {
-    it("creates project with defaults: both stages, protocol row, OWNER membership, audit", async () => {
+    it("creates project with screening stages, exclusion reasons, protocol, owner, and audit defaults", async () => {
       const { owner, org, project } = await createProjectFixture();
 
       expect(project.status).toBe("PLANNING");
@@ -59,6 +59,16 @@ describe("projects service", () => {
       const protocol = await prisma.protocol.findUnique({ where: { projectId: project.id } });
       expect(protocol).not.toBeNull();
 
+      const exclusionReasons = await prisma.exclusionReason.findMany({
+        where: { projectId: project.id },
+        orderBy: { order: "asc" },
+      });
+      expect(exclusionReasons.map((reason) => reason.label)).toEqual([
+        ...projects.DEFAULT_SCREENING_EXCLUSION_REASONS,
+      ]);
+      expect(exclusionReasons.every((reason) => reason.stage === "BOTH")).toBe(true);
+      expect(exclusionReasons.every((reason) => reason.isActive)).toBe(true);
+
       const member = await prisma.projectMember.findUniqueOrThrow({
         where: { projectId_userId: { projectId: project.id, userId: owner.id } },
       });
@@ -70,6 +80,18 @@ describe("projects service", () => {
       });
       expect(event.userId).toBe(owner.id);
       expect(event.projectId).toBe(project.id);
+
+      const reasonEvents = await prisma.auditEvent.findMany({
+        where: {
+          projectId: project.id,
+          entityType: "ExclusionReason",
+          action: "exclusion_reason.created",
+        },
+      });
+      expect(reasonEvents).toHaveLength(projects.DEFAULT_SCREENING_EXCLUSION_REASONS.length);
+      for (const reasonEvent of reasonEvents) {
+        expect(reasonEvent.metadata).toMatchObject({ projectDefault: true });
+      }
     });
 
     it("dualScreening=false forces reviewersPerCitation to 1 on both stages", async () => {

@@ -171,7 +171,7 @@ export interface AdminOverviewResponse {
   items: AdminOverviewItem[];
 }
 
-// GET /api/projects/:id/exclusion-reasons?stage=FULL_TEXT
+// GET /api/projects/:id/exclusion-reasons?stage=TITLE_ABSTRACT|FULL_TEXT
 export interface ExclusionReasonOption {
   id: string;
   label: string;

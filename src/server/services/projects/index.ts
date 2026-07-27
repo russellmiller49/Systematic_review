@@ -22,6 +22,13 @@ import { hasPicoDefaultSectionStructure } from "@/server/services/manuscript/def
 
 const INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
+export const DEFAULT_SCREENING_EXCLUSION_REASONS = [
+  "Wrong population",
+  "Wrong intervention",
+  "Wrong publication type",
+  "Wrong outcomes",
+] as const;
+
 const reviewTypeEnum = z.enum([
   "SYSTEMATIC_REVIEW",
   "SYSTEMATIC_REVIEW_META_ANALYSIS",
@@ -156,6 +163,37 @@ function mergeProjectRoles(...roleSets: ReadonlyArray<readonly ProjectRole[]>): 
 
 function sameRoles(a: readonly ProjectRole[], b: readonly ProjectRole[]): boolean {
   return a.length === b.length && a.every((role) => b.includes(role));
+}
+
+async function createDefaultScreeningExclusionReasons(
+  tx: Tx,
+  projectId: string,
+  userId: string,
+) {
+  for (const [order, label] of DEFAULT_SCREENING_EXCLUSION_REASONS.entries()) {
+    const reason = await tx.exclusionReason.create({
+      data: {
+        projectId,
+        label,
+        stage: "BOTH",
+        order,
+      },
+    });
+    await audit.record(tx, {
+      projectId,
+      userId,
+      entityType: "ExclusionReason",
+      entityId: reason.id,
+      action: AuditActions.EXCLUSION_REASON_CREATED,
+      newValue: {
+        label: reason.label,
+        stage: reason.stage,
+        order: reason.order,
+        isActive: reason.isActive,
+      },
+      metadata: { projectDefault: true },
+    });
+  }
 }
 
 type GuidelineInvitationResolution = "accepted" | "revoked";
@@ -448,6 +486,7 @@ export async function createProject(
         blindedScreening: input.blindedScreening,
       },
     });
+    await createDefaultScreeningExclusionReasons(tx, project.id, ctx.userId);
     return { ...project, screeningStages: [titleAbstract, fullText] };
   });
 }
@@ -552,6 +591,7 @@ export async function createSubProject(
       action: AuditActions.PROJECT_SUBPROJECT_CREATED,
       newValue: { title: project.title, researchQuestion: input.researchQuestion },
     });
+    await createDefaultScreeningExclusionReasons(tx, project.id, ctx.userId);
     return { ...project, screeningStages: [titleAbstract, fullText] };
   });
 }
