@@ -72,6 +72,9 @@ Additional invariants enforced in services, beyond the matrix:
   note otherwise — small teams are real).
 - Blinded reads: `screening.decide` grants access to *your* decisions; others' decisions require
   the citation to be fully screened + stage unblinded, or `screening.adjudicate`.
+- Shared screening keywords are readable with `project.view` and manageable with
+  `screening.decide`. Keyword grouping evaluates citation title/abstract metadata only and
+  cannot expose another reviewer's decision data.
 - `project.members`: role changes and removals always write audit events with previous/new roles.
 - GRADE audit rows require current `analysis.view` (or `project.edit`), even for a former actor;
   GRADE/ANALYSIS exports require both `export.create` and `analysis.view`.

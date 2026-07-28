@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Eye, RefreshCw, Search, ShieldCheck, TriangleAlert } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { formatAuthors } from "@/components/citations/citation-card";
+import { KeywordHighlightedText } from "@/components/citations/keyword-highlighted-text";
+import { matchingScreeningKeywords } from "@/lib/screening-keywords";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +24,7 @@ import type {
   AdminOverviewFilter,
   AdminOverviewResponse,
   AdminOverviewState,
+  ScreeningKeyword,
   ScreeningStageSummary,
 } from "./types";
 
@@ -74,9 +77,15 @@ function summaryCount(
 export function AdminScreeningOverview({
   projectId,
   stage,
+  keywords,
+  highlightsEnabled,
+  keywordGroup,
 }: {
   projectId: string;
   stage: ScreeningStageSummary;
+  keywords: ScreeningKeyword[];
+  highlightsEnabled: boolean;
+  keywordGroup: string;
 }) {
   const [filter, setFilter] = useState<AdminOverviewFilter>("ALL");
   const [draftQuery, setDraftQuery] = useState("");
@@ -96,6 +105,7 @@ export function AdminScreeningOverview({
       limit: String(PAGE_SIZE),
     });
     if (query) params.set("q", query);
+    if (keywordGroup !== "ALL") params.set("keywordGroup", keywordGroup);
     try {
       const next = await api<AdminOverviewResponse>(
         `/api/projects/${projectId}/screening/stages/${stage.id}/admin-overview?${params}`,
@@ -107,7 +117,7 @@ export function AdminScreeningOverview({
     } finally {
       setLoading(false);
     }
-  }, [filter, page, projectId, query, reloadKey, stage.id]);
+  }, [filter, keywordGroup, page, projectId, query, reloadKey, stage.id]);
 
   useEffect(() => {
     void load();
@@ -274,10 +284,20 @@ export function AdminScreeningOverview({
               {data.items.map((item) => {
                 const citation = item.citation;
                 const progress = item.assignmentProgress;
+                const matchedKeywords = matchingScreeningKeywords(
+                  [citation.title, citation.abstract],
+                  keywords,
+                );
                 return (
                   <TableRow key={citation.id}>
                     <TableCell className="min-w-[28rem] py-4 align-top">
-                      <p className="font-medium leading-snug">{citation.title}</p>
+                      <p className="font-medium leading-snug">
+                        <KeywordHighlightedText
+                          text={citation.title}
+                          keywords={keywords}
+                          enabled={highlightsEnabled}
+                        />
+                      </p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {formatAuthors(citation.authors, 4)}
                         {citation.journal ? ` · ${citation.journal}` : ""}
@@ -289,6 +309,15 @@ export function AdminScreeningOverview({
                             {source}
                           </Badge>
                         ))}
+                        {matchedKeywords.map((keyword) => (
+                          <Badge
+                            key={keyword.id}
+                            variant={keyword.category === "INCLUDE" ? "include" : "exclude"}
+                            data-screening-keyword-badge={keyword.id}
+                          >
+                            {keyword.term}
+                          </Badge>
+                        ))}
                         {citation.pmid && <Badge variant="outline">PMID {citation.pmid}</Badge>}
                         {citation.doi && <Badge variant="outline">DOI {citation.doi}</Badge>}
                       </div>
@@ -298,7 +327,11 @@ export function AdminScreeningOverview({
                             View abstract
                           </summary>
                           <p className="mt-2 whitespace-pre-line leading-relaxed text-muted-foreground">
-                            {citation.abstract}
+                            <KeywordHighlightedText
+                              text={citation.abstract}
+                              keywords={keywords}
+                              enabled={highlightsEnabled}
+                            />
                           </p>
                         </details>
                       )}

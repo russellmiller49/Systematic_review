@@ -31,6 +31,7 @@ import type {
   ExclusionReasonOption,
   QueueItem,
   QueueResponse,
+  ScreeningKeyword,
   ScreeningStageSummary,
 } from "./types";
 
@@ -66,11 +67,21 @@ function KeyHint({ label, onColor = false }: { label: string; onColor?: boolean 
 export function StageQueue({
   projectId,
   stage,
+  keywords,
+  highlightsEnabled,
+  keywordGroup,
 }: {
   projectId: string;
   stage: ScreeningStageSummary;
+  keywords: ScreeningKeyword[];
+  highlightsEnabled: boolean;
+  keywordGroup: string;
 }) {
-  const queueUrl = `/api/projects/${projectId}/screening/stages/${stage.id}/queue`;
+  const queueUrl =
+    `/api/projects/${projectId}/screening/stages/${stage.id}/queue` +
+    (keywordGroup === "ALL"
+      ? ""
+      : `?keywordGroup=${encodeURIComponent(keywordGroup)}`);
   const decisionsUrl = `/api/projects/${projectId}/screening/stages/${stage.id}/decisions`;
 
   const [items, setItems] = useState<QueueItem[] | null>(null);
@@ -182,6 +193,7 @@ export function StageQueue({
     decision: DecisionValue,
     exclusionReasonId: string | null,
     noteText: string | null,
+    exclusionReasonLabel?: string,
   ) {
     // Optimistic advance: drop the citation locally and sync in the background.
     handledRef.current.add(item.citation.id);
@@ -202,7 +214,12 @@ export function StageQueue({
 
     apiPost(decisionsUrl, body)
       .then(() => {
-        toast.success(DECISION_TOAST[decision], { duration: 1500 });
+        toast.success(
+          decision === "EXCLUDE" && exclusionReasonLabel
+            ? `Excluded — ${exclusionReasonLabel}`
+            : DECISION_TOAST[decision],
+          { duration: 1500 },
+        );
       })
       .catch((err) => {
         // The decision did NOT save — put the citation back at the front of the queue.
@@ -233,7 +250,27 @@ export function StageQueue({
     const current = items?.[0];
     setExcludeOpen(false);
     if (!current) return;
-    submitDecision(current, "EXCLUDE", exclusionReasonId, noteText ? noteText : null);
+    const reason = reasons?.find((item) => item.id === exclusionReasonId);
+    submitDecision(
+      current,
+      "EXCLUDE",
+      exclusionReasonId,
+      noteText ? noteText : null,
+      reason?.label,
+    );
+  }
+
+  function quickExclude(reason: ExclusionReasonOption) {
+    const current = items?.[0];
+    if (!current) return;
+    const trimmed = note.trim();
+    submitDecision(
+      current,
+      "EXCLUDE",
+      reason.id,
+      trimmed ? trimmed : null,
+      reason.label,
+    );
   }
 
   function handleSkip() {
@@ -261,6 +298,13 @@ export function StageQueue({
           target.tagName === "SELECT" ||
           target.isContentEditable)
       ) {
+        return;
+      }
+      if (/^[1-9]$/.test(e.key)) {
+        const reason = reasons?.[Number(e.key) - 1];
+        if (!reason) return;
+        quickExclude(reason);
+        e.preventDefault();
         return;
       }
       switch (e.key) {
@@ -370,7 +414,12 @@ export function StageQueue({
 
       {current ? (
         <>
-          <CitationCard citation={current.citation} clampAbstract={false}>
+          <CitationCard
+            citation={current.citation}
+            clampAbstract={false}
+            screeningKeywords={keywords}
+            highlightScreeningKeywords={highlightsEnabled}
+          >
             <div className="space-y-3">
               {current.aiSuggestion && (
                 <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs">
@@ -407,6 +456,45 @@ export function StageQueue({
                   <CircleHelp /> Maybe <KeyHint label="m" onColor />
                 </Button>
               </div>
+              {reasons && reasons.length > 0 && (
+                <div
+                  role="group"
+                  aria-label="Quick exclusion reasons"
+                  className="rounded-md border border-exclude/20 bg-exclude-muted/50 p-2.5"
+                >
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
+                    <p className="text-xs font-medium text-exclude">
+                      Quick exclude by reason
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      One click, or press 1–9
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {reasons.slice(0, 9).map((reason, index) => (
+                      <Button
+                        key={reason.id}
+                        variant="outline"
+                        size="sm"
+                        className="border-exclude/30 text-exclude hover:bg-exclude-muted"
+                        aria-label={`Exclude: ${reason.label} (shortcut ${index + 1})`}
+                        onClick={() => quickExclude(reason)}
+                      >
+                        <X /> {reason.label} <KeyHint label={String(index + 1)} />
+                      </Button>
+                    ))}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground"
+                      onClick={() => setExcludeOpen(true)}
+                    >
+                      {reasons.length > 9 ? "All reasons + note" : "Reason + note"}{" "}
+                      <KeyHint label="e" />
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Button
                   variant="outline"
@@ -511,7 +599,12 @@ export function StageQueue({
         defaultNote={note.trim()}
         onConfirm={confirmExclude}
       />
-      <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} stageType={stage.type} />
+      <ShortcutsDialog
+        open={helpOpen}
+        onOpenChange={setHelpOpen}
+        stageType={stage.type}
+        reasons={reasons}
+      />
     </div>
   );
 }

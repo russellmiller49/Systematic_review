@@ -3,6 +3,11 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import {
+  matchingScreeningKeywords,
+  type ScreeningKeywordRule,
+} from "@/lib/screening-keywords";
+import { KeywordHighlightedText } from "./keyword-highlighted-text";
 
 export interface CitationCardData {
   id: string;
@@ -38,12 +43,16 @@ export function CitationCard({
   citation,
   clampAbstract = true,
   highlight,
+  screeningKeywords = [],
+  highlightScreeningKeywords = true,
   className,
   children,
 }: {
   citation: CitationCardData;
   clampAbstract?: boolean;
   highlight?: boolean;
+  screeningKeywords?: readonly ScreeningKeywordRule[];
+  highlightScreeningKeywords?: boolean;
   className?: string;
   children?: React.ReactNode; // action bar slot
 }) {
@@ -56,6 +65,10 @@ export function CitationCard({
   ]
     .filter(Boolean)
     .join(" · ");
+  const matchedKeywords = matchingScreeningKeywords(
+    [citation.title, citation.abstract],
+    screeningKeywords,
+  );
 
   return (
     <div
@@ -65,7 +78,13 @@ export function CitationCard({
         className,
       )}
     >
-      <h3 className="text-base font-semibold leading-snug">{citation.title}</h3>
+      <h3 className="text-base font-semibold leading-snug">
+        <KeywordHighlightedText
+          text={citation.title}
+          keywords={screeningKeywords}
+          enabled={highlightScreeningKeywords}
+        />
+      </h3>
       <p className="mt-1 text-sm text-muted-foreground">{formatAuthors(citation.authors)}</p>
       {meta && <p className="mt-0.5 text-sm text-muted-foreground">{meta}</p>}
 
@@ -99,6 +118,16 @@ export function CitationCard({
             {s}
           </Badge>
         ))}
+        {matchedKeywords.map((keyword) => (
+          <Badge
+            key={keyword.id}
+            variant={keyword.category === "INCLUDE" ? "include" : "exclude"}
+            data-screening-keyword-badge={keyword.id}
+            title={`Matched ${keyword.category.toLowerCase()} keyword`}
+          >
+            {keyword.term}
+          </Badge>
+        ))}
         {citation.labels?.map((l) => (
           <Badge key={l} variant="maybe">
             {l}
@@ -114,7 +143,11 @@ export function CitationCard({
               !expanded && "line-clamp-4",
             )}
           >
-            {citation.abstract}
+            <KeywordHighlightedText
+              text={citation.abstract}
+              keywords={screeningKeywords}
+              enabled={highlightScreeningKeywords}
+            />
           </p>
           {clampAbstract && citation.abstract.length > 350 && (
             <button

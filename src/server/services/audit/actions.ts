@@ -58,6 +58,9 @@ export const AuditActions = {
   SCREENING_RESULT_REOPENED: "screening.result.reopened",
   SCREENING_STAGE_UPDATED: "screening.stage.updated",
   SCREENING_STAGE_UNBLINDED: "screening.stage.unblinded",
+  SCREENING_KEYWORD_CREATED: "screening.keyword.created",
+  SCREENING_KEYWORD_UPDATED: "screening.keyword.updated",
+  SCREENING_KEYWORD_DELETED: "screening.keyword.deleted",
 
   // full text
   FULLTEXT_FILE_UPLOADED: "fulltext.file.uploaded",

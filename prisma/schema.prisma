@@ -150,6 +150,11 @@ enum ReasonStage {
   BOTH
 }
 
+enum ScreeningKeywordCategory {
+  INCLUDE
+  EXCLUDE
+}
+
 enum RetrievalOutcome {
   PENDING
   RETRIEVED
@@ -273,58 +278,59 @@ model User {
 
   orgMemberships          OrganizationMember[]
   projectMemberships      ProjectMember[]
-  createdOrgs             Organization[]             @relation("OrgCreator")
-  createdProjects         Project[]                  @relation("ProjectCreator")
-  sentInvitations         ProjectInvitation[]        @relation("InvitationSender")
-  sentOrgInvitations      OrganizationInvitation[]   @relation("OrganizationInvitationSender")
-  protocolVersions        ProtocolVersion[]          @relation("ProtocolVersionAuthor")
-  protocolAmendments      ProtocolAmendment[]        @relation("AmendmentAuthor")
-  importBatches           ImportBatch[]              @relation("ImportCreator")
-  dedupDecisions          DeduplicationCandidate[]   @relation("DedupDecider")
-  createdStudies          Study[]                    @relation("StudyCreator")
-  screeningAssignments    ScreeningAssignment[]      @relation("AssignmentReviewer")
-  screeningDecisions      ScreeningDecision[]        @relation("DecisionReviewer")
-  adjudications           ScreeningAdjudication[]    @relation("Adjudicator")
-  uploadedFiles           FullTextFile[]             @relation("FileUploader")
-  retrievalAttempts       FullTextRetrievalAttempt[] @relation("RetrievalRecorder")
-  extractionTemplates     ExtractionTemplate[]       @relation("TemplateCreator")
-  extractionAssignments   ExtractionAssignment[]     @relation("ExtractionAssignee")
-  extractionForms         ExtractionForm[]           @relation("Extractor")
-  extractionAdjudications ExtractionAdjudication[]   @relation("ExtractionAdjudicator")
-  robTools                RiskOfBiasTool[]           @relation("RobToolCreator")
-  robAssignments          RiskOfBiasAssignment[]     @relation("RobAssignee")
-  robAssessments          RiskOfBiasAssessment[]     @relation("RobAssessor")
-  robAdjudications        RiskOfBiasAdjudication[]   @relation("RobAdjudicator")
-  prismaSnapshots         PrismaSnapshot[]           @relation("SnapshotCreator")
-  exportJobs              ExportJob[]                @relation("ExportRequester")
-  auditEvents             AuditEvent[]               @relation("AuditActor")
-  aiScreeningRuns         AiScreeningRun[]           @relation("AiScreeningRunRequester")
-  aiExtractionRuns        AiExtractionRun[]          @relation("AiExtractionRunRequester")
-  aiRobRuns               AiRobRun[]                 @relation("AiRobRunRequester")
-  analysisOutcomes        AnalysisOutcome[]          @relation("AnalysisOutcomeCreator")
-  analysisExclusions      AnalysisStudyExclusion[]   @relation("AnalysisExclusionCreator")
-  cohortDecisions         CohortCandidate[]          @relation("CohortDecider")
-  gradeAssessments        GradeAssessment[]          @relation("GradeAssessmentCreator")
-  gradeReviews            GradeAssessment[]          @relation("GradeReviewer")
-  gradeRatingEdits        GradeDomainRating[]        @relation("GradeRatingEditor")
-  aiGradeRuns             AiGradeRun[]               @relation("AiGradeRunRequester")
-  notifications           Notification[]             @relation("NotificationRecipient")
-  notificationsActed      Notification[]             @relation("NotificationActor")
+  createdOrgs             Organization[]                @relation("OrgCreator")
+  createdProjects         Project[]                     @relation("ProjectCreator")
+  sentInvitations         ProjectInvitation[]           @relation("InvitationSender")
+  sentOrgInvitations      OrganizationInvitation[]      @relation("OrganizationInvitationSender")
+  protocolVersions        ProtocolVersion[]             @relation("ProtocolVersionAuthor")
+  protocolAmendments      ProtocolAmendment[]           @relation("AmendmentAuthor")
+  importBatches           ImportBatch[]                 @relation("ImportCreator")
+  dedupDecisions          DeduplicationCandidate[]      @relation("DedupDecider")
+  createdStudies          Study[]                       @relation("StudyCreator")
+  screeningAssignments    ScreeningAssignment[]         @relation("AssignmentReviewer")
+  screeningDecisions      ScreeningDecision[]           @relation("DecisionReviewer")
+  adjudications           ScreeningAdjudication[]       @relation("Adjudicator")
+  screeningKeywords       ScreeningKeyword[]            @relation("ScreeningKeywordCreator")
+  uploadedFiles           FullTextFile[]                @relation("FileUploader")
+  retrievalAttempts       FullTextRetrievalAttempt[]    @relation("RetrievalRecorder")
+  extractionTemplates     ExtractionTemplate[]          @relation("TemplateCreator")
+  extractionAssignments   ExtractionAssignment[]        @relation("ExtractionAssignee")
+  extractionForms         ExtractionForm[]              @relation("Extractor")
+  extractionAdjudications ExtractionAdjudication[]      @relation("ExtractionAdjudicator")
+  robTools                RiskOfBiasTool[]              @relation("RobToolCreator")
+  robAssignments          RiskOfBiasAssignment[]        @relation("RobAssignee")
+  robAssessments          RiskOfBiasAssessment[]        @relation("RobAssessor")
+  robAdjudications        RiskOfBiasAdjudication[]      @relation("RobAdjudicator")
+  prismaSnapshots         PrismaSnapshot[]              @relation("SnapshotCreator")
+  exportJobs              ExportJob[]                   @relation("ExportRequester")
+  auditEvents             AuditEvent[]                  @relation("AuditActor")
+  aiScreeningRuns         AiScreeningRun[]              @relation("AiScreeningRunRequester")
+  aiExtractionRuns        AiExtractionRun[]             @relation("AiExtractionRunRequester")
+  aiRobRuns               AiRobRun[]                    @relation("AiRobRunRequester")
+  analysisOutcomes        AnalysisOutcome[]             @relation("AnalysisOutcomeCreator")
+  analysisExclusions      AnalysisStudyExclusion[]      @relation("AnalysisExclusionCreator")
+  cohortDecisions         CohortCandidate[]             @relation("CohortDecider")
+  gradeAssessments        GradeAssessment[]             @relation("GradeAssessmentCreator")
+  gradeReviews            GradeAssessment[]             @relation("GradeReviewer")
+  gradeRatingEdits        GradeDomainRating[]           @relation("GradeRatingEditor")
+  aiGradeRuns             AiGradeRun[]                  @relation("AiGradeRunRequester")
+  notifications           Notification[]                @relation("NotificationRecipient")
+  notificationsActed      Notification[]                @relation("NotificationActor")
   librarySettingsUpdates  OrganizationLibrarySettings[] @relation("LibrarySettingsUpdater")
-  fullTextRetrievalRuns   FullTextRetrievalRun[]     @relation("FullTextRetrievalRunRequester")
-  referenceEntries        ReferenceEntry[]           @relation("ReferenceAdder")
-  manuscriptsCreated      Manuscript[]               @relation("ManuscriptCreator")
-  manuscriptAssignments   ManuscriptSection[]        @relation("ManuscriptSectionAssignee")
-  manuscriptLocks         ManuscriptSection[]        @relation("ManuscriptSectionLockHolder")
-  manuscriptVersions      ManuscriptSectionVersion[] @relation("ManuscriptVersionAuthor")
-  manuscriptComments      ManuscriptComment[]        @relation("ManuscriptCommentAuthor")
-  manuscriptResolved      ManuscriptComment[]        @relation("ManuscriptCommentResolver")
-  chatChannelsCreated     ChatChannel[]              @relation("ChatChannelCreator")
-  chatParticipations      ChatChannelParticipant[]   @relation("ChatParticipant")
-  chatMessages            ChatMessage[]              @relation("ChatMessageAuthor")
-  chatMessagesDeleted     ChatMessage[]              @relation("ChatMessageDeleter")
-  chatAssignmentTasks     ChatAssignmentTask[]       @relation("ChatAssignee")
-  chatReadStates          ChatReadState[]            @relation("ChatReader")
+  fullTextRetrievalRuns   FullTextRetrievalRun[]        @relation("FullTextRetrievalRunRequester")
+  referenceEntries        ReferenceEntry[]              @relation("ReferenceAdder")
+  manuscriptsCreated      Manuscript[]                  @relation("ManuscriptCreator")
+  manuscriptAssignments   ManuscriptSection[]           @relation("ManuscriptSectionAssignee")
+  manuscriptLocks         ManuscriptSection[]           @relation("ManuscriptSectionLockHolder")
+  manuscriptVersions      ManuscriptSectionVersion[]    @relation("ManuscriptVersionAuthor")
+  manuscriptComments      ManuscriptComment[]           @relation("ManuscriptCommentAuthor")
+  manuscriptResolved      ManuscriptComment[]           @relation("ManuscriptCommentResolver")
+  chatChannelsCreated     ChatChannel[]                 @relation("ChatChannelCreator")
+  chatParticipations      ChatChannelParticipant[]      @relation("ChatParticipant")
+  chatMessages            ChatMessage[]                 @relation("ChatMessageAuthor")
+  chatMessagesDeleted     ChatMessage[]                 @relation("ChatMessageDeleter")
+  chatAssignmentTasks     ChatAssignmentTask[]          @relation("ChatAssignee")
+  chatReadStates          ChatReadState[]               @relation("ChatReader")
 }
 
 model Organization {
@@ -418,35 +424,36 @@ model Project {
   parentProject Project?     @relation("GuidelineSubProjects", fields: [parentProjectId], references: [id])
   subProjects   Project[]    @relation("GuidelineSubProjects")
 
-  members             ProjectMember[]
-  invitations         ProjectInvitation[]
-  protocol            Protocol?
-  exclusionReasons    ExclusionReason[]
-  importSources       ImportSource[]
-  importBatches       ImportBatch[]
-  citations           Citation[]
-  dedupGroups         DeduplicationGroup[]
-  dedupCandidates     DeduplicationCandidate[]
-  studies             Study[]
-  screeningStages     ScreeningStage[]
-  fullTextFiles       FullTextFile[]
-  extractionTemplates ExtractionTemplate[]
-  robTools            RiskOfBiasTool[]
-  prismaSnapshots     PrismaSnapshot[]
-  exportJobs          ExportJob[]
-  auditEvents         AuditEvent[]
-  aiScreeningRuns     AiScreeningRun[]
-  aiExtractionRuns    AiExtractionRun[]
-  aiRobRuns           AiRobRun[]
-  aiGradeRuns         AiGradeRun[]
-  analysisOutcomes    AnalysisOutcome[]
-  cohortCandidates    CohortCandidate[]
-  notifications       Notification[]
+  members               ProjectMember[]
+  invitations           ProjectInvitation[]
+  protocol              Protocol?
+  exclusionReasons      ExclusionReason[]
+  importSources         ImportSource[]
+  importBatches         ImportBatch[]
+  citations             Citation[]
+  dedupGroups           DeduplicationGroup[]
+  dedupCandidates       DeduplicationCandidate[]
+  studies               Study[]
+  screeningStages       ScreeningStage[]
+  screeningKeywords     ScreeningKeyword[]
+  fullTextFiles         FullTextFile[]
+  extractionTemplates   ExtractionTemplate[]
+  robTools              RiskOfBiasTool[]
+  prismaSnapshots       PrismaSnapshot[]
+  exportJobs            ExportJob[]
+  auditEvents           AuditEvent[]
+  aiScreeningRuns       AiScreeningRun[]
+  aiExtractionRuns      AiExtractionRun[]
+  aiRobRuns             AiRobRun[]
+  aiGradeRuns           AiGradeRun[]
+  analysisOutcomes      AnalysisOutcome[]
+  cohortCandidates      CohortCandidate[]
+  notifications         Notification[]
   fullTextRetrievalRuns FullTextRetrievalRun[]
-  referenceEntries    ReferenceEntry[]
-  manuscript          Manuscript?
-  chatChannels        ChatChannel[]
-  chatAssignmentTasks ChatAssignmentTask[]
+  referenceEntries      ReferenceEntry[]
+  manuscript            Manuscript?
+  chatChannels          ChatChannel[]
+  chatAssignmentTasks   ChatAssignmentTask[]
 
   @@index([orgId])
   @@index([parentProjectId])
@@ -624,6 +631,26 @@ model ExclusionReason {
   adjudications ScreeningAdjudication[]
 
   @@unique([projectId, label])
+}
+
+// Shared screening words/phrases. They never affect decisions: they are visual signals and
+// queue facets only. `normalizedTerm` makes project-level deduplication case-insensitive while
+// preserving the user's capitalization in `term`.
+model ScreeningKeyword {
+  id             String                   @id @default(cuid())
+  projectId      String
+  term           String
+  normalizedTerm String
+  category       ScreeningKeywordCategory
+  createdById    String
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id])
+  createdBy User    @relation("ScreeningKeywordCreator", fields: [createdById], references: [id])
+
+  @@unique([projectId, normalizedTerm])
+  @@index([projectId, category, createdAt])
 }
 
 // ---------------------------------------------------------------------------

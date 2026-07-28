@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ListChecks } from "lucide-react";
 import { toast } from "sonner";
@@ -14,7 +14,14 @@ import { AssignReviewersDialog } from "./assign-dialog";
 import { ManageAssignmentsDialog } from "./manage-assignments-dialog";
 import { AdminScreeningOverview } from "./admin-screening-overview";
 import { PrescreenPanel } from "./prescreen-panel";
-import { STAGE_LABELS, type ProjectAiStatus, type ScreeningStageSummary } from "./types";
+import { KeywordToolbar } from "./keyword-toolbar";
+import {
+  STAGE_LABELS,
+  UNMATCHED_KEYWORD_GROUP,
+  type ProjectAiStatus,
+  type ScreeningKeyword,
+  type ScreeningStageSummary,
+} from "./types";
 
 // Roles holding `screening.configure` (permission matrix) — who may assign reviewers.
 const CONFIGURE_ROLES = new Set(["OWNER", "ADMIN"]);
@@ -23,9 +30,31 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
   const [stages, setStages] = useState<ScreeningStageSummary[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [canConfigure, setCanConfigure] = useState(false);
+  const [canManageKeywords, setCanManageKeywords] = useState(false);
   const [ai, setAi] = useState<ProjectAiStatus | null>(null);
+  const [keywords, setKeywords] = useState<ScreeningKeyword[] | null>(null);
+  const [keywordGroup, setKeywordGroup] = useState("ALL");
+  const [highlightsEnabled, setHighlightsEnabled] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const [stageReloadKey, setStageReloadKey] = useState(0);
+
+  const loadKeywords = useCallback(async () => {
+    try {
+      const next = await api<ScreeningKeyword[]>(
+        `/api/projects/${projectId}/screening/keywords`,
+      );
+      setKeywords(next);
+      setKeywordGroup((current) =>
+        current === "ALL" ||
+        current === UNMATCHED_KEYWORD_GROUP ||
+        next.some((keyword) => keyword.id === current)
+          ? current
+          : "ALL",
+      );
+    } catch {
+      setKeywords([]);
+    }
+  }, [projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,22 +74,40 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
     };
   }, [projectId, stageReloadKey]);
 
+  useEffect(() => {
+    void loadKeywords();
+    const saved = window.localStorage.getItem(`synthesis:keyword-highlights:${projectId}`);
+    if (saved !== null) setHighlightsEnabled(saved !== "false");
+  }, [loadKeywords, projectId]);
+
   function refreshAssignments() {
     setStageReloadKey((key) => key + 1);
     setReloadKey((key) => key + 1);
   }
 
   useEffect(() => {
-    api<{ myRoles: string[]; ai: ProjectAiStatus }>(`/api/projects/${projectId}`)
+    api<{ myRoles: string[]; capabilities: string[]; ai: ProjectAiStatus }>(
+      `/api/projects/${projectId}`,
+    )
       .then((p) => {
         setCanConfigure(p.myRoles.some((r) => CONFIGURE_ROLES.has(r)));
+        setCanManageKeywords(p.capabilities.includes("screening.decide"));
         setAi(p.ai);
       })
       .catch(() => {
         setCanConfigure(false);
+        setCanManageKeywords(false);
         setAi(null);
       });
   }, [projectId]);
+
+  function changeHighlightsEnabled(enabled: boolean) {
+    setHighlightsEnabled(enabled);
+    window.localStorage.setItem(
+      `synthesis:keyword-highlights:${projectId}`,
+      String(enabled),
+    );
+  }
 
   return (
     <div>
@@ -112,6 +159,16 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
                   onSuggestionsChanged={() => setReloadKey((k) => k + 1)}
                 />
               )}
+              <KeywordToolbar
+                projectId={projectId}
+                keywords={keywords}
+                canManage={canManageKeywords}
+                highlightsEnabled={highlightsEnabled}
+                keywordGroup={keywordGroup}
+                onHighlightsEnabledChange={changeHighlightsEnabled}
+                onKeywordGroupChange={setKeywordGroup}
+                onKeywordsChanged={loadKeywords}
+              />
               <Tabs defaultValue="my-screening">
                 <TabsList>
                   <TabsTrigger value="my-screening">My screening</TabsTrigger>
@@ -119,17 +176,23 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
                 </TabsList>
                 <TabsContent value="my-screening" className="pt-3">
                   <StageQueue
-                    key={`${stage.id}:${reloadKey}`}
+                    key={`${stage.id}:${reloadKey}:${keywordGroup}`}
                     projectId={projectId}
                     stage={stage}
+                    keywords={keywords ?? []}
+                    highlightsEnabled={highlightsEnabled}
+                    keywordGroup={keywordGroup}
                   />
                 </TabsContent>
                 {canConfigure && (
                   <TabsContent value="admin-view" className="pt-3">
                     <AdminScreeningOverview
-                      key={`${stage.id}:admin:${reloadKey}`}
+                      key={`${stage.id}:admin:${reloadKey}:${keywordGroup}`}
                       projectId={projectId}
                       stage={stage}
+                      keywords={keywords ?? []}
+                      highlightsEnabled={highlightsEnabled}
+                      keywordGroup={keywordGroup}
                     />
                   </TabsContent>
                 )}

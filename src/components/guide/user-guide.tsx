@@ -65,6 +65,7 @@ const STEP_ICONS: Record<string, LucideIcon> = {
 const SHORTCUTS = [
   { key: "I", action: "Include", tone: "bg-emerald-600 text-white" },
   { key: "E", action: "Exclude + choose reason", tone: "bg-rose-600 text-white" },
+  { key: "1–9", action: "Quick exclude with mapped reason", tone: "bg-rose-50 text-rose-700" },
   { key: "M", action: "Maybe", tone: "bg-amber-500 text-white" },
   { key: "N", action: "Open or close note", tone: "bg-slate-100 text-slate-800" },
   { key: "J / →", action: "Skip to next citation", tone: "bg-slate-100 text-slate-800" },

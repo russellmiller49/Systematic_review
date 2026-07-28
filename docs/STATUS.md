@@ -4,6 +4,35 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-28) — quick exclusion reasons + screening keywords — DONE
+
+Screeners can now apply a specific exclusion reason in one action and use shared keyword rules
+to scan or narrow the screening corpus.
+
+- **One-click reasons:** the first nine active, stage-compatible exclusion reasons appear
+  directly below Include / Exclude / Maybe in the personal queue. Clicking a reason excludes
+  immediately, with any open note preserved; number keys 1–9 perform the same actions. E still
+  opens the complete reason-and-note dialog, whose first nine choices show the same mapping.
+- **Shared highlighting rules:** reviewers can add up to 100 project-level terms or phrases and
+  classify each as an include or exclude keyword. Literal, case-insensitive matches are
+  highlighted in citation titles and abstracts, with overlapping phrases resolved longest
+  first and matching rule badges shown on each citation.
+- **Keyword paper groups:** both personal screening and the Owner/Admin overview can show all
+  papers, papers matching one selected keyword, or papers with no configured keyword match.
+  Rules are shared across both screening stages; highlight visibility is a per-browser display
+  preference.
+- **Permissions, blinding, and audit:** project viewers can read the shared rules and roles with
+  `screening.decide` can manage them. Filtering uses citation title/abstract metadata only and
+  does not reveal another reviewer's decision, note, label, or exclusion reason. Keyword
+  creation, edits, and deletion are audited.
+- **Persistence:** migration `20260728220000_screening_keywords` adds the project-scoped,
+  normalized keyword table and include/exclude category enum. The local development database
+  was migrated without resetting existing data.
+- **Verification:** production build, **619 unit** and **313 integration** tests pass. The
+  isolated Playwright happy path covers keyword creation, grouping, highlighting, and a
+  number-key exclusion with the mapped reason. Browser QA covered personal and admin views,
+  returned no console errors, and confirmed responsive wrapping of the quick-reason controls.
+
 ## Current state (2026-07-26) — screening exclusion subgroups — DONE
 
 Screeners now classify exclusions directly from the title/abstract decision controls instead

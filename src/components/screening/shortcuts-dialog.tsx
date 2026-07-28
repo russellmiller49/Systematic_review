@@ -7,7 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { StageType } from "./types";
+import type { ExclusionReasonOption, StageType } from "./types";
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
@@ -21,10 +21,12 @@ export function ShortcutsDialog({
   open,
   onOpenChange,
   stageType,
+  reasons,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   stageType: StageType;
+  reasons: ExclusionReasonOption[] | null;
 }) {
   const rows: { keys: string[]; action: string }[] = [
     { keys: ["i"], action: "Include" },
@@ -39,6 +41,10 @@ export function ShortcutsDialog({
     { keys: ["n"], action: "Toggle the note field" },
     { keys: ["j", "→"], action: "Skip to the next citation" },
     { keys: ["?"], action: "Show this help" },
+    ...(reasons ?? []).slice(0, 9).map((reason, index) => ({
+      keys: [String(index + 1)],
+      action: `Exclude — ${reason.label}`,
+    })),
   ];
 
   return (

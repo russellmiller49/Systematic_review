@@ -50,6 +50,30 @@ export function ExcludeDialog({
     }
   }, [open, defaultNote]);
 
+  // E followed by a number is a fast two-key path; the same number also works directly
+  // from the queue. Do not intercept digits while the reviewer is typing a note.
+  useEffect(() => {
+    if (!open || !reasons || reasons.length === 0) return;
+    const listener = (event: KeyboardEvent) => {
+      if (!/^[1-9]$/.test(event.key)) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const reason = reasons[Number(event.key) - 1];
+      if (!reason) return;
+      event.preventDefault();
+      onConfirm(reason.id, note.trim());
+    };
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, [note, onConfirm, open, reasons]);
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!reasonId) return;
@@ -100,12 +124,16 @@ export function ExcludeDialog({
                 <option value="" disabled>
                   Select a reason…
                 </option>
-                {reasons.map((r) => (
+                {reasons.map((r, index) => (
                   <option key={r.id} value={r.id}>
+                    {index < 9 ? `${index + 1} · ` : ""}
                     {r.label}
                   </option>
                 ))}
               </Select>
+              <p className="text-xs text-muted-foreground">
+                Press 1–9 to choose and exclude immediately.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor={`${fieldPrefix}-exclusion-note`}>Note (optional)</Label>

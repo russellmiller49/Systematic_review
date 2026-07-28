@@ -13,6 +13,7 @@ import type { Ctx } from "@/server/auth/session";
 import { can, getMembership, requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
+import { screeningKeywordCitationWhere } from "@/server/services/screening-keywords";
 import * as studies from "@/server/services/studies";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,12 @@ export const listDecisionsQuerySchema = z.object({
   citationId: z.string().min(1),
 });
 
+export const queueQuerySchema = z.object({
+  keywordGroup: z.string().trim().min(1).max(200).optional(),
+});
+
+export type QueueQuery = z.infer<typeof queueQuerySchema>;
+
 export const listConflictsQuerySchema = z.object({
   stage: z.enum(["TITLE_ABSTRACT", "FULL_TEXT"]).optional(),
   status: z.enum(["OPEN", "RESOLVED", "VOIDED"]).optional(),
@@ -58,6 +65,7 @@ export const listConflictsQuerySchema = z.object({
 
 export const adminOverviewQuerySchema = z.object({
   q: z.string().trim().max(500).optional(),
+  keywordGroup: z.string().trim().min(1).max(200).optional(),
   status: z
     .enum([
       "ALL",
@@ -559,19 +567,30 @@ type QueueAssignment = Prisma.ScreeningAssignmentGetPayload<{
 // My pending work at a stage. Blind-safe by construction: the payload only ever contains
 // MY decision data — never other reviewers' decisions. AI suggestions (ScreeningSuggestion)
 // carry no reviewer data, so surfacing them here cannot leak votes.
-export async function getQueue(ctx: Ctx, projectId: string, stageId: string) {
+export async function getQueue(
+  ctx: Ctx,
+  projectId: string,
+  stageId: string,
+  query: QueueQuery = {},
+) {
   await requirePermission(ctx, projectId, "screening.decide");
   const stage = await getStageOr404(prisma, projectId, stageId);
+  const keywordWhere = await screeningKeywordCitationWhere(
+    prisma,
+    projectId,
+    query.keywordGroup,
+  );
+  const citationWhere: Prisma.CitationWhereInput = {
+    status: "ACTIVE",
+    // Settled citations (a stage result exists) leave the queue even if my own
+    // assignment is still PENDING (e.g. 3 assignees, reviewersPerCitation=2).
+    stageResults: { none: { stageId: stage.id } },
+  };
   const where: Prisma.ScreeningAssignmentWhereInput = {
     stageId: stage.id,
     reviewerId: ctx.userId,
     status: "PENDING",
-    citation: {
-      status: "ACTIVE",
-      // Settled citations (a stage result exists) leave the queue even if my own
-      // assignment is still PENDING (e.g. 3 assignees, reviewersPerCitation=2).
-      stageResults: { none: { stageId: stage.id } },
-    },
+    citation: keywordWhere ? { AND: [citationWhere, keywordWhere] } : citationWhere,
   };
 
   const total = await prisma.screeningAssignment.count({ where });
@@ -704,7 +723,7 @@ export async function getAdminOverview(
   await requirePermission(ctx, projectId, "screening.configure");
   const stage = await getStageOr404(prisma, projectId, stageId);
 
-  const eligibleWhere: Prisma.CitationWhereInput = {
+  let eligibleWhere: Prisma.CitationWhereInput = {
     projectId,
     status: "ACTIVE",
   };
@@ -722,6 +741,12 @@ export async function getAdminOverview(
     }
   }
   if (query.q) eligibleWhere.title = { contains: query.q, mode: "insensitive" };
+  const keywordWhere = await screeningKeywordCitationWhere(
+    prisma,
+    projectId,
+    query.keywordGroup,
+  );
+  if (keywordWhere) eligibleWhere = { AND: [eligibleWhere, keywordWhere] };
 
   const statusWhere = overviewStatusWhere(stage.id, query.status);
   const filteredWhere: Prisma.CitationWhereInput = statusWhere

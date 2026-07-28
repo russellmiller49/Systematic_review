@@ -68,24 +68,40 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   await dialog.getByRole("button", { name: /^assign$/i }).click();
   await expect(page.getByText(/assignments? created/i)).toBeVisible({ timeout: 30_000 });
 
-  // Keyboard-first: exclude one citation with a standard reason subgroup, then include
-  // the remaining two citations with the "i" shortcut.
+  // Add a shared highlight word, verify that it highlights + groups the queue, then return
+  // to all papers for the decision flow.
   await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({ timeout: 15_000 });
-  await page.keyboard.press("e");
-  const exclusionDialog = page.getByRole("dialog", {
-    name: /exclude at title & abstract/i,
+  await page.getByRole("button", { name: /manage keywords/i }).click();
+  const keywordManager = page.getByLabel("Keyword manager");
+  await keywordManager.getByLabel("Words or phrases").fill("randomized");
+  await keywordManager.getByRole("button", { name: /^add$/i }).click();
+  await expect(page.getByText("1 screening keyword added")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.getByLabel("Group papers by keyword").selectOption({ label: "Include — randomized" });
+  await expect(page.getByText("Citation 1 of 1", { exact: true })).toBeVisible({
+    timeout: 15_000,
   });
-  await expect(exclusionDialog).toBeVisible();
-  const reasonSelect = exclusionDialog.getByLabel(/exclusion reason subgroup/i);
-  await expect(reasonSelect.locator("option")).toHaveText([
-    "Select a reason…",
-    "Wrong population",
-    "Wrong intervention",
-    "Wrong publication type",
-    "Wrong outcomes",
-  ]);
-  await reasonSelect.selectOption({ label: "Wrong publication type" });
-  await exclusionDialog.getByRole("button", { name: /exclude citation/i }).click();
+  await expect(page.locator('mark[data-keyword-term="randomized"]').first()).toBeVisible();
+  await page.getByLabel("Group papers by keyword").selectOption({ label: "All papers" });
+  await expect(page.getByText("Citation 1 of 3", { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // The standard exclusion reasons are one-click buttons beside the decision controls.
+  // Their stable order maps to number keys, so 3 = Wrong publication type.
+  const quickReasons = page.getByRole("group", { name: "Quick exclusion reasons" });
+  await expect(
+    quickReasons.getByRole("button", { name: /Exclude: Wrong population \(shortcut 1\)/i }),
+  ).toBeVisible();
+  await expect(
+    quickReasons.getByRole("button", {
+      name: /Exclude: Wrong publication type \(shortcut 3\)/i,
+    }),
+  ).toBeVisible();
+  await page.locator('mark[data-keyword-term="randomized"]').first().click();
+  await page.keyboard.press("3");
+  await expect(page.getByText("Excluded — Wrong publication type")).toBeVisible();
 
   for (let i = 0; i < 2; i++) {
     await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({ timeout: 15_000 });

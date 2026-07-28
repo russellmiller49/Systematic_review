@@ -2,6 +2,19 @@
 
 export type StageType = "TITLE_ABSTRACT" | "FULL_TEXT";
 export type DecisionValue = "INCLUDE" | "EXCLUDE" | "MAYBE";
+export type ScreeningKeywordCategory = "INCLUDE" | "EXCLUDE";
+export const UNMATCHED_KEYWORD_GROUP = "__unmatched__";
+
+export interface ScreeningKeyword {
+  id: string;
+  projectId: string;
+  term: string;
+  normalizedTerm: string;
+  category: ScreeningKeywordCategory;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export const STAGE_LABELS: Record<StageType, string> = {
   TITLE_ABSTRACT: "Title & abstract",
