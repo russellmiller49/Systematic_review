@@ -39,7 +39,8 @@ export function ShortcutsDialog({
     },
     { keys: ["m"], action: "Maybe" },
     { keys: ["n"], action: "Toggle the note field" },
-    { keys: ["j", "→"], action: "Skip to the next citation" },
+    { keys: ["j", "→"], action: "Go to the next article" },
+    { keys: ["k", "←"], action: "Go to the previous article" },
     { keys: ["?"], action: "Show this help" },
     ...(reasons ?? []).slice(0, 9).map((reason, index) => ({
       keys: [String(index + 1)],

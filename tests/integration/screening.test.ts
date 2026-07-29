@@ -448,6 +448,116 @@ describe("screening service", () => {
     expect(ownerQueue.total).toBe(0);
   });
 
+  it("navigates my assigned corpus with overlapping screening-status filters", async () => {
+    const { reviewer1, reviewer2, project } = await createProjectWithTeam();
+    const stage = await makeStage(project.id, { reviewersPerCitation: 2 });
+    const undecided = await createTestCitation(project.id, {
+      title: "Untouched assigned article",
+    });
+    const oneReviewed = await createTestCitation(project.id, {
+      title: "One reviewer bronchoscopy article",
+    });
+    const decidedByMe = await createTestCitation(project.id, {
+      title: "My submitted article",
+    });
+    const included = await createTestCitation(project.id, {
+      title: "Final included article",
+    });
+    const excluded = await createTestCitation(project.id, {
+      title: "Final excluded article",
+    });
+    const notAssignedToMe = await createTestCitation(project.id, {
+      title: "Another reviewer's assignment",
+    });
+
+    for (const citation of [undecided, oneReviewed, decidedByMe, included, excluded]) {
+      await assign(stage.id, citation.id, reviewer1.id);
+      await assign(stage.id, citation.id, reviewer2.id);
+    }
+    await assign(stage.id, notAssignedToMe.id, reviewer2.id);
+
+    await screening.createDecision(ctx(reviewer2.id), project.id, stage.id, {
+      citationId: oneReviewed.id,
+      decision: "EXCLUDE",
+      notes: "co-reviewer-secret",
+    });
+    await screening.createDecision(ctx(reviewer1.id), project.id, stage.id, {
+      citationId: decidedByMe.id,
+      decision: "MAYBE",
+    });
+    for (const reviewer of [reviewer1, reviewer2]) {
+      await screening.createDecision(ctx(reviewer.id), project.id, stage.id, {
+        citationId: included.id,
+        decision: "INCLUDE",
+      });
+      await screening.createDecision(ctx(reviewer.id), project.id, stage.id, {
+        citationId: excluded.id,
+        decision: "EXCLUDE",
+      });
+    }
+    await screening.createDecision(ctx(reviewer2.id), project.id, stage.id, {
+      citationId: notAssignedToMe.id,
+      decision: "MAYBE",
+    });
+
+    const navigate = (input: Record<string, unknown>) =>
+      screening.getScreeningNavigator(
+        ctx(reviewer1.id),
+        project.id,
+        stage.id,
+        screening.screeningNavigatorQuerySchema.parse(input),
+      );
+
+    const all = await navigate({ status: "ALL", limit: 100 });
+    expect(all.summary).toEqual({
+      all: 5,
+      undecided: 2,
+      decided: 3,
+      oneReviewer: 2,
+      included: 1,
+      excluded: 1,
+    });
+    expect(all.items.map((item) => item.citation.id)).not.toContain(notAssignedToMe.id);
+
+    const undecidedView = await navigate({ status: "UNDECIDED" });
+    expect(new Set(undecidedView.items.map((item) => item.citation.id))).toEqual(
+      new Set([undecided.id, oneReviewed.id]),
+    );
+
+    const oneReviewerView = await navigate({ status: "ONE_REVIEWER" });
+    expect(new Set(oneReviewerView.items.map((item) => item.citation.id))).toEqual(
+      new Set([oneReviewed.id, decidedByMe.id]),
+    );
+    const waitingForMe = oneReviewerView.items.find(
+      (item) => item.citation.id === oneReviewed.id,
+    )!;
+    expect(waitingForMe).toMatchObject({
+      myDecision: null,
+      completedReviews: 1,
+      requiredReviews: 2,
+      canDecide: true,
+    });
+
+    const decidedView = await navigate({ status: "DECIDED" });
+    expect(new Set(decidedView.items.map((item) => item.citation.id))).toEqual(
+      new Set([decidedByMe.id, included.id, excluded.id]),
+    );
+    expect((await navigate({ status: "INCLUDED" })).items[0]!.citation.id).toBe(
+      included.id,
+    );
+    expect((await navigate({ status: "EXCLUDED" })).items[0]!.citation.id).toBe(
+      excluded.id,
+    );
+
+    const search = await navigate({ status: "ALL", q: "bronchoscopy" });
+    expect(search.pagination.total).toBe(1);
+    expect(search.items[0]!.citation.id).toBe(oneReviewed.id);
+
+    const paged = await navigate({ status: "ALL", limit: 2, page: 2 });
+    expect(paged.pagination).toMatchObject({ page: 2, limit: 2, total: 5, totalPages: 3 });
+    expect(paged.items).toHaveLength(2);
+  });
+
   // -------------------------------------------------------------------------
   // Decisions
   // -------------------------------------------------------------------------

@@ -58,6 +58,18 @@ export const queueQuerySchema = z.object({
 
 export type QueueQuery = z.infer<typeof queueQuerySchema>;
 
+export const screeningNavigatorQuerySchema = z.object({
+  q: z.string().trim().max(500).optional(),
+  keywordGroup: z.string().trim().min(1).max(200).optional(),
+  status: z
+    .enum(["ALL", "UNDECIDED", "DECIDED", "ONE_REVIEWER", "INCLUDED", "EXCLUDED"])
+    .default("UNDECIDED"),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+export type ScreeningNavigatorQuery = z.infer<typeof screeningNavigatorQuerySchema>;
+
 export const listConflictsQuerySchema = z.object({
   stage: z.enum(["TITLE_ABSTRACT", "FULL_TEXT"]).optional(),
   status: z.enum(["OPEN", "RESOLVED", "VOIDED"]).optional(),
@@ -659,6 +671,261 @@ export async function getQueue(
         assignmentId: a.id,
         citation: citationCard(a.citation),
         myDecision: decisionByCitation.get(a.citationId) ?? null,
+        aiSuggestion: suggestion
+          ? {
+              score: suggestion.score,
+              suggestedDecision: suggestion.suggestedDecision,
+              rationale: suggestion.rationale,
+            }
+          : null,
+      };
+    }),
+  };
+}
+
+function navigatorStatusWhere(
+  stageId: string,
+  reviewerId: string,
+  status: ScreeningNavigatorQuery["status"],
+  oneReviewerCitationIds: string[],
+): Prisma.CitationWhereInput | undefined {
+  switch (status) {
+    case "UNDECIDED":
+      return {
+        assignments: {
+          some: { stageId, reviewerId, status: "PENDING" },
+        },
+        stageResults: { none: { stageId } },
+      };
+    case "DECIDED":
+      return { decisions: { some: { stageId, reviewerId } } };
+    case "ONE_REVIEWER":
+      return {
+        id: { in: oneReviewerCitationIds },
+        stageResults: { none: { stageId } },
+      };
+    case "INCLUDED":
+      return { stageResults: { some: { stageId, outcome: "INCLUDE" } } };
+    case "EXCLUDED":
+      return { stageResults: { some: { stageId, outcome: "EXCLUDE" } } };
+    case "ALL":
+      return undefined;
+  }
+}
+
+// Blind-safe article navigator for a reviewer's assigned corpus. It exposes only the
+// reviewer's own decision, aggregate completion counts, and materialized final outcomes.
+// In particular, ONE_REVIEWER never carries the first reviewer's choice or identity.
+export async function getScreeningNavigator(
+  ctx: Ctx,
+  projectId: string,
+  stageId: string,
+  query: ScreeningNavigatorQuery,
+) {
+  await requirePermission(ctx, projectId, "screening.decide");
+  const stage = await getStageOr404(prisma, projectId, stageId);
+  const keywordWhere = await screeningKeywordCitationWhere(
+    prisma,
+    projectId,
+    query.keywordGroup,
+  );
+
+  const basePredicates: Prisma.CitationWhereInput[] = [
+    {
+      projectId,
+      status: "ACTIVE",
+      assignments: {
+        some: {
+          stageId: stage.id,
+          reviewerId: ctx.userId,
+          status: { not: "VOIDED" },
+        },
+      },
+    },
+  ];
+  if (query.q) {
+    basePredicates.push({
+      OR: [
+        { title: { contains: query.q, mode: "insensitive" } },
+        { abstract: { contains: query.q, mode: "insensitive" } },
+      ],
+    });
+  }
+  if (keywordWhere) basePredicates.push(keywordWhere);
+  const baseWhere: Prisma.CitationWhereInput = { AND: basePredicates };
+
+  // A "review" is a completed, still-live assignment. Use aggregate counts only; no
+  // reviewer identity or decision value crosses this endpoint.
+  const completedGroups = await prisma.screeningAssignment.groupBy({
+    by: ["citationId"],
+    where: {
+      stageId: stage.id,
+      status: "COMPLETED",
+      citation: { status: "ACTIVE" },
+    },
+    _count: { _all: true },
+  });
+  const oneReviewerCitationIds = completedGroups
+    .filter((group) => group._count._all === 1)
+    .map((group) => group.citationId);
+
+  const statusWhere = navigatorStatusWhere(
+    stage.id,
+    ctx.userId,
+    query.status,
+    oneReviewerCitationIds,
+  );
+  const filteredWhere: Prisma.CitationWhereInput = statusWhere
+    ? { AND: [baseWhere, statusWhere] }
+    : baseWhere;
+  const countFor = (status: Exclude<ScreeningNavigatorQuery["status"], "ALL">) =>
+    prisma.citation.count({
+      where: {
+        AND: [
+          baseWhere,
+          navigatorStatusWhere(
+            stage.id,
+            ctx.userId,
+            status,
+            oneReviewerCitationIds,
+          )!,
+        ],
+      },
+    });
+
+  const [total, all, undecided, decided, oneReviewer, included, excluded] =
+    await Promise.all([
+      prisma.citation.count({ where: filteredWhere }),
+      prisma.citation.count({ where: baseWhere }),
+      countFor("UNDECIDED"),
+      countFor("DECIDED"),
+      countFor("ONE_REVIEWER"),
+      countFor("INCLUDED"),
+      countFor("EXCLUDED"),
+    ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / query.limit));
+  const page = Math.min(query.page, totalPages);
+  const include = {
+    ...citationCardInclude,
+    assignments: {
+      where: {
+        stageId: stage.id,
+        reviewerId: ctx.userId,
+        status: { not: "VOIDED" as const },
+      },
+      select: { id: true, status: true },
+      take: 1,
+    },
+    decisions: {
+      where: { stageId: stage.id, reviewerId: ctx.userId },
+      select: { decision: true },
+      take: 1,
+    },
+    stageResults: {
+      where: { stageId: stage.id },
+      select: { outcome: true },
+      take: 1,
+    },
+    _count: {
+      select: {
+        assignments: {
+          where: { stageId: stage.id, status: "COMPLETED" as const },
+        },
+      },
+    },
+  } satisfies Prisma.CitationInclude;
+
+  type NavigatorCitation = Prisma.CitationGetPayload<{ include: typeof include }>;
+  let citations: NavigatorCitation[];
+  if (stage.aiRankingEnabled && query.status === "UNDECIDED") {
+    const slim = await prisma.citation.findMany({
+      where: filteredWhere,
+      select: { id: true, createdAt: true },
+    });
+    const scores = await prisma.screeningSuggestion.findMany({
+      where: { stageId: stage.id, citationId: { in: slim.map((citation) => citation.id) } },
+      select: { citationId: true, score: true },
+    });
+    const scoreByCitation = new Map(scores.map((score) => [score.citationId, score.score]));
+    slim.sort((a, b) => {
+      const scoreA = scoreByCitation.get(a.id);
+      const scoreB = scoreByCitation.get(b.id);
+      if (scoreA !== undefined && scoreB !== undefined && scoreA !== scoreB) {
+        return scoreB - scoreA;
+      }
+      if ((scoreA !== undefined) !== (scoreB !== undefined)) {
+        return scoreA !== undefined ? -1 : 1;
+      }
+      const timeDifference = a.createdAt.getTime() - b.createdAt.getTime();
+      if (timeDifference !== 0) return timeDifference;
+      return a.id.localeCompare(b.id);
+    });
+    const pageIds = slim
+      .slice((page - 1) * query.limit, page * query.limit)
+      .map((citation) => citation.id);
+    const loaded = await prisma.citation.findMany({
+      where: { id: { in: pageIds } },
+      include,
+    });
+    const byId = new Map(loaded.map((citation) => [citation.id, citation]));
+    citations = pageIds
+      .map((id) => byId.get(id))
+      .filter((citation): citation is NavigatorCitation => citation !== undefined);
+  } else {
+    citations = await prisma.citation.findMany({
+      where: filteredWhere,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      skip: (page - 1) * query.limit,
+      take: query.limit,
+      include,
+    });
+  }
+
+  const citationIds = citations.map((citation) => citation.id);
+  const suggestions = stage.aiShowScores
+    ? await prisma.screeningSuggestion.findMany({
+        where: { stageId: stage.id, citationId: { in: citationIds } },
+        select: {
+          citationId: true,
+          score: true,
+          suggestedDecision: true,
+          rationale: true,
+        },
+      })
+    : [];
+  const suggestionByCitation = new Map(
+    suggestions.map((suggestion) => [suggestion.citationId, suggestion]),
+  );
+
+  return {
+    stage: {
+      id: stage.id,
+      type: stage.type,
+      reviewersPerCitation: stage.reviewersPerCitation,
+      blinded: stage.blinded,
+    },
+    summary: { all, undecided, decided, oneReviewer, included, excluded },
+    pagination: {
+      page,
+      limit: query.limit,
+      total,
+      totalPages,
+    },
+    items: citations.map((citation) => {
+      const assignment = citation.assignments[0]!;
+      const decision = citation.decisions[0] ?? null;
+      const result = citation.stageResults[0]?.outcome ?? null;
+      const suggestion = suggestionByCitation.get(citation.id);
+      return {
+        assignmentId: assignment.id,
+        assignmentStatus: assignment.status,
+        citation: citationCard(citation),
+        myDecision: decision,
+        finalOutcome: result,
+        completedReviews: citation._count.assignments,
+        requiredReviews: stage.reviewersPerCitation,
+        canDecide: result === null,
         aiSuggestion: suggestion
           ? {
               score: suggestion.score,

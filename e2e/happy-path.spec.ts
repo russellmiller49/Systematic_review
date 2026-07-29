@@ -88,6 +88,27 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
     timeout: 15_000,
   });
 
+  // The left navigator exposes the requested status filters and searches the assigned corpus.
+  const articleNavigator = page.getByRole("complementary", { name: "Article navigator" });
+  await expect(articleNavigator).toBeVisible();
+  await expect(articleNavigator.getByLabel("Filter article status").locator("option")).toHaveText([
+    "Undecided (3)",
+    "One screener reviewed (0)",
+    "Decided by me (0)",
+    "Included (0)",
+    "Excluded (0)",
+    "All assigned articles (3)",
+  ]);
+  await articleNavigator.getByLabel("Search assigned articles").fill("Beta observational");
+  await articleNavigator.getByLabel("Search assigned articles").press("Enter");
+  await expect(page.getByText("Citation 1 of 1", { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+  await articleNavigator.getByRole("button", { name: "Clear article search" }).click();
+  await expect(page.getByText("Citation 1 of 3", { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+
   // The standard exclusion reasons are one-click buttons beside the decision controls.
   // Their stable order maps to number keys, so 3 = Wrong publication type.
   const quickReasons = page.getByRole("group", { name: "Quick exclusion reasons" });
@@ -102,13 +123,24 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   await page.locator('mark[data-keyword-term="randomized"]').first().click();
   await page.keyboard.press("3");
   await expect(page.getByText("Excluded — Wrong publication type")).toBeVisible();
+  await articleNavigator.getByLabel("Filter article status").selectOption("EXCLUDED");
+  await expect(
+    articleNavigator.getByRole("option", {
+      name: /Alpha randomized trial of endobronchial valves/i,
+    }),
+  ).toBeVisible({ timeout: 15_000 });
+  await articleNavigator.getByLabel("Filter article status").selectOption("UNDECIDED");
 
-  for (let i = 0; i < 2; i++) {
-    await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({ timeout: 15_000 });
+  for (const remaining of [2, 1]) {
+    await expect(
+      page.getByText(`Citation 1 of ${remaining}`, { exact: true }),
+    ).toBeVisible({ timeout: 15_000 });
     await page.keyboard.press("i");
   }
   await expect(page.getByText(/Queue clear/i)).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText("1 excluded", { exact: true })).toBeVisible();
+  await expect(
+    articleNavigator.getByLabel("Filter article status").locator('option[value="EXCLUDED"]'),
+  ).toHaveText("Excluded (1)");
 
   // 6. PRISMA reflects the imported + screened counts.
   await page.getByRole("link", { name: "PRISMA", exact: true }).click();

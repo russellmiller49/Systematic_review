@@ -1,16 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleHelp,
   EyeOff,
   Inbox,
   Keyboard,
   PartyPopper,
   RefreshCw,
-  SkipForward,
   Sparkles,
   StickyNote,
   TriangleAlert,
@@ -22,16 +23,18 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { EmptyState, Progress, Skeleton, Spinner } from "@/components/ui/misc";
+import { Alert, EmptyState, Progress, Skeleton, Spinner } from "@/components/ui/misc";
 import { CitationCard } from "@/components/citations/citation-card";
+import { ArticleNavigator } from "./article-navigator";
 import { ExcludeDialog } from "./exclude-dialog";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 import type {
   DecisionValue,
   ExclusionReasonOption,
-  QueueItem,
-  QueueResponse,
   ScreeningKeyword,
+  ScreeningNavigatorFilter,
+  ScreeningNavigatorItem,
+  ScreeningNavigatorResponse,
   ScreeningStageSummary,
 } from "./types";
 
@@ -46,6 +49,8 @@ const DECISION_BADGE: Record<DecisionValue, "include" | "exclude" | "maybe"> = {
   EXCLUDE: "exclude",
   MAYBE: "maybe",
 };
+
+const NAVIGATOR_PAGE_SIZE = 50;
 
 function KeyHint({ label, onColor = false }: { label: string; onColor?: boolean }) {
   return (
@@ -62,8 +67,8 @@ function KeyHint({ label, onColor = false }: { label: string; onColor?: boolean 
   );
 }
 
-// Keyboard-first queue for one screening stage. Optimistically advances on decide and
-// POSTs in the background; a failed POST re-inserts the citation at the front.
+// Keyboard-first reviewer workspace for one stage. The left navigator contains only the
+// current reviewer's assigned corpus and exposes aggregate progress, never co-reviewer votes.
 export function StageQueue({
   projectId,
   stage,
@@ -77,17 +82,17 @@ export function StageQueue({
   highlightsEnabled: boolean;
   keywordGroup: string;
 }) {
-  const queueUrl =
-    `/api/projects/${projectId}/screening/stages/${stage.id}/queue` +
-    (keywordGroup === "ALL"
-      ? ""
-      : `?keywordGroup=${encodeURIComponent(keywordGroup)}`);
   const decisionsUrl = `/api/projects/${projectId}/screening/stages/${stage.id}/decisions`;
 
-  const [items, setItems] = useState<QueueItem[] | null>(null);
-  // My pending assignments beyond the fetched page (the queue returns up to 25 at a time).
-  const [remainingBeyond, setRemainingBeyond] = useState(0);
-  const [queueError, setQueueError] = useState(false);
+  const [data, setData] = useState<ScreeningNavigatorResponse | null>(null);
+  const [filter, setFilter] = useState<ScreeningNavigatorFilter>("UNDECIDED");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [navigatorError, setNavigatorError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [tally, setTally] = useState<Record<DecisionValue, number>>({
     INCLUDE: 0,
     EXCLUDE: 0,
@@ -100,73 +105,96 @@ export function StageQueue({
   const [inFlight, setInFlight] = useState(0);
   const [reasons, setReasons] = useState<ExclusionReasonOption[] | null>(null);
 
-  // Citation ids decided this session (in flight or saved) — keeps refetches from
-  // re-adding citations the server may still list as pending.
+  // Citations currently syncing are omitted from a stale UNDECIDED response.
   const handledRef = useRef<Set<string>>(new Set());
   const inFlightRef = useRef(0);
-  const loadingMoreRef = useRef(false);
+  const loadGenerationRef = useRef(0);
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // ----- queue loading -------------------------------------------------------
+  // ----- navigator loading ---------------------------------------------------
 
   useEffect(() => {
-    let cancelled = false;
-    api<QueueResponse>(queueUrl)
-      .then((resp) => {
-        if (cancelled) return;
-        setItems(resp.items);
-        setRemainingBeyond(Math.max(0, resp.total - resp.items.length));
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        toast.error(err instanceof ApiError ? err.message : "Failed to load screening queue");
-        setItems([]);
-        setQueueError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [queueUrl]);
-
-  // Appends the next queue page, skipping citations already shown or decided here.
-  const fetchMore = useCallback(async () => {
-    const resp = await api<QueueResponse>(queueUrl);
-    setItems((prev) => {
-      const current = prev ?? [];
-      const currentIds = new Set(current.map((i) => i.citation.id));
-      const fresh = resp.items.filter(
-        (i) => !currentIds.has(i.citation.id) && !handledRef.current.has(i.citation.id),
-      );
-      return [...current, ...fresh];
+    const generation = ++loadGenerationRef.current;
+    setLoading(true);
+    setNavigatorError(null);
+    const params = new URLSearchParams({
+      status: filter,
+      page: String(page),
+      limit: String(NAVIGATOR_PAGE_SIZE),
     });
-    setRemainingBeyond(Math.max(0, resp.total - resp.items.length));
-  }, [queueUrl]);
+    if (query) params.set("q", query);
+    if (keywordGroup !== "ALL") params.set("keywordGroup", keywordGroup);
 
-  // Prefetch the next page as the local queue runs low.
-  useEffect(() => {
-    if (items === null || items.length > 5 || remainingBeyond <= 0) return;
-    if (loadingMoreRef.current) return;
-    loadingMoreRef.current = true;
-    fetchMore()
-      .then(() => setQueueError(false))
-      .catch(() => setQueueError(true))
-      .finally(() => {
-        loadingMoreRef.current = false;
-      });
-  }, [items, remainingBeyond, fetchMore]);
-
-  function retryLoad() {
-    if (loadingMoreRef.current) return;
-    loadingMoreRef.current = true;
-    setQueueError(false);
-    fetchMore()
-      .catch((err) => {
-        toast.error(err instanceof ApiError ? err.message : "Failed to load screening queue");
-        setQueueError(true);
+    api<ScreeningNavigatorResponse>(
+      `/api/projects/${projectId}/screening/stages/${stage.id}/navigator?${params}`,
+    )
+      .then((response) => {
+        if (generation !== loadGenerationRef.current) return;
+        const items =
+          filter === "UNDECIDED"
+            ? response.items.filter(
+                (item) => !handledRef.current.has(item.citation.id),
+              )
+            : response.items;
+        const next = { ...response, items };
+        setData(next);
+        if (response.pagination.page !== page) {
+          setPage(response.pagination.page);
+        }
+        setSelectedId((current) =>
+          items.some((item) => item.citation.id === current)
+            ? current
+            : (items[0]?.citation.id ?? null),
+        );
+      })
+      .catch((error) => {
+        if (generation !== loadGenerationRef.current) return;
+        const message =
+          error instanceof ApiError
+            ? error.message
+            : "Failed to load the screening article list";
+        setNavigatorError(message);
+        if (data === null) toast.error(message);
       })
       .finally(() => {
-        loadingMoreRef.current = false;
+        if (generation === loadGenerationRef.current) setLoading(false);
       });
+    // `reloadKey` deliberately forces a refresh after a decision or explicit retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, keywordGroup, page, projectId, query, reloadKey, stage.id]);
+
+  function chooseFilter(next: ScreeningNavigatorFilter) {
+    setFilter(next);
+    setPage(1);
+    setSelectedId(null);
+    setNote("");
+    setNoteOpen(false);
+  }
+
+  function search() {
+    setQuery(searchDraft.trim());
+    setPage(1);
+    setSelectedId(null);
+  }
+
+  function clearSearch() {
+    setSearchDraft("");
+    setQuery("");
+    setPage(1);
+    setSelectedId(null);
+  }
+
+  function selectArticle(citationId: string) {
+    setSelectedId(citationId);
+    setNote("");
+    setNoteOpen(false);
+  }
+
+  function changePage(nextPage: number) {
+    setPage(nextPage);
+    setSelectedId(null);
+    setNote("");
+    setNoteOpen(false);
   }
 
   // Excludes at either stage use the project's applicable reason subgroups.
@@ -175,8 +203,8 @@ export function StageQueue({
     api<ExclusionReasonOption[]>(
       `/api/projects/${projectId}/exclusion-reasons?stage=${stage.type}`,
     )
-      .then((r) => {
-        if (!cancelled) setReasons(r);
+      .then((response) => {
+        if (!cancelled) setReasons(response);
       })
       .catch(() => {
         if (!cancelled) setReasons([]);
@@ -186,23 +214,84 @@ export function StageQueue({
     };
   }, [projectId, stage.type]);
 
+  const currentIndex =
+    data?.items.findIndex((item) => item.citation.id === selectedId) ?? -1;
+  const current = currentIndex >= 0 ? (data?.items[currentIndex] ?? null) : null;
+
+  function navigateRelative(delta: -1 | 1) {
+    if (!data || data.items.length === 0) return;
+    const index = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (index + delta + data.items.length) % data.items.length;
+    const next = data.items[nextIndex];
+    if (next) selectArticle(next.citation.id);
+  }
+
   // ----- deciding ------------------------------------------------------------
 
   function submitDecision(
-    item: QueueItem,
+    item: ScreeningNavigatorItem,
     decision: DecisionValue,
     exclusionReasonId: string | null,
     noteText: string | null,
     exclusionReasonLabel?: string,
   ) {
-    // Optimistic advance: drop the citation locally and sync in the background.
+    if (!item.canDecide || handledRef.current.has(item.citation.id)) return;
+
+    const itemIndex =
+      data?.items.findIndex((row) => row.citation.id === item.citation.id) ?? -1;
+    const nextSelection =
+      data?.items[itemIndex + 1]?.citation.id ??
+      data?.items[itemIndex - 1]?.citation.id ??
+      null;
+
     handledRef.current.add(item.citation.id);
-    setItems((prev) => (prev ?? []).filter((q) => q.assignmentId !== item.assignmentId));
-    setTally((t) => ({ ...t, [decision]: t[decision] + 1 }));
+    setTally((currentTally) => ({
+      ...currentTally,
+      [decision]: currentTally[decision] + 1,
+    }));
     setNote("");
+    setNoteOpen(false);
+    setSelectedId(nextSelection);
+    setData((previous) => {
+      if (!previous) return previous;
+      if (filter === "UNDECIDED") {
+        const total = Math.max(0, previous.pagination.total - 1);
+        return {
+          ...previous,
+          summary: {
+            ...previous.summary,
+            undecided: Math.max(0, previous.summary.undecided - 1),
+            decided: previous.summary.decided + (item.myDecision ? 0 : 1),
+          },
+          pagination: {
+            ...previous.pagination,
+            total,
+            totalPages: Math.max(1, Math.ceil(total / previous.pagination.limit)),
+          },
+          items: previous.items.filter(
+            (row) => row.citation.id !== item.citation.id,
+          ),
+        };
+      }
+      return {
+        ...previous,
+        items: previous.items.map((row) =>
+          row.citation.id === item.citation.id
+            ? {
+                ...row,
+                assignmentStatus: "COMPLETED",
+                myDecision: { decision },
+                completedReviews: row.myDecision
+                  ? row.completedReviews
+                  : Math.min(row.requiredReviews, row.completedReviews + 1),
+              }
+            : row,
+        ),
+      };
+    });
 
     inFlightRef.current += 1;
-    setInFlight((n) => n + 1);
+    setInFlight((count) => count + 1);
     const body: {
       citationId: string;
       decision: DecisionValue;
@@ -220,77 +309,68 @@ export function StageQueue({
             : DECISION_TOAST[decision],
           { duration: 1500 },
         );
-      })
-      .catch((err) => {
-        // The decision did NOT save — put the citation back at the front of the queue.
-        toast.error(err instanceof ApiError ? err.message : "Failed to save decision");
         handledRef.current.delete(item.citation.id);
-        setItems((prev) => [item, ...(prev ?? [])]);
-        setTally((t) => ({ ...t, [decision]: Math.max(0, t[decision] - 1) }));
+        setReloadKey((key) => key + 1);
+      })
+      .catch((error) => {
+        handledRef.current.delete(item.citation.id);
+        toast.error(error instanceof ApiError ? error.message : "Failed to save decision");
+        setSelectedId(item.citation.id);
+        setTally((currentTally) => ({
+          ...currentTally,
+          [decision]: Math.max(0, currentTally[decision] - 1),
+        }));
+        setReloadKey((key) => key + 1);
       })
       .finally(() => {
         inFlightRef.current -= 1;
-        setInFlight((n) => n - 1);
+        setInFlight((count) => count - 1);
       });
   }
 
   function handleDecision(decision: DecisionValue) {
-    const current = items?.[0];
-    if (!current) return;
+    if (!current?.canDecide) return;
     if (decision === "EXCLUDE") {
-      // Collect the exclusion subgroup before advancing the queue.
       setExcludeOpen(true);
       return;
     }
     const trimmed = note.trim();
-    submitDecision(current, decision, null, trimmed ? trimmed : null);
+    submitDecision(current, decision, null, trimmed || null);
   }
 
   function confirmExclude(exclusionReasonId: string, noteText: string) {
-    const current = items?.[0];
     setExcludeOpen(false);
-    if (!current) return;
+    if (!current?.canDecide) return;
     const reason = reasons?.find((item) => item.id === exclusionReasonId);
     submitDecision(
       current,
       "EXCLUDE",
       exclusionReasonId,
-      noteText ? noteText : null,
+      noteText || null,
       reason?.label,
     );
   }
 
   function quickExclude(reason: ExclusionReasonOption) {
-    const current = items?.[0];
-    if (!current) return;
+    if (!current?.canDecide) return;
     const trimmed = note.trim();
     submitDecision(
       current,
       "EXCLUDE",
       reason.id,
-      trimmed ? trimmed : null,
+      trimmed || null,
       reason.label,
     );
   }
 
-  function handleSkip() {
-    setItems((prev) => {
-      if (!prev || prev.length < 2) return prev;
-      const head = prev[0];
-      if (!head) return prev;
-      return [...prev.slice(1), head];
-    });
-    setNote("");
-  }
+  // ----- keyboard shortcuts -------------------------------------------------
 
-  // ----- keyboard shortcuts ---------------------------------------------------
-
-  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   useEffect(() => {
-    keyHandlerRef.current = (e: KeyboardEvent) => {
+    keyHandlerRef.current = (event: KeyboardEvent) => {
       if (excludeOpen || helpOpen) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target;
       if (
         target instanceof HTMLElement &&
         (target.tagName === "INPUT" ||
@@ -300,14 +380,14 @@ export function StageQueue({
       ) {
         return;
       }
-      if (/^[1-9]$/.test(e.key)) {
-        const reason = reasons?.[Number(e.key) - 1];
+      if (/^[1-9]$/.test(event.key) && current?.canDecide) {
+        const reason = reasons?.[Number(event.key) - 1];
         if (!reason) return;
         quickExclude(reason);
-        e.preventDefault();
+        event.preventDefault();
         return;
       }
-      switch (e.key) {
+      switch (event.key) {
         case "i":
         case "I":
           handleDecision("INCLUDE");
@@ -322,12 +402,18 @@ export function StageQueue({
           break;
         case "n":
         case "N":
-          setNoteOpen((v) => !v);
+          if (!current?.canDecide) return;
+          setNoteOpen((value) => !value);
           break;
         case "j":
         case "J":
         case "ArrowRight":
-          handleSkip();
+          navigateRelative(1);
+          break;
+        case "k":
+        case "K":
+        case "ArrowLeft":
+          navigateRelative(-1);
           break;
         case "?":
           setHelpOpen(true);
@@ -335,20 +421,19 @@ export function StageQueue({
         default:
           return;
       }
-      e.preventDefault();
+      event.preventDefault();
     };
   });
 
   useEffect(() => {
-    const listener = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    const listener = (event: KeyboardEvent) => keyHandlerRef.current(event);
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
   }, []);
 
-  // Warn before leaving while decisions are still syncing.
   useEffect(() => {
-    const handler = (e: BeforeUnloadEvent) => {
-      if (inFlightRef.current > 0) e.preventDefault();
+    const handler = (event: BeforeUnloadEvent) => {
+      if (inFlightRef.current > 0) event.preventDefault();
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
@@ -358,237 +443,370 @@ export function StageQueue({
     if (noteOpen) noteRef.current?.focus();
   }, [noteOpen]);
 
-  // ----- render ---------------------------------------------------------------
+  // ----- render -------------------------------------------------------------
 
-  if (items === null) {
+  if (data === null && loading) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
-        <Skeleton className="h-6 w-48" />
-        <Skeleton className="h-1.5 w-full" />
-        <Skeleton className="h-80" />
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)]">
+        <Skeleton className="h-[34rem] w-full" />
+        <div className="space-y-4">
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-1.5 w-full" />
+          <Skeleton className="h-96 w-full" />
+        </div>
       </div>
     );
   }
 
+  if (data === null && navigatorError) {
+    return (
+      <EmptyState
+        icon={TriangleAlert}
+        title="Couldn't load your article list"
+        description={navigatorError}
+        action={
+          <Button variant="outline" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
+            <RefreshCw /> Try again
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (data === null) return null;
+
   const done = tally.INCLUDE + tally.EXCLUDE + tally.MAYBE;
-  const remaining = items.length + remainingBeyond;
-  const sessionTotal = done + remaining;
-  const current = items[0];
+  const articlePosition =
+    currentIndex >= 0
+      ? (data.pagination.page - 1) * data.pagination.limit + currentIndex + 1
+      : 0;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      {sessionTotal > 0 && (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="font-medium tabular-nums">
-                {current || remaining > 0
-                  ? `Citation ${Math.min(done + 1, sessionTotal)} of ${sessionTotal}`
-                  : `${done} screened this session`}
-              </span>
-              {inFlight > 0 && (
-                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                  <Spinner className="h-3 w-3" /> saving…
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Badge variant="include">{tally.INCLUDE} included</Badge>
-              <Badge variant="exclude">{tally.EXCLUDE} excluded</Badge>
-              <Badge variant="maybe">{tally.MAYBE} maybe</Badge>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                aria-label="Keyboard shortcuts"
-                title="Keyboard shortcuts (?)"
-                onClick={() => setHelpOpen(true)}
-              >
-                <Keyboard />
-              </Button>
-            </div>
-          </div>
-          <Progress value={sessionTotal > 0 ? (done / sessionTotal) * 100 : 0} className="h-1.5" />
-        </>
-      )}
+    <>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)]">
+        <ArticleNavigator
+          data={data}
+          filter={filter}
+          selectedId={selectedId}
+          searchDraft={searchDraft}
+          keywords={keywords}
+          highlightsEnabled={highlightsEnabled}
+          loading={loading}
+          onFilterChange={chooseFilter}
+          onSelect={selectArticle}
+          onSearchDraftChange={setSearchDraft}
+          onSearch={search}
+          onClearSearch={clearSearch}
+          onPageChange={changePage}
+        />
 
-      {current ? (
-        <>
-          <CitationCard
-            citation={current.citation}
-            clampAbstract={false}
-            screeningKeywords={keywords}
-            highlightScreeningKeywords={highlightsEnabled}
-          >
-            <div className="space-y-3">
-              {current.aiSuggestion && (
-                <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="font-medium tabular-nums">
-                      AI likelihood: {current.aiSuggestion.score}/100
-                    </span>
-                    <Badge variant={DECISION_BADGE[current.aiSuggestion.suggestedDecision]}>
-                      suggests {current.aiSuggestion.suggestedDecision.toLowerCase()}
-                    </Badge>
-                  </div>
-                  <details className="mt-1">
-                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                      Rationale
-                    </summary>
-                    <p className="mt-1 text-muted-foreground">{current.aiSuggestion.rationale}</p>
-                  </details>
-                </div>
-              )}
-              {current.myDecision && (
-                <Badge variant={DECISION_BADGE[current.myDecision.decision]}>
-                  Your earlier decision: {current.myDecision.decision.toLowerCase()}
-                </Badge>
-              )}
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                <Button variant="include" size="lg" onClick={() => handleDecision("INCLUDE")}>
-                  <Check /> Include <KeyHint label="i" onColor />
-                </Button>
-                <Button variant="exclude" size="lg" onClick={() => handleDecision("EXCLUDE")}>
-                  <X /> Exclude <KeyHint label="e" onColor />
-                </Button>
-                <Button variant="maybe" size="lg" onClick={() => handleDecision("MAYBE")}>
-                  <CircleHelp /> Maybe <KeyHint label="m" onColor />
-                </Button>
-              </div>
-              {reasons && reasons.length > 0 && (
-                <div
-                  role="group"
-                  aria-label="Quick exclusion reasons"
-                  className="rounded-md border border-exclude/20 bg-exclude-muted/50 p-2.5"
-                >
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
-                    <p className="text-xs font-medium text-exclude">
-                      Quick exclude by reason
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      One click, or press 1–9
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {reasons.slice(0, 9).map((reason, index) => (
-                      <Button
-                        key={reason.id}
-                        variant="outline"
-                        size="sm"
-                        className="border-exclude/30 text-exclude hover:bg-exclude-muted"
-                        aria-label={`Exclude: ${reason.label} (shortcut ${index + 1})`}
-                        onClick={() => quickExclude(reason)}
-                      >
-                        <X /> {reason.label} <KeyHint label={String(index + 1)} />
-                      </Button>
-                    ))}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground"
-                      onClick={() => setExcludeOpen(true)}
-                    >
-                      {reasons.length > 9 ? "All reasons + note" : "Reason + note"}{" "}
-                      <KeyHint label="e" />
-                    </Button>
-                  </div>
-                </div>
-              )}
+        <section aria-label="Selected screening article" className="min-w-0 space-y-4">
+          {data.pagination.total > 0 && (
+            <>
               <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-medium tabular-nums">
+                    Citation {articlePosition || 1} of {data.pagination.total}
+                  </span>
+                  {inFlight > 0 && (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Spinner className="h-3 w-3" /> saving…
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="include">{tally.INCLUDE} included</Badge>
+                  <Badge variant="exclude">{tally.EXCLUDE} excluded</Badge>
+                  <Badge variant="maybe">{tally.MAYBE} maybe</Badge>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label="Previous article"
+                    title="Previous article (K or left arrow)"
+                    disabled={data.items.length < 2}
+                    onClick={() => navigateRelative(-1)}
+                  >
+                    <ChevronLeft />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label="Next article"
+                    title="Next article (J or right arrow)"
+                    disabled={data.items.length < 2}
+                    onClick={() => navigateRelative(1)}
+                  >
+                    <ChevronRight />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label="Keyboard shortcuts"
+                    title="Keyboard shortcuts (?)"
+                    onClick={() => setHelpOpen(true)}
+                  >
+                    <Keyboard />
+                  </Button>
+                </div>
+              </div>
+              <Progress
+                value={
+                  data.pagination.total > 0
+                    ? (articlePosition / data.pagination.total) * 100
+                    : 0
+                }
+                className="h-1.5"
+              />
+            </>
+          )}
+
+          {navigatorError && (
+            <Alert variant="error">
+              <span className="flex items-center justify-between gap-3">
+                <span>{navigatorError}</span>
                 <Button
                   variant="outline"
                   size="sm"
-                  aria-pressed={noteOpen}
-                  className={cn(noteOpen && "bg-muted")}
-                  onClick={() => setNoteOpen((v) => !v)}
+                  onClick={() => setReloadKey((key) => key + 1)}
                 >
-                  <StickyNote /> Note <KeyHint label="n" />
+                  <RefreshCw /> Retry
                 </Button>
-                <Button variant="ghost" size="sm" onClick={handleSkip}>
-                  <SkipForward /> Skip <KeyHint label="j" />
-                </Button>
-              </div>
-              {noteOpen && (
-                <div className="space-y-1">
-                  <Textarea
-                    ref={noteRef}
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") e.currentTarget.blur();
-                    }}
-                    placeholder="Optional note, saved with your next decision on this citation…"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Press Esc to leave the note and return to shortcuts.
-                  </p>
-                </div>
-              )}
-            </div>
-          </CitationCard>
-          {stage.blinded && (
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <EyeOff className="h-3.5 w-3.5 shrink-0" />
-              Blinded screening — co-reviewer decisions stay hidden until consensus or conflict.
-            </p>
+              </span>
+            </Alert>
           )}
-        </>
-      ) : remaining > 0 ? (
-        queueError ? (
-          <EmptyState
-            icon={TriangleAlert}
-            title="Couldn't load the rest of your queue"
-            description="Your earlier decisions are saved — retry to fetch the remaining citations."
-            action={
-              <Button variant="outline" size="sm" onClick={retryLoad}>
-                <RefreshCw /> Try again
-              </Button>
-            }
-          />
-        ) : (
-          <div className="flex items-center justify-center gap-2 rounded-lg border border-border bg-card py-14 text-sm text-muted-foreground">
-            <Spinner /> Loading more citations…
-          </div>
-        )
-      ) : queueError && done === 0 ? (
-        <EmptyState
-          icon={TriangleAlert}
-          title="Couldn't load your queue"
-          description="Something went wrong while fetching your assigned citations."
-          action={
-            <Button variant="outline" size="sm" onClick={retryLoad}>
-              <RefreshCw /> Try again
-            </Button>
-          }
-        />
-      ) : (
-        <EmptyState
-          icon={done > 0 ? PartyPopper : Inbox}
-          title={done > 0 ? "Queue clear — nice work" : "No citations waiting for you"}
-          description={
-            done > 0
-              ? `You screened ${done} citation${done === 1 ? "" : "s"} this session. Disagreements, if any, move to adjudication.`
-              : "Nothing is assigned to you at this stage right now. Work appears here after an Owner or Admin assigns citations to you."
-          }
-          action={
-            <div className="flex items-center gap-2">
-              <Link
-                href={`/projects/${projectId}/conflicts`}
-                className={buttonVariants({ variant: "outline", size: "sm" })}
+
+          {current ? (
+            <>
+              <CitationCard
+                citation={current.citation}
+                clampAbstract={false}
+                screeningKeywords={keywords}
+                highlightScreeningKeywords={highlightsEnabled}
               >
-                Review conflicts
-              </Link>
-              <Link
-                href={`/projects/${projectId}`}
-                className={buttonVariants({ variant: "outline", size: "sm" })}
-              >
-                Project dashboard
-              </Link>
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {current.finalOutcome && (
+                        <Badge
+                          variant={
+                            current.finalOutcome === "INCLUDE" ? "include" : "exclude"
+                          }
+                        >
+                          Final outcome: {current.finalOutcome.toLowerCase()}
+                        </Badge>
+                      )}
+                      {current.myDecision && (
+                        <Badge variant={DECISION_BADGE[current.myDecision.decision]}>
+                          Your decision: {current.myDecision.decision.toLowerCase()}
+                        </Badge>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {current.completedReviews} of {current.requiredReviews} required review
+                      {current.requiredReviews === 1 ? "" : "s"} submitted
+                    </span>
+                  </div>
+
+                  {current.aiSuggestion && (
+                    <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="font-medium tabular-nums">
+                          AI likelihood: {current.aiSuggestion.score}/100
+                        </span>
+                        <Badge
+                          variant={
+                            DECISION_BADGE[current.aiSuggestion.suggestedDecision]
+                          }
+                        >
+                          suggests{" "}
+                          {current.aiSuggestion.suggestedDecision.toLowerCase()}
+                        </Badge>
+                      </div>
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                          Rationale
+                        </summary>
+                        <p className="mt-1 text-muted-foreground">
+                          {current.aiSuggestion.rationale}
+                        </p>
+                      </details>
+                    </div>
+                  )}
+
+                  {current.canDecide ? (
+                    <>
+                      {current.myDecision && (
+                        <p className="text-xs text-muted-foreground">
+                          You can revise your decision until this citation receives a final
+                          stage outcome.
+                        </p>
+                      )}
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <Button
+                          variant="include"
+                          size="lg"
+                          onClick={() => handleDecision("INCLUDE")}
+                        >
+                          <Check /> Include <KeyHint label="i" onColor />
+                        </Button>
+                        <Button
+                          variant="exclude"
+                          size="lg"
+                          onClick={() => handleDecision("EXCLUDE")}
+                        >
+                          <X /> Exclude <KeyHint label="e" onColor />
+                        </Button>
+                        <Button
+                          variant="maybe"
+                          size="lg"
+                          onClick={() => handleDecision("MAYBE")}
+                        >
+                          <CircleHelp /> Maybe <KeyHint label="m" onColor />
+                        </Button>
+                      </div>
+
+                      {reasons && reasons.length > 0 && (
+                        <div
+                          role="group"
+                          aria-label="Quick exclusion reasons"
+                          className="rounded-md border border-exclude/20 bg-exclude-muted/50 p-2.5"
+                        >
+                          <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
+                            <p className="text-xs font-medium text-exclude">
+                              Quick exclude by reason
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              One click, or press 1–9
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {reasons.slice(0, 9).map((reason, index) => (
+                              <Button
+                                key={reason.id}
+                                variant="outline"
+                                size="sm"
+                                className="border-exclude/30 text-exclude hover:bg-exclude-muted"
+                                aria-label={`Exclude: ${reason.label} (shortcut ${index + 1})`}
+                                onClick={() => quickExclude(reason)}
+                              >
+                                <X /> {reason.label}{" "}
+                                <KeyHint label={String(index + 1)} />
+                              </Button>
+                            ))}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground"
+                              onClick={() => setExcludeOpen(true)}
+                            >
+                              {reasons.length > 9
+                                ? "All reasons + note"
+                                : "Reason + note"}{" "}
+                              <KeyHint label="e" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-pressed={noteOpen}
+                          className={cn(noteOpen && "bg-muted")}
+                          onClick={() => setNoteOpen((value) => !value)}
+                        >
+                          <StickyNote /> Note <KeyHint label="n" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigateRelative(1)}
+                        >
+                          Next article <KeyHint label="j" />
+                        </Button>
+                      </div>
+
+                      {noteOpen && (
+                        <div className="space-y-1">
+                          <Textarea
+                            ref={noteRef}
+                            value={note}
+                            onChange={(event) => setNote(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Escape") event.currentTarget.blur();
+                            }}
+                            placeholder="Optional note, saved with your next decision on this citation…"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Press Esc to leave the note and return to shortcuts.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <Alert>
+                      This citation has a final{" "}
+                      <strong>{current.finalOutcome?.toLowerCase()}</strong> outcome.
+                      Screening decisions are locked unless an authorized user reopens the
+                      stage result.
+                    </Alert>
+                  )}
+                </div>
+              </CitationCard>
+
+              {stage.blinded && (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <EyeOff className="h-3.5 w-3.5 shrink-0" />
+                  Blinded screening — the article list shows review counts, never a
+                  co-reviewer&apos;s choice.
+                </p>
+              )}
+            </>
+          ) : loading || inFlight > 0 ? (
+            <div className="flex items-center justify-center gap-2 rounded-lg border border-border bg-card py-14 text-sm text-muted-foreground">
+              <Spinner /> Updating article list…
             </div>
-          }
-        />
-      )}
+          ) : (
+            <EmptyState
+              icon={done > 0 ? PartyPopper : Inbox}
+              title={
+                filter === "UNDECIDED"
+                  ? done > 0
+                    ? "Queue clear — nice work"
+                    : "No undecided articles in this view"
+                  : "No articles match this view"
+              }
+              description={
+                filter === "UNDECIDED"
+                  ? done > 0
+                    ? `You screened ${done} citation${done === 1 ? "" : "s"} this session.`
+                    : "Nothing assigned to you needs a decision at this stage right now."
+                  : "Choose another article status or clear the search to keep browsing."
+              }
+              action={
+                <div className="flex items-center gap-2">
+                  {filter !== "ALL" && (
+                    <Button variant="outline" size="sm" onClick={() => chooseFilter("ALL")}>
+                      Show all assigned
+                    </Button>
+                  )}
+                  <Link
+                    href={`/projects/${projectId}/conflicts`}
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                  >
+                    Review conflicts
+                  </Link>
+                </div>
+              }
+            />
+          )}
+        </section>
+      </div>
 
       <ExcludeDialog
         open={excludeOpen}
@@ -605,6 +823,6 @@ export function StageQueue({
         stageType={stage.type}
         reasons={reasons}
       />
-    </div>
+    </>
   );
 }

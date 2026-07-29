@@ -190,6 +190,39 @@ describe("screening blinding", () => {
     expect(serialized).not.toContain("B-queue-secret");
   });
 
+  it("the article navigator exposes one-reviewer progress without the reviewer's choice", async () => {
+    const { A, B, project, stage, citation } = await blindedSetup();
+    await screening.createDecision(ctx(B.id), project.id, stage.id, {
+      citationId: citation.id,
+      decision: "EXCLUDE",
+      notes: "B-navigator-secret",
+    });
+    const bDecision = await prisma.screeningDecision.findFirstOrThrow({
+      where: { stageId: stage.id, citationId: citation.id, reviewerId: B.id },
+    });
+
+    const view = await screening.getScreeningNavigator(
+      ctx(A.id),
+      project.id,
+      stage.id,
+      screening.screeningNavigatorQuerySchema.parse({ status: "ONE_REVIEWER" }),
+    );
+    expect(view.summary.oneReviewer).toBe(1);
+    expect(view.items).toHaveLength(1);
+    expect(view.items[0]).toMatchObject({
+      myDecision: null,
+      completedReviews: 1,
+      requiredReviews: 2,
+      canDecide: true,
+    });
+
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain(bDecision.id);
+    expect(serialized).not.toContain(B.id);
+    expect(serialized).not.toContain("B-navigator-secret");
+    expect(serialized).not.toContain('"decision":"EXCLUDE"');
+  });
+
   it("an unblinded stage (blinded=false) shows co-reviewer decisions immediately", async () => {
     const team = await createProjectWithTeam();
     const stage = await prisma.screeningStage.create({

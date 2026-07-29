@@ -131,6 +131,50 @@ export interface QueueResponse {
   items: QueueItem[];
 }
 
+export type ScreeningNavigatorFilter =
+  | "ALL"
+  | "UNDECIDED"
+  | "DECIDED"
+  | "ONE_REVIEWER"
+  | "INCLUDED"
+  | "EXCLUDED";
+
+export interface ScreeningNavigatorItem {
+  assignmentId: string;
+  assignmentStatus: "PENDING" | "COMPLETED";
+  citation: QueueCitation;
+  myDecision: { decision: DecisionValue } | null;
+  finalOutcome: "INCLUDE" | "EXCLUDE" | null;
+  completedReviews: number;
+  requiredReviews: number;
+  canDecide: boolean;
+  aiSuggestion: AiSuggestionSummary | null;
+}
+
+export interface ScreeningNavigatorResponse {
+  stage: {
+    id: string;
+    type: StageType;
+    reviewersPerCitation: number;
+    blinded: boolean;
+  };
+  summary: {
+    all: number;
+    undecided: number;
+    decided: number;
+    oneReviewer: number;
+    included: number;
+    excluded: number;
+  };
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  items: ScreeningNavigatorItem[];
+}
+
 export type AdminOverviewState =
   | "UNASSIGNED"
   | "NOT_STARTED"

@@ -72,6 +72,10 @@ Additional invariants enforced in services, beyond the matrix:
   note otherwise — small teams are real).
 - Blinded reads: `screening.decide` grants access to *your* decisions; others' decisions require
   the citation to be fully screened + stage unblinded, or `screening.adjudicate`.
+- The personal screening navigator is limited to the current user's active assignments. It may
+  expose that user's decision, the aggregate number of completed active assignments, and a final
+  stage result, but never another reviewer's identity, vote, note, label, or exclusion reason.
+  Its **One screener reviewed** filter means exactly one completed assignment and no final result.
 - Shared screening keywords are readable with `project.view` and manageable with
   `screening.decide`. Keyword grouping evaluates citation title/abstract metadata only and
   cannot expose another reviewer's decision data.

@@ -68,7 +68,8 @@ const SHORTCUTS = [
   { key: "1–9", action: "Quick exclude with mapped reason", tone: "bg-rose-50 text-rose-700" },
   { key: "M", action: "Maybe", tone: "bg-amber-500 text-white" },
   { key: "N", action: "Open or close note", tone: "bg-slate-100 text-slate-800" },
-  { key: "J / →", action: "Skip to next citation", tone: "bg-slate-100 text-slate-800" },
+  { key: "J / →", action: "Select next article", tone: "bg-slate-100 text-slate-800" },
+  { key: "K / ←", action: "Select previous article", tone: "bg-slate-100 text-slate-800" },
   { key: "?", action: "Show shortcuts", tone: "bg-indigo-50 text-indigo-700" },
 ] as const;
 

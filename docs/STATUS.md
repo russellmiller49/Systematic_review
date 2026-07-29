@@ -4,6 +4,35 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-07-28) — screening article navigator — DONE
+
+Screeners can now browse and search their assigned corpus from a persistent article list beside
+the selected citation instead of advancing through a single opaque queue.
+
+- **Two-pane reviewer workspace:** on desktop, a scrollable article navigator sits beside the
+  citation detail and decision controls; on narrower layouts it stacks above the detail. The
+  selected row, citation position, year, personal/final status, and previous/next controls stay
+  synchronized. J/right arrow selects the next article and K/left arrow selects the previous one.
+- **Requested status filters:** the list supports Undecided, One screener reviewed, Decided by
+  me, Included, Excluded, and All assigned articles, with live counts. Decided by me intentionally
+  overlaps final outcomes, while One screener reviewed means exactly one active assignment is
+  complete and no final stage result exists.
+- **Fast finding:** screeners can search assigned citation titles and abstracts, page through
+  results in groups of 50, and combine the navigator with the existing shared-keyword paper
+  groups. Keyword highlights appear in both the article list and selected citation.
+- **Decision-aware navigation:** undecided citations leave the active list immediately after a
+  saved decision. Other filters refresh the article's personal/final status, and a screener can
+  revise their own decision until the stage receives a final result.
+- **Assignment scope + blinding:** the navigator contains only the signed-in reviewer's active
+  assignments. It returns the reviewer's own decision, an aggregate completed-review count, and
+  any final stage result; it never returns a co-reviewer's identity, vote, note, label, or
+  exclusion reason.
+- **Verification:** production build, **619 unit** and **315 integration** tests pass. The
+  isolated Playwright happy path covers filters, title/abstract search, article removal after a
+  quick-reason exclusion, and completion of the remaining queue. Browser QA covered desktop,
+  tablet, and mobile layouts, article selection, final-outcome locks, and returned no console
+  errors.
+
 ## Current state (2026-07-28) — quick exclusion reasons + screening keywords — DONE
 
 Screeners can now apply a specific exclusion reason in one action and use shared keyword rules

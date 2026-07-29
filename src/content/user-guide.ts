@@ -132,9 +132,10 @@ export const guideSteps: GuideStep[] = [
       "Assign citations, work through a keyboard-first queue, and let consensus or adjudication move records between stages.",
     actions: [
       "Assign reviewers for title-and-abstract screening, then repeat for full text when records advance.",
-      "Use I to include, E to open the full reason dialog, 1–9 to exclude with the mapped quick reason, M for maybe, N for a note, and J or the right arrow to skip.",
+      "Use the left article navigator to search your assigned titles and abstracts or filter by undecided, one screener reviewed, decided by you, included, excluded, or all assigned articles.",
+      "Use I to include, E to open the full reason dialog, 1–9 to exclude with the mapped quick reason, M for maybe, N for a note, J or the right arrow for the next article, and K or the left arrow for the previous one.",
       "Add shared include or exclude keywords to highlight matching title and abstract text, then group the queue by a keyword or by papers with no matches.",
-      "Reviewers see only their own decisions while blinding is active.",
+      "While blinding is active, reviewers see only their own decisions; the one-screener filter reveals a count, never the other reviewer's choice.",
       "Resolve disagreements in Conflicts; settled decisions lock until an authorized user reopens them with a reason.",
     ],
     remember:
