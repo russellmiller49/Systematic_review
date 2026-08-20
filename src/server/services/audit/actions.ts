@@ -40,6 +40,9 @@ export const AuditActions = {
   IMPORT_BATCH_DELETED: "import.batch.deleted",
   IMPORT_BATCH_FAILED: "import.batch.failed",
 
+  // citation metadata corrections (the immutable source record remains unchanged)
+  CITATION_ABSTRACT_ADDED: "citation.abstract.added",
+
   // dedup
   DEDUP_RUN: "dedup.run",
   DEDUP_MERGED: "dedup.merged",

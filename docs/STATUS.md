@@ -4,6 +4,28 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-08-20) — add missing abstracts during screening — DONE
+
+Screeners can now repair a citation that was imported without an abstract directly from the
+assigned-article workspace instead of trying to store shared article metadata in a private
+decision note.
+
+- **Inline abstract editor:** a citation with no usable abstract shows **Add abstract** beside
+  the empty state. The screener can paste, save, and immediately read the full abstract without
+  leaving the queue; the saved text participates in the existing abstract search and shared
+  keyword highlighting/grouping.
+- **Scoped shared write:** project Owners/Admins and import-managing Librarians may fill the gap;
+  a Reviewer/Trainee/Adjudicator must have a live assignment to that citation. The endpoint is
+  tenant-scoped, accepts non-empty text up to 50,000 characters, works after the reviewer's own
+  decision, and deliberately refuses to overwrite an existing abstract or edit a merged
+  duplicate. Immutable import source records remain unchanged.
+- **Audit + AI consistency:** `citation.abstract.added` stores the before/after value in the
+  project audit trail. Any prescreen suggestion generated from the former title-only payload is
+  invalidated in the same transaction so reviewers never see a stale AI score.
+- **Verification:** typecheck and production build clean; **619 unit** and **317 integration**
+  tests pass. The Playwright happy path imports an abstract-less record, adds its abstract through
+  the screening UI, verifies it renders, and completes the normal screening/export workflow.
+
 ## Current state (2026-07-28) — screening article navigator — DONE
 
 Screeners can now browse and search their assigned corpus from a persistent article list beside

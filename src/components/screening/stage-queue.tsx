@@ -11,6 +11,7 @@ import {
   Inbox,
   Keyboard,
   PartyPopper,
+  Plus,
   RefreshCw,
   Sparkles,
   StickyNote,
@@ -18,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, apiPost, ApiError } from "@/lib/api";
+import { api, apiPatch, apiPost, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -100,6 +101,9 @@ export function StageQueue({
   });
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
+  const [abstractEditing, setAbstractEditing] = useState(false);
+  const [abstractDraft, setAbstractDraft] = useState("");
+  const [abstractSaving, setAbstractSaving] = useState(false);
   const [excludeOpen, setExcludeOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [inFlight, setInFlight] = useState(0);
@@ -169,6 +173,8 @@ export function StageQueue({
     setSelectedId(null);
     setNote("");
     setNoteOpen(false);
+    setAbstractEditing(false);
+    setAbstractDraft("");
   }
 
   function search() {
@@ -188,6 +194,8 @@ export function StageQueue({
     setSelectedId(citationId);
     setNote("");
     setNoteOpen(false);
+    setAbstractEditing(false);
+    setAbstractDraft("");
   }
 
   function changePage(nextPage: number) {
@@ -195,6 +203,8 @@ export function StageQueue({
     setSelectedId(null);
     setNote("");
     setNoteOpen(false);
+    setAbstractEditing(false);
+    setAbstractDraft("");
   }
 
   // Excludes at either stage use the project's applicable reason subgroups.
@@ -217,6 +227,61 @@ export function StageQueue({
   const currentIndex =
     data?.items.findIndex((item) => item.citation.id === selectedId) ?? -1;
   const current = currentIndex >= 0 ? (data?.items[currentIndex] ?? null) : null;
+
+  // A server refresh can replace the selection without going through selectArticle.
+  useEffect(() => {
+    setAbstractEditing(false);
+    setAbstractDraft("");
+  }, [selectedId]);
+
+  async function saveAbstract(event: React.FormEvent) {
+    event.preventDefault();
+    if (!current || abstractSaving) return;
+    const abstract = abstractDraft.trim();
+    if (!abstract) return;
+
+    const citationId = current.citation.id;
+    setAbstractSaving(true);
+    try {
+      const response = await apiPatch<{
+        citation: { id: string; abstract: string | null };
+        aiSuggestionsInvalidated: number;
+      }>(`/api/projects/${projectId}/citations/${citationId}`, { abstract });
+      setData((previous) =>
+        previous
+          ? {
+              ...previous,
+              items: previous.items.map((item) =>
+                item.citation.id === citationId
+                  ? {
+                      ...item,
+                      citation: {
+                        ...item.citation,
+                        abstract: response.citation.abstract,
+                      },
+                      aiSuggestion: null,
+                    }
+                  : item,
+              ),
+            }
+          : previous,
+      );
+      setAbstractEditing(false);
+      setAbstractDraft("");
+      toast.success("Abstract added");
+      if (keywordGroup !== "ALL") setReloadKey((key) => key + 1);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Failed to add abstract");
+      if (
+        error instanceof ApiError &&
+        (error.code === "CONFLICT" || error.code === "INVALID_STATE")
+      ) {
+        setReloadKey((key) => key + 1);
+      }
+    } finally {
+      setAbstractSaving(false);
+    }
+  }
 
   function navigateRelative(delta: -1 | 1) {
     if (!data || data.items.length === 0) return;
@@ -585,6 +650,69 @@ export function StageQueue({
                 clampAbstract={false}
                 screeningKeywords={keywords}
                 highlightScreeningKeywords={highlightsEnabled}
+                missingAbstractContent={
+                  abstractEditing ? (
+                    <form
+                      className="space-y-2 rounded-md border border-dashed border-border bg-muted/30 p-3"
+                      onSubmit={saveAbstract}
+                    >
+                      <label
+                        htmlFor={`citation-${current.citation.id}-abstract`}
+                        className="text-sm font-medium"
+                      >
+                        Add abstract
+                      </label>
+                      <Textarea
+                        id={`citation-${current.citation.id}-abstract`}
+                        autoFocus
+                        required
+                        maxLength={50_000}
+                        className="min-h-40 bg-background"
+                        value={abstractDraft}
+                        onChange={(event) => setAbstractDraft(event.target.value)}
+                        placeholder="Paste the article abstract here…"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        This becomes shared, searchable citation metadata for every screener.
+                      </p>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={abstractSaving}
+                          onClick={() => {
+                            setAbstractEditing(false);
+                            setAbstractDraft("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="submit"
+                          size="sm"
+                          disabled={abstractSaving || !abstractDraft.trim()}
+                        >
+                          {abstractSaving && <Spinner />} Save abstract
+                        </Button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm italic text-muted-foreground">
+                        No abstract available.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAbstractEditing(true)}
+                      >
+                        <Plus /> Add abstract
+                      </Button>
+                    </div>
+                  )
+                }
               >
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">

@@ -3,9 +3,19 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
-import { notFound } from "@/server/errors";
+import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
-import { requirePermission } from "@/server/permissions";
+import { can, requirePermission } from "@/server/permissions";
+import * as audit from "@/server/services/audit";
+import { AuditActions } from "@/server/services/audit";
+
+export const addCitationAbstractSchema = z.object({
+  abstract: z
+    .string()
+    .trim()
+    .min(1, "Abstract cannot be empty")
+    .max(50_000, "Abstract must be 50,000 characters or fewer"),
+});
 
 export const listCitationsQuerySchema = z.object({
   status: z.enum(["ACTIVE", "DUPLICATE"]).default("ACTIVE"),
@@ -82,4 +92,89 @@ export async function getCitation(ctx: Ctx, projectId: string, citationId: strin
   });
   if (!citation) throw notFound("Citation");
   return citation;
+}
+
+// Fill a metadata gap without rewriting the immutable imported source record. Project
+// managers/librarians may do this anywhere; a screener may do it only for a citation assigned
+// to them. Existing abstracts cannot be overwritten through this narrow endpoint.
+export async function addCitationAbstract(
+  ctx: Ctx,
+  projectId: string,
+  citationId: string,
+  input: z.infer<typeof addCitationAbstractSchema>,
+) {
+  const member = await requirePermission(ctx, projectId, "project.view");
+  const canManageMetadata =
+    can(member.roles, "project.edit") || can(member.roles, "import.manage");
+
+  return prisma.$transaction(async (tx) => {
+    // R9: the route project is part of the citation lookup, so cross-project IDs are 404s.
+    const citation = await tx.citation.findFirst({
+      where: { id: citationId, projectId },
+    });
+    if (!citation) throw notFound("Citation");
+    if (citation.status !== "ACTIVE") {
+      throw invalidState("A merged duplicate's metadata cannot be changed");
+    }
+
+    if (!canManageMetadata) {
+      if (!can(member.roles, "screening.decide")) throw forbidden();
+      const assignment = await tx.screeningAssignment.findFirst({
+        where: {
+          citationId: citation.id,
+          reviewerId: ctx.userId,
+          status: { not: "VOIDED" },
+          stage: { projectId },
+        },
+        select: { id: true },
+      });
+      if (!assignment) {
+        throw forbidden("You can add an abstract only to a citation assigned to you");
+      }
+    }
+
+    if (citation.abstract?.trim()) {
+      throw invalidState("This citation already has an abstract");
+    }
+
+    // Match the value and update timestamp read above so two simultaneous additions cannot
+    // silently overwrite one another.
+    const write = await tx.citation.updateMany({
+      where: {
+        id: citation.id,
+        projectId,
+        abstract: citation.abstract,
+        updatedAt: citation.updatedAt,
+      },
+      data: { abstract: input.abstract },
+    });
+    if (write.count !== 1) {
+      throw conflict(
+        "The citation changed while you were adding the abstract; refresh and try again",
+      );
+    }
+
+    // Prescreen scores were generated from the old title/abstract payload. Remove them rather
+    // than showing reviewers a score whose input no longer matches the citation.
+    const invalidatedSuggestions = await tx.screeningSuggestion.deleteMany({
+      where: { citationId: citation.id },
+    });
+    const updated = await tx.citation.findUniqueOrThrow({ where: { id: citation.id } });
+
+    await audit.record(tx, {
+      projectId,
+      userId: ctx.userId,
+      entityType: "Citation",
+      entityId: citation.id,
+      action: AuditActions.CITATION_ABSTRACT_ADDED,
+      previousValue: { abstract: citation.abstract },
+      newValue: { abstract: updated.abstract },
+      metadata: { aiSuggestionsInvalidated: invalidatedSuggestions.count },
+    });
+
+    return {
+      citation: { id: updated.id, abstract: updated.abstract },
+      aiSuggestionsInvalidated: invalidatedSuggestions.count,
+    };
+  });
 }

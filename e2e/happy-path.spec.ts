@@ -8,7 +8,7 @@ import { signUp, expectNoErrorOverlay } from "./helpers";
 const RIS = [
   "TY  - JOUR\nTI  - Alpha randomized trial of endobronchial valves\nAU  - Smith, John\nPY  - 2020\nJO  - Journal of Chest Medicine\nAB  - A randomized controlled trial of valves.\nER  - ",
   "TY  - JOUR\nTI  - Beta observational cohort of coils\nAU  - Doe, Jane\nPY  - 2021\nJO  - Respiratory Reports\nAB  - Observational study of coils.\nER  - ",
-  "TY  - JOUR\nTI  - Gamma narrative review of lung volume reduction\nAU  - Roe, Richard\nPY  - 2019\nJO  - Reviews in Pulmonology\nAB  - A narrative review.\nER  - ",
+  "TY  - JOUR\nTI  - Gamma narrative review of lung volume reduction\nAU  - Roe, Richard\nPY  - 2019\nJO  - Reviews in Pulmonology\nER  - ",
 ].join("\n");
 
 test("sign-up to export, entirely through the UI", async ({ page }) => {
@@ -71,6 +71,27 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   // Add a shared highlight word, verify that it highlights + groups the queue, then return
   // to all papers for the decision flow.
   await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({ timeout: 15_000 });
+  const articleNavigator = page.getByRole("complementary", { name: "Article navigator" });
+
+  // Imported records can omit abstracts. An assigned screener can add the missing shared
+  // metadata directly instead of trying to preserve it in a private decision note.
+  await articleNavigator
+    .getByRole("option", { name: /Gamma narrative review of lung volume reduction/i })
+    .click();
+  await expect(page.getByText("No abstract available.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Add abstract", exact: true }).click();
+  await page
+    .getByLabel("Add abstract", { exact: true })
+    .fill("A manually recovered narrative-review abstract for the shared citation record.");
+  await page.getByRole("button", { name: "Save abstract", exact: true }).click();
+  await expect(page.getByText("Abstract added", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "A manually recovered narrative-review abstract for the shared citation record.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+
   await page.getByRole("button", { name: /manage keywords/i }).click();
   const keywordManager = page.getByLabel("Keyword manager");
   await keywordManager.getByLabel("Words or phrases").fill("randomized");
@@ -89,7 +110,6 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   });
 
   // The left navigator exposes the requested status filters and searches the assigned corpus.
-  const articleNavigator = page.getByRole("complementary", { name: "Article navigator" });
   await expect(articleNavigator).toBeVisible();
   await expect(articleNavigator.getByLabel("Filter article status").locator("option")).toHaveText([
     "Undecided (3)",

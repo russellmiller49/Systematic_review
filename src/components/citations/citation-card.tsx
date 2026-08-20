@@ -45,6 +45,7 @@ export function CitationCard({
   highlight,
   screeningKeywords = [],
   highlightScreeningKeywords = true,
+  missingAbstractContent,
   className,
   children,
 }: {
@@ -53,6 +54,7 @@ export function CitationCard({
   highlight?: boolean;
   screeningKeywords?: readonly ScreeningKeywordRule[];
   highlightScreeningKeywords?: boolean;
+  missingAbstractContent?: React.ReactNode;
   className?: string;
   children?: React.ReactNode; // action bar slot
 }) {
@@ -135,7 +137,7 @@ export function CitationCard({
         ))}
       </div>
 
-      {citation.abstract ? (
+      {citation.abstract?.trim() ? (
         <div className="mt-3">
           <p
             className={cn(
@@ -159,6 +161,8 @@ export function CitationCard({
             </button>
           )}
         </div>
+      ) : missingAbstractContent ? (
+        <div className="mt-3">{missingAbstractContent}</div>
       ) : (
         <p className="mt-3 text-sm italic text-muted-foreground">No abstract available.</p>
       )}
