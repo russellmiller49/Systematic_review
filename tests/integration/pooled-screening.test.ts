@@ -3,6 +3,7 @@ import { prisma } from "@/server/db";
 import { AppError } from "@/server/errors";
 import * as projects from "@/server/services/projects";
 import * as pooled from "@/server/services/screening/pooled";
+import * as screening from "@/server/services/screening";
 import { resetDb } from "../db-utils";
 import {
   addOrgMember,
@@ -60,6 +61,111 @@ describe("guideline pooled abstract screening", () => {
     await resetDb();
   });
 
+  it("persists one named admin-managed pool and leaves other PICOs individual", async () => {
+    const { owner, reviewer1, guideline, pico1, pico2, pico3 } = await createFamily();
+    const created = await pooled.saveGuidelineScreeningPool(ctx(owner.id), guideline.id, {
+      name: "Priority evidence pool",
+      projectIds: [pico1.id, pico2.id],
+    });
+
+    const visible = await pooled.getGuidelineScreeningConfiguration(
+      ctx(reviewer1.id),
+      guideline.id,
+    );
+    expect(visible.pool).toMatchObject({ id: created.id, name: "Priority evidence pool" });
+    expect(visible.pool!.picos.map((pico) => [pico.picoNumber, pico.id])).toEqual([
+      [1, pico1.id],
+      [2, pico2.id],
+    ]);
+    expect(visible.unpooledPicos.map((pico) => pico.id)).toEqual([pico3.id]);
+    await expect(projects.getProject(ctx(reviewer1.id), pico1.id)).resolves.toMatchObject({
+      screeningPoolMembership: {
+        pool: {
+          id: created.id,
+          name: "Priority evidence pool",
+          guidelineId: guideline.id,
+        },
+      },
+    });
+
+    const updated = await pooled.saveGuidelineScreeningPool(ctx(owner.id), guideline.id, {
+      name: "Revised evidence pool",
+      projectIds: [pico2.id, pico3.id],
+    });
+    expect(updated.id).toBe(created.id);
+    expect(updated.picos.map((pico) => pico.id)).toEqual([pico2.id, pico3.id]);
+    const events = await prisma.auditEvent.findMany({
+      where: { entityType: "GuidelineScreeningPool", entityId: created.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(events.map((event) => event.action)).toEqual([
+      "screening.pool.created",
+      "screening.pool.updated",
+    ]);
+    expect(events[1]!.previousValue).toMatchObject({
+      name: "Priority evidence pool",
+      projectIds: [pico1.id, pico2.id],
+    });
+
+    await expectAppError(
+      pooled.deleteGuidelineScreeningPool(ctx(reviewer1.id), guideline.id),
+      "FORBIDDEN",
+    );
+    await pooled.deleteGuidelineScreeningPool(ctx(owner.id), guideline.id);
+    const afterDelete = await pooled.getGuidelineScreeningConfiguration(
+      ctx(reviewer1.id),
+      guideline.id,
+    );
+    expect(afterDelete.pool).toBeNull();
+    expect(afterDelete.unpooledPicos.map((pico) => pico.id)).toEqual([
+      pico1.id,
+      pico2.id,
+      pico3.id,
+    ]);
+    await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        entityType: "GuidelineScreeningPool",
+        entityId: created.id,
+        action: "screening.pool.deleted",
+      },
+    });
+  });
+
+  it("blocks ordinary title/abstract assignment and decisions for a pooled PICO", async () => {
+    const { owner, reviewer1, guideline, pico1, pico2 } = await createFamily();
+    const citation = await createTestCitation(pico1.id, { title: "Pool-only report" });
+    await pooled.saveGuidelineScreeningPool(ctx(owner.id), guideline.id, {
+      name: "Protected combined queue",
+      projectIds: [pico1.id, pico2.id],
+    });
+    const stage = await prisma.screeningStage.findUniqueOrThrow({
+      where: { projectId_type: { projectId: pico1.id, type: "TITLE_ABSTRACT" } },
+    });
+
+    await expectAppError(
+      screening.createAssignments(ctx(owner.id), pico1.id, stage.id, {
+        reviewerIds: [reviewer1.id],
+        strategy: "all",
+      }),
+      "INVALID_STATE",
+    );
+    await expectAppError(
+      screening.getScreeningNavigator(ctx(reviewer1.id), pico1.id, stage.id, {
+        status: "UNDECIDED",
+        page: 1,
+        limit: 50,
+      }),
+      "INVALID_STATE",
+    );
+    await expectAppError(
+      screening.createDecision(ctx(reviewer1.id), pico1.id, stage.id, {
+        citationId: citation.id,
+        decision: "INCLUDE",
+      }),
+      "INVALID_STATE",
+    );
+  });
+
   it("groups overlapping abstracts, assigns them consistently, and propagates one decision", async () => {
     const { owner, reviewer1, reviewer2, guideline, pico1, pico2, pico3 } = await createFamily();
     const shared1 = await createTestCitation(pico1.id, {
@@ -77,9 +183,13 @@ describe("guideline pooled abstract screening", () => {
       pmid: "30001",
     });
     const projectIds = [pico1.id, pico2.id, pico3.id];
+    const pool = await pooled.saveGuidelineScreeningPool(ctx(owner.id), guideline.id, {
+      name: "All-guideline abstract pool",
+      projectIds,
+    });
 
     const assignment = await pooled.createPooledAssignments(ctx(owner.id), guideline.id, {
-      projectIds,
+      poolId: pool.id,
       reviewerIds: [reviewer1.id, reviewer2.id],
       strategy: "all",
     });
@@ -90,7 +200,10 @@ describe("guideline pooled abstract screening", () => {
       linkedCitationRecords: 3,
     });
 
-    const queue = await pooled.getPooledQueue(ctx(reviewer1.id), guideline.id, { projectIds });
+    const queue = await pooled.getPooledQueue(ctx(reviewer1.id), guideline.id, {
+      poolId: pool.id,
+    });
+    expect(queue.pool).toEqual({ id: pool.id, name: "All-guideline abstract pool" });
     expect(queue.summary).toMatchObject({
       pooledAbstracts: 2,
       linkedCitationRecords: 3,
@@ -104,7 +217,7 @@ describe("guideline pooled abstract screening", () => {
     expect(sharedItem!.picos.map((pico) => pico.picoNumber)).toEqual([1, 2]);
 
     const first = await pooled.createPooledDecision(ctx(reviewer1.id), guideline.id, {
-      projectIds,
+      poolId: pool.id,
       citationIds: sharedItem!.citationIds,
       decision: "INCLUDE",
       notes: "One overall pooled note",
@@ -124,11 +237,13 @@ describe("guideline pooled abstract screening", () => {
     expect(firstDecisions.every((decision) => decision.decision === "INCLUDE")).toBe(true);
     expect(firstDecisions.every((decision) => decision.notes === "One overall pooled note")).toBe(true);
 
-    const afterFirst = await pooled.getPooledQueue(ctx(reviewer1.id), guideline.id, { projectIds });
+    const afterFirst = await pooled.getPooledQueue(ctx(reviewer1.id), guideline.id, {
+      poolId: pool.id,
+    });
     expect(afterFirst.summary).toMatchObject({ ready: 1, awaitingOtherReviewers: 1 });
 
     const second = await pooled.createPooledDecision(ctx(reviewer2.id), guideline.id, {
-      projectIds,
+      poolId: pool.id,
       citationIds: sharedItem!.citationIds,
       decision: "INCLUDE",
     });
@@ -146,9 +261,20 @@ describe("guideline pooled abstract screening", () => {
       },
     });
     expect(events).toHaveLength(2);
-    expect(events.every((event) =>
-      (event.metadata as { pooledGuidelineId?: string } | null)?.pooledGuidelineId === guideline.id,
-    )).toBe(true);
+    expect(
+      events.every((event) => {
+        const metadata = event.metadata as {
+          pooledGuidelineId?: string;
+          pooledScreeningPoolId?: string;
+          pooledScreeningPoolName?: string;
+        } | null;
+        return (
+          metadata?.pooledGuidelineId === guideline.id &&
+          metadata.pooledScreeningPoolId === pool.id &&
+          metadata.pooledScreeningPoolName === "All-guideline abstract pool"
+        );
+      }),
+    ).toBe(true);
   });
 
   it("maps one common exclusion subgroup to each PICO's local reason row", async () => {
@@ -162,15 +288,19 @@ describe("guideline pooled abstract screening", () => {
       pmid: "40001",
     });
     const projectIds = [pico1.id, pico2.id];
-    await pooled.createPooledAssignments(ctx(owner.id), guideline.id, {
+    const pool = await pooled.saveGuidelineScreeningPool(ctx(owner.id), guideline.id, {
+      name: "Common exclusions",
       projectIds,
+    });
+    await pooled.createPooledAssignments(ctx(owner.id), guideline.id, {
+      poolId: pool.id,
       reviewerIds: [reviewer1.id, reviewer2.id],
       strategy: "all",
     });
 
     for (const reviewer of [reviewer1, reviewer2]) {
       await pooled.createPooledDecision(ctx(reviewer.id), guideline.id, {
-        projectIds,
+        poolId: pool.id,
         citationIds: [citation1.id, citation2.id],
         decision: "EXCLUDE",
         exclusionReasonLabel: "Wrong population",
@@ -201,8 +331,12 @@ describe("guideline pooled abstract screening", () => {
       doi: "10.1000/atomic-pool",
     });
     const projectIds = [pico1.id, pico2.id];
-    await pooled.createPooledAssignments(ctx(owner.id), guideline.id, {
+    const pool = await pooled.saveGuidelineScreeningPool(ctx(owner.id), guideline.id, {
+      name: "Atomic pool",
       projectIds,
+    });
+    await pooled.createPooledAssignments(ctx(owner.id), guideline.id, {
+      poolId: pool.id,
       reviewerIds: [reviewer1.id],
       strategy: "all",
     });
@@ -219,11 +353,13 @@ describe("guideline pooled abstract screening", () => {
       },
     });
 
-    const queue = await pooled.getPooledQueue(ctx(reviewer1.id), guideline.id, { projectIds });
+    const queue = await pooled.getPooledQueue(ctx(reviewer1.id), guideline.id, {
+      poolId: pool.id,
+    });
     expect(queue.summary).toMatchObject({ ready: 0, needsAssignment: 1 });
     await expectAppError(
       pooled.createPooledDecision(ctx(reviewer1.id), guideline.id, {
-        projectIds,
+        poolId: pool.id,
         citationIds: [citation1.id, citation2.id],
         decision: "INCLUDE",
       }),
@@ -236,14 +372,22 @@ describe("guideline pooled abstract screening", () => {
     ).toBe(0);
   });
 
-  it("rejects projects outside the selected guideline family", async () => {
-    const { reviewer1, org, guideline, pico1 } = await createFamily();
+  it("restricts pool membership changes to managers and the guideline family", async () => {
+    const { owner, reviewer1, org, guideline, pico1 } = await createFamily();
     const standalone = await createTestProject(org.id, reviewer1.id);
     await expectAppError(
-      pooled.getPooledQueue(ctx(reviewer1.id), guideline.id, {
+      pooled.saveGuidelineScreeningPool(ctx(owner.id), guideline.id, {
+        name: "Invalid family pool",
         projectIds: [pico1.id, standalone.id],
       }),
       "VALIDATION",
+    );
+    await expectAppError(
+      pooled.saveGuidelineScreeningPool(ctx(reviewer1.id), guideline.id, {
+        name: "Reviewer-controlled pool",
+        projectIds: [pico1.id, standalone.id],
+      }),
+      "FORBIDDEN",
     );
   });
 });

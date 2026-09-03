@@ -85,6 +85,17 @@ export interface MergeResult {
   warning: MergeWarning | null;
 }
 
+export interface BulkExactDoiResult {
+  exactDoiGroupsFound: number;
+  groupsMerged: number;
+  groupsSkippedForReview: number;
+  citationsMerged: number;
+  voidedAssignmentCount: number;
+  voidedConflictCount: number;
+  screeningHistoryWarningCount: number;
+  canonicalSelections: { groupId: string; canonicalCitationId: string }[];
+}
+
 export interface RejectResult {
   candidate: { id: string; status: DedupCandidateStatus };
   groupResolved: boolean;

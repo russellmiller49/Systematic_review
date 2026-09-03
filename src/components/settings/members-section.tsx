@@ -15,8 +15,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Alert, EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
 import {
   Table,
@@ -36,12 +36,30 @@ interface MemberRow {
   user: { id: string; name: string; email: string };
 }
 
+interface WorkspaceMemberOption {
+  id: string;
+  role: "OWNER" | "ADMIN" | "MEMBER";
+  user: { id: string; name: string; email: string };
+}
+
+const WORKSPACE_ROLE_LABELS: Record<WorkspaceMemberOption["role"], string> = {
+  OWNER: "Workspace owner",
+  ADMIN: "Workspace admin",
+  MEMBER: "Workspace member",
+};
+
+function workspaceMemberLabel(member: WorkspaceMemberOption): string {
+  return `${member.user.name} — ${member.user.email} (${WORKSPACE_ROLE_LABELS[member.role]})`;
+}
+
 export function MembersSection({
   projectId,
   canManage,
+  isGuideline,
 }: {
   projectId: string;
   canManage: boolean;
+  isGuideline: boolean;
 }) {
   const [members, setMembers] = useState<MemberRow[] | null>(null);
 
@@ -49,6 +67,9 @@ export function MembersSection({
   const [addEmail, setAddEmail] = useState("");
   const [addRoles, setAddRoles] = useState<string[]>(["REVIEWER"]);
   const [adding, setAdding] = useState(false);
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMemberOption[] | null>(
+    null,
+  );
 
   const [editTarget, setEditTarget] = useState<MemberRow | null>(null);
   const [editRoles, setEditRoles] = useState<string[]>([]);
@@ -67,6 +88,24 @@ export function MembersSection({
   }, [projectId]);
 
   useEffect(load, [load]);
+
+  const loadWorkspaceMembers = useCallback(() => {
+    setWorkspaceMembers(null);
+    api<WorkspaceMemberOption[]>(`/api/projects/${projectId}/workspace-members`)
+      .then(setWorkspaceMembers)
+      .catch((err) => {
+        toast.error(err instanceof ApiError ? err.message : "Failed to load workspace members");
+        setWorkspaceMembers([]);
+      });
+  }, [projectId]);
+
+  function changeAddOpen(open: boolean) {
+    setAddOpen(open);
+    if (open) {
+      setAddEmail("");
+      loadWorkspaceMembers();
+    }
+  }
 
   async function addMember(e: React.FormEvent) {
     e.preventDefault();
@@ -126,7 +165,7 @@ export function MembersSection({
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-medium">Members</h2>
         {canManage && (
-          <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <Dialog open={addOpen} onOpenChange={changeAddOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" size="sm">
                 <UserPlus /> Add member
@@ -134,29 +173,51 @@ export function MembersSection({
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Add member</DialogTitle>
+                <DialogTitle>Add workspace member</DialogTitle>
                 <DialogDescription>
-                  The person must already have an account and be a member of this
-                  project&apos;s organization — otherwise send them an invitation below.
+                  Workspace access and project access are separate. Choose an active workspace
+                  member, then assign the project roles they need.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={addMember} className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label htmlFor="am-email">Email</Label>
-                  <Input
-                    id="am-email"
-                    type="email"
+                  <Label htmlFor="am-workspace-member">Workspace member</Label>
+                  <Select
+                    id="am-workspace-member"
                     required
                     value={addEmail}
                     onChange={(e) => setAddEmail(e.target.value)}
-                  />
+                    disabled={workspaceMembers === null || workspaceMembers.length === 0}
+                  >
+                    <option value="" disabled>
+                      {workspaceMembers === null
+                        ? "Loading workspace members…"
+                        : workspaceMembers.length === 0
+                          ? "Everyone is already assigned"
+                          : "Select a workspace member"}
+                    </option>
+                    {workspaceMembers?.map((member) => (
+                      <option key={member.user.id} value={member.user.email}>
+                        {workspaceMemberLabel(member)}
+                      </option>
+                    ))}
+                  </Select>
                 </div>
+                {isGuideline && (
+                  <Alert variant="info">
+                    Adding someone to this guideline also gives them these roles in every current
+                    PICO sub-project.
+                  </Alert>
+                )}
                 <div className="space-y-1.5">
                   <Label>Roles</Label>
                   <RolesChecklist value={addRoles} onChange={setAddRoles} />
                 </div>
                 <DialogFooter>
-                  <Button type="submit" disabled={adding || addRoles.length === 0}>
+                  <Button
+                    type="submit"
+                    disabled={adding || !addEmail || addRoles.length === 0}
+                  >
                     {adding && <Spinner />} Add member
                   </Button>
                 </DialogFooter>

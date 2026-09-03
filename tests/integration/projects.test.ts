@@ -168,6 +168,56 @@ describe("projects service", () => {
   });
 
   describe("members", () => {
+    it("lists active workspace members who can be assigned to the project", async () => {
+      const { owner, org, project } = await createProjectFixture();
+      const workspaceAdmin = await createTestUser({ name: "Hala Nas" });
+      const workspaceMember = await createTestUser({ name: "Project Reviewer" });
+      const removedWorkspaceMember = await createTestUser({ name: "Removed Member" });
+      await addOrgMember(org.id, workspaceAdmin.id, "ADMIN");
+      await addOrgMember(org.id, workspaceMember.id);
+      await addOrgMember(org.id, removedWorkspaceMember.id);
+      await prisma.organizationMember.update({
+        where: { orgId_userId: { orgId: org.id, userId: removedWorkspaceMember.id } },
+        data: { status: "REMOVED" },
+      });
+
+      const available = await projects.listAssignableWorkspaceMembers(ctx(owner.id), project.id);
+      expect(available).toHaveLength(2);
+      expect(available.map((member) => member.user.email)).toEqual([
+        workspaceAdmin.email,
+        workspaceMember.email,
+      ]);
+      expect(available[0]).toMatchObject({
+        role: "ADMIN",
+        user: { id: workspaceAdmin.id, name: "Hala Nas" },
+      });
+
+      await projects.addProjectMember(ctx(owner.id), project.id, {
+        email: workspaceAdmin.email,
+        roles: ["ADMIN"],
+      });
+      const afterAssignment = await projects.listAssignableWorkspaceMembers(
+        ctx(owner.id),
+        project.id,
+      );
+      expect(afterAssignment.map((member) => member.user.id)).not.toContain(workspaceAdmin.id);
+    });
+
+    it("only project Owners/Admins can list assignable workspace members", async () => {
+      const { owner, org, project } = await createProjectFixture();
+      const reviewer = await createTestUser();
+      await addOrgMember(org.id, reviewer.id);
+      await projects.addProjectMember(ctx(owner.id), project.id, {
+        email: reviewer.email,
+        roles: ["REVIEWER"],
+      });
+
+      await expectAppError(
+        projects.listAssignableWorkspaceMembers(ctx(reviewer.id), project.id),
+        "FORBIDDEN",
+      );
+    });
+
     it("adding a member requires the user to be an ACTIVE org member (422 otherwise)", async () => {
       const { owner, org, project } = await createProjectFixture();
       const outsider = await createTestUser();

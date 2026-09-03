@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Alert } from "@/components/ui/misc";
 import type { ProjectDetail } from "./types";
 import { ProjectSettingsSection } from "./project-settings";
+import { ScreeningPoolSection } from "./screening-pool-section";
 import { MembersSection } from "./members-section";
 import { InvitationsSection } from "./invitations-section";
 import { ExclusionReasonsSection } from "./exclusion-reasons-section";
@@ -51,7 +52,14 @@ export function SettingsClient({ projectId }: { projectId: string }) {
             canEdit={isAdmin}
             onSaved={load}
           />
-          <MembersSection projectId={projectId} canManage={isAdmin} />
+          {project?.isGuideline && (
+            <ScreeningPoolSection guidelineId={projectId} canManage={isAdmin} />
+          )}
+          <MembersSection
+            projectId={projectId}
+            canManage={isAdmin}
+            isGuideline={project?.isGuideline ?? false}
+          />
           <InvitationsSection projectId={projectId} />
           <ExclusionReasonsSection projectId={projectId} canEdit={canEditProtocol} />
           <ExportsSection projectId={projectId} />

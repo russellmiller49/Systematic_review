@@ -247,9 +247,23 @@ export interface PooledQueueItem {
   picos: (PooledPico & { citationIds: string[] })[];
 }
 
-// GET /api/projects/:guidelineId/screening/pooled?projectId=...
+export interface GuidelineScreeningConfiguration {
+  guideline: { id: string; title: string };
+  pool: {
+    id: string;
+    name: string;
+    picos: PooledPico[];
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+  unpooledPicos: PooledPico[];
+  allPicos: PooledPico[];
+}
+
+// GET /api/projects/:guidelineId/screening/pooled?poolId=...
 export interface PooledQueueResponse {
   guideline: { id: string; title: string };
+  pool: { id: string; name: string };
   picos: PooledPico[];
   configuration: {
     reviewersPerCitation: number;

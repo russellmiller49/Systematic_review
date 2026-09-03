@@ -977,6 +977,11 @@ export async function getProject(ctx: Ctx, projectId: string) {
       org: { select: { id: true, name: true, slug: true } },
       screeningStages: { orderBy: { type: "asc" } },
       parentProject: { select: { id: true, title: true } },
+      screeningPoolMembership: {
+        select: {
+          pool: { select: { id: true, name: true, guidelineId: true } },
+        },
+      },
       subProjects: {
         select: { id: true, title: true, status: true, researchQuestion: true },
         orderBy: { createdAt: "asc" },
@@ -1060,6 +1065,37 @@ export async function listProjectMembers(ctx: Ctx, projectId: string) {
     where: { projectId },
     include: { user: { select: { id: true, name: true, email: true } } },
     orderBy: { createdAt: "asc" },
+  });
+}
+
+// Active workspace members who do not currently have ACTIVE access to this project.
+// This powers the project-settings picker, keeping workspace and project roles explicit
+// while avoiding error-prone email re-entry. Removed project members are included so an
+// Owner/Admin can reactivate them through the normal audited addProjectMember path.
+export async function listAssignableWorkspaceMembers(ctx: Ctx, projectId: string) {
+  await requirePermission(ctx, projectId, "project.members");
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { orgId: true },
+  });
+  if (!project) throw notFound("Project");
+
+  return prisma.organizationMember.findMany({
+    where: {
+      orgId: project.orgId,
+      status: "ACTIVE",
+      user: {
+        projectMemberships: {
+          none: { projectId, status: "ACTIVE" },
+        },
+      },
+    },
+    select: {
+      id: true,
+      role: true,
+      user: { select: { id: true, name: true, email: true } },
+    },
+    orderBy: [{ user: { name: "asc" } }, { createdAt: "asc" }],
   });
 }
 
