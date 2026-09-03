@@ -164,6 +164,12 @@ const GUIDELINE_QUICK_LINKS: { slug: string; label: string; description: string;
     icon: ClipboardList,
   },
   {
+    slug: "screening",
+    label: "Combined screening",
+    description: "Choose multiple PICOs, review each unique abstract once, and apply the decision to every linked question.",
+    icon: ListChecks,
+  },
+  {
     slug: "manuscript",
     label: "Manuscript",
     description: "General sections — introduction, methods, conclusions — plus the compiled guideline.",

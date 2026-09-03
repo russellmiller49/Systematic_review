@@ -1164,127 +1164,145 @@ export async function createDecision(
   await requirePermission(ctx, projectId, "screening.decide");
   return prisma.$transaction(async (tx) => {
     const stage = await getStageOr404(tx, projectId, stageId);
-
-    // R9: tenant-scoped citation load; must be ACTIVE to screen.
-    const citation = await tx.citation.findFirst({
-      where: { id: input.citationId, projectId },
-    });
-    if (!citation) throw notFound("Citation");
-    if (citation.status !== "ACTIVE") {
-      throw invalidState("Citation is a merged duplicate and cannot be screened");
-    }
-
-    // The reviewer is ALWAYS the session user and must hold a live assignment.
-    const assignment = await tx.screeningAssignment.findUnique({
-      where: {
-        stageId_citationId_reviewerId: {
-          stageId: stage.id,
-          citationId: citation.id,
-          reviewerId: ctx.userId,
-        },
-      },
-    });
-    if (!assignment || assignment.status === "VOIDED") {
-      throw forbidden("You are not assigned to screen this citation at this stage");
-    }
-
-    // R5 lock: once a stage result exists, decisions are immutable until reopen.
-    const existingResult = await tx.citationStageResult.findUnique({
-      where: { stageId_citationId: { stageId: stage.id, citationId: citation.id } },
-    });
-    if (existingResult) {
-      throw invalidState(
-        "This citation is already settled at this stage — an admin/adjudicator must reopen it first",
-      );
-    }
-
-    // Exclusion reason rules: FULL_TEXT + EXCLUDE requires a reason (R14/protocol);
-    // TITLE_ABSTRACT + EXCLUDE may optionally carry one. Reasons on non-EXCLUDE are dropped.
-    let exclusionReasonId: string | null = null;
-    if (input.decision === "EXCLUDE") {
-      if (stage.type === "FULL_TEXT" && !input.exclusionReasonId) {
-        throw validationError("Full-text exclusions require an exclusion reason");
-      }
-      if (input.exclusionReasonId) {
-        const reason = await validateExclusionReason(
-          tx,
-          projectId,
-          stage.type,
-          input.exclusionReasonId,
-        );
-        exclusionReasonId = reason.id;
-      }
-    }
-
-    const previous = await tx.screeningDecision.findUnique({
-      where: {
-        stageId_citationId_reviewerId: {
-          stageId: stage.id,
-          citationId: citation.id,
-          reviewerId: ctx.userId,
-        },
-      },
-    });
-    const data = {
-      decision: input.decision,
-      exclusionReasonId,
-      notes: input.notes ?? null,
-      labels: input.labels ?? [],
-      flaggedForDiscussion: input.flaggedForDiscussion ?? false,
-    };
-    const decision = previous
-      ? await tx.screeningDecision.update({ where: { id: previous.id }, data })
-      : await tx.screeningDecision.create({
-          data: {
-            stageId: stage.id,
-            citationId: citation.id,
-            reviewerId: ctx.userId,
-            ...data,
-          },
-        });
-
-    if (assignment.status !== "COMPLETED") {
-      await tx.screeningAssignment.update({
-        where: { id: assignment.id },
-        data: { status: "COMPLETED" },
-      });
-    }
-
-    await audit.record(tx, {
-      projectId,
-      userId: ctx.userId,
-      entityType: "ScreeningDecision",
-      entityId: decision.id,
-      action: previous
-        ? AuditActions.SCREENING_DECISION_UPDATED
-        : AuditActions.SCREENING_DECISION_CREATED,
-      previousValue: previous
-        ? {
-            decision: previous.decision,
-            exclusionReasonId: previous.exclusionReasonId,
-            notes: previous.notes,
-            labels: previous.labels,
-          }
-        : undefined,
-      newValue: {
-        decision: decision.decision,
-        exclusionReasonId: decision.exclusionReasonId,
-        notes: decision.notes,
-        labels: decision.labels,
-      },
-    });
-
-    // R6: conflict/consensus evaluation runs in the SAME transaction as the decision write.
-    const evaluation = await evaluateCitation(tx, ctx, stage, citation.id);
-    return {
-      decision,
-      // Only the materialized result is echoed back — once it exists it is visible to
-      // everyone anyway (blinding lifts). Conflict state is NOT returned to reviewers.
-      result: evaluation.result
-        ? { outcome: evaluation.result.outcome, resolvedVia: evaluation.result.resolvedVia }
-        : null,
-    };
+    return createDecisionInTransaction(tx, ctx, projectId, stage, input);
   });
+}
+
+// Shared decision write used by both the ordinary per-PICO queue and the guideline-level
+// pooled title/abstract queue. Callers must perform their own permission checks before
+// opening the transaction. Keeping the mutation here preserves the exact R3/R5/R6/R7
+// lifecycle, assignment gate, blinding-safe audit rows, and result materialization for both
+// entry points.
+export async function createDecisionInTransaction(
+  tx: Tx,
+  ctx: Ctx,
+  projectId: string,
+  stage: ScreeningStage,
+  input: z.infer<typeof createDecisionSchema>,
+  auditMetadata?: Record<string, unknown>,
+) {
+  if (stage.projectId !== projectId) throw notFound("Screening stage");
+
+  // R9: tenant-scoped citation load; must be ACTIVE to screen.
+  const citation = await tx.citation.findFirst({
+    where: { id: input.citationId, projectId },
+  });
+  if (!citation) throw notFound("Citation");
+  if (citation.status !== "ACTIVE") {
+    throw invalidState("Citation is a merged duplicate and cannot be screened");
+  }
+
+  // The reviewer is ALWAYS the session user and must hold a live assignment.
+  const assignment = await tx.screeningAssignment.findUnique({
+    where: {
+      stageId_citationId_reviewerId: {
+        stageId: stage.id,
+        citationId: citation.id,
+        reviewerId: ctx.userId,
+      },
+    },
+  });
+  if (!assignment || assignment.status === "VOIDED") {
+    throw forbidden("You are not assigned to screen this citation at this stage");
+  }
+
+  // R5 lock: once a stage result exists, decisions are immutable until reopen.
+  const existingResult = await tx.citationStageResult.findUnique({
+    where: { stageId_citationId: { stageId: stage.id, citationId: citation.id } },
+  });
+  if (existingResult) {
+    throw invalidState(
+      "This citation is already settled at this stage — an admin/adjudicator must reopen it first",
+    );
+  }
+
+  // Exclusion reason rules: FULL_TEXT + EXCLUDE requires a reason (R14/protocol);
+  // TITLE_ABSTRACT + EXCLUDE may optionally carry one. Reasons on non-EXCLUDE are dropped.
+  let exclusionReasonId: string | null = null;
+  if (input.decision === "EXCLUDE") {
+    if (stage.type === "FULL_TEXT" && !input.exclusionReasonId) {
+      throw validationError("Full-text exclusions require an exclusion reason");
+    }
+    if (input.exclusionReasonId) {
+      const reason = await validateExclusionReason(
+        tx,
+        projectId,
+        stage.type,
+        input.exclusionReasonId,
+      );
+      exclusionReasonId = reason.id;
+    }
+  }
+
+  const previous = await tx.screeningDecision.findUnique({
+    where: {
+      stageId_citationId_reviewerId: {
+        stageId: stage.id,
+        citationId: citation.id,
+        reviewerId: ctx.userId,
+      },
+    },
+  });
+  const data = {
+    decision: input.decision,
+    exclusionReasonId,
+    notes: input.notes ?? null,
+    labels: input.labels ?? [],
+    flaggedForDiscussion: input.flaggedForDiscussion ?? false,
+  };
+  const decision = previous
+    ? await tx.screeningDecision.update({ where: { id: previous.id }, data })
+    : await tx.screeningDecision.create({
+        data: {
+          stageId: stage.id,
+          citationId: citation.id,
+          reviewerId: ctx.userId,
+          ...data,
+        },
+      });
+
+  if (assignment.status !== "COMPLETED") {
+    await tx.screeningAssignment.update({
+      where: { id: assignment.id },
+      data: { status: "COMPLETED" },
+    });
+  }
+
+  await audit.record(tx, {
+    projectId,
+    userId: ctx.userId,
+    entityType: "ScreeningDecision",
+    entityId: decision.id,
+    action: previous
+      ? AuditActions.SCREENING_DECISION_UPDATED
+      : AuditActions.SCREENING_DECISION_CREATED,
+    previousValue: previous
+      ? {
+          decision: previous.decision,
+          exclusionReasonId: previous.exclusionReasonId,
+          notes: previous.notes,
+          labels: previous.labels,
+        }
+      : undefined,
+    newValue: {
+      decision: decision.decision,
+      exclusionReasonId: decision.exclusionReasonId,
+      notes: decision.notes,
+      labels: decision.labels,
+    },
+    metadata: auditMetadata,
+  });
+
+  // R6: conflict/consensus evaluation runs in the SAME transaction as the decision write.
+  const evaluation = await evaluateCitation(tx, ctx, stage, citation.id);
+  return {
+    decision,
+    // Only the materialized result is echoed back — once it exists it is visible to
+    // everyone anyway (blinding lifts). Conflict state is NOT returned to reviewers.
+    result: evaluation.result
+      ? { outcome: evaluation.result.outcome, resolvedVia: evaluation.result.resolvedVia }
+      : null,
+  };
 }
 
 // R6/R7 — the conflict/consensus state machine for one (stage, citation).

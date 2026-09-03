@@ -4,6 +4,36 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-09-01) — combined abstract screening across guideline PICOs — DONE
+
+Guideline teams can now choose two or more PICO sub-projects and screen their title/abstract
+corpus as one combined pool from the guideline workspace.
+
+- **One abstract, visible PICO provenance:** exact cross-PICO matches form connected groups by
+  DOI, PMID, or normalized title. Each unique abstract is shown once with numbered tags for
+  every selected PICO where it was found; a richer abstract copy is used for the shared card.
+- **One overall binary choice:** the pooled workspace deliberately offers Include or Exclude,
+  not a per-PICO decision. One optional reviewer note is copied to every linked PICO citation;
+  exclusion uses one reason label that is active in all selected PICOs and maps to each
+  project's own reason row.
+- **Existing lifecycle remains authoritative:** no parallel decision store or schema migration
+  was added. The pooled write creates/updates the normal per-PICO `ScreeningDecision` rows in
+  one transaction and runs the existing assignment gate, lock, consensus/conflict evaluation,
+  materialized `CitationStageResult`, blinding, and R1-filtered audit behavior for every copy.
+  Any invalid or locked linked record rolls the whole pooled decision back.
+- **Coordinated assignment:** Owners/Admins can assign the combined pool. The same reviewer set
+  is attached to every cross-PICO copy of an abstract (including round-robin split assignment),
+  preventing partial reviewer queues. Selections must use the same reviewers-per-citation
+  setting; existing assignment pairs are skipped safely.
+- **Guideline UI:** Screening is now available in the guideline sidebar and dashboard. The PICO
+  selection persists per browser, summary cards distinguish overlaps/ready/awaiting/assignment
+  states, keyboard I/E remains available, and the queue explains that decisions apply to all
+  shown PICO tags.
+- **Verification:** typecheck and production build clean; **621 unit** and **321 integration**
+  tests pass. New coverage pins transitive exact grouping, shared-card/PICO tags, coordinated
+  assignment, include/exclude propagation, project-local exclusion reasons, audit provenance,
+  family tenancy, and atomic rollback when one linked assignment is missing.
+
 ## Current state (2026-08-20) — add missing abstracts during screening — DONE
 
 Screeners can now repair a citation that was imported without an abstract directly from the

@@ -52,6 +52,7 @@ const GUIDELINE_NAV_HREFS = new Set([
   "",
   "/chat",
   "/protocol",
+  "/screening",
   "/manuscript",
   "/references",
   "/audit",
