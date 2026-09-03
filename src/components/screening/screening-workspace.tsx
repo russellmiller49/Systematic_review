@@ -15,6 +15,7 @@ import { ManageAssignmentsDialog } from "./manage-assignments-dialog";
 import { AdminScreeningOverview } from "./admin-screening-overview";
 import { PrescreenPanel } from "./prescreen-panel";
 import { KeywordToolbar } from "./keyword-toolbar";
+import { PooledScreeningWorkspace } from "./pooled-screening-workspace";
 import {
   STAGE_LABELS,
   UNMATCHED_KEYWORD_GROUP,
@@ -27,6 +28,66 @@ import {
 const CONFIGURE_ROLES = new Set(["OWNER", "ADMIN"]);
 
 export function ScreeningWorkspace({ projectId }: { projectId: string }) {
+  const [project, setProject] = useState<
+    | {
+        title: string;
+        isGuideline: boolean;
+        capabilities: string[];
+        subProjects: {
+          id: string;
+          title: string;
+          researchQuestion: string | null;
+          status: string;
+        }[];
+      }
+    | null
+    | undefined
+  >(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<NonNullable<typeof project>>(`/api/projects/${projectId}`)
+      .then((response) => {
+        if (!cancelled) setProject(response);
+      })
+      .catch(() => {
+        if (!cancelled) setProject(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  if (project === undefined) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-8 w-72" />
+        <Skeleton className="h-36 w-full" />
+        <Skeleton className="h-80 w-full" />
+      </div>
+    );
+  }
+  if (project === null) {
+    return (
+      <EmptyState
+        icon={ListChecks}
+        title="Screening is unavailable"
+        description="The project could not be loaded — check that you still have access."
+      />
+    );
+  }
+  if (project.isGuideline) {
+    return (
+      <PooledScreeningWorkspace
+        guidelineId={projectId}
+        guideline={project}
+      />
+    );
+  }
+  return <ProjectScreeningWorkspace projectId={projectId} />;
+}
+
+function ProjectScreeningWorkspace({ projectId }: { projectId: string }) {
   const [stages, setStages] = useState<ScreeningStageSummary[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [canConfigure, setCanConfigure] = useState(false);

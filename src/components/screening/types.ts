@@ -233,3 +233,38 @@ export interface ExclusionReasonOption {
   id: string;
   label: string;
 }
+
+export interface PooledPico {
+  id: string;
+  title: string;
+  researchQuestion: string | null;
+  picoNumber: number;
+}
+
+export interface PooledQueueItem {
+  citationIds: string[];
+  citation: QueueCitation;
+  picos: (PooledPico & { citationIds: string[] })[];
+}
+
+// GET /api/projects/:guidelineId/screening/pooled?projectId=...
+export interface PooledQueueResponse {
+  guideline: { id: string; title: string };
+  picos: PooledPico[];
+  configuration: {
+    reviewersPerCitation: number;
+    blinded: boolean;
+  };
+  summary: {
+    pooledAbstracts: number;
+    linkedCitationRecords: number;
+    overlaps: number;
+    ready: number;
+    awaitingOtherReviewers: number;
+    needsAssignment: number;
+    settledOrOutOfSync: number;
+  };
+  total: number;
+  reasons: { label: string }[];
+  items: PooledQueueItem[];
+}
