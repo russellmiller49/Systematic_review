@@ -7,6 +7,14 @@ import { api, apiPost, ApiError } from "@/lib/api";
 import { PageHeader, StatCard } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Alert, EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
 import {
   Table,
@@ -19,6 +27,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GroupCard } from "./group-card";
 import type {
+  BulkExactDoiResult,
   CitationListResponse,
   DedupGroup,
   DuplicateCitationRow,
@@ -38,6 +47,9 @@ export function DedupClient({ projectId }: { projectId: string }) {
   const [hasMoreDuplicates, setHasMoreDuplicates] = useState(false);
   const [canonicalTitles, setCanonicalTitles] = useState<Record<string, string>>({});
   const [running, setRunning] = useState(false);
+  const [bulkMergeOpen, setBulkMergeOpen] = useState(false);
+  const [bulkMerging, setBulkMerging] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [undoingId, setUndoingId] = useState<string | null>(null);
   const [mergeWarning, setMergeWarning] = useState<MergeWarning | null>(null);
 
@@ -128,11 +140,78 @@ export function DedupClient({ projectId }: { projectId: string }) {
     }
   }
 
+  async function bulkMergeExactDoi() {
+    setBulkMerging(true);
+    setBulkNotice(null);
+    try {
+      const result = await apiPost<BulkExactDoiResult>(
+        `/api/projects/${projectId}/dedup/merge-exact-doi`,
+      );
+      setBulkMergeOpen(false);
+      if (result.groupsMerged === 0) {
+        toast.info("No exact DOI groups were ready to merge");
+      } else {
+        toast.success(
+          `Merged ${result.citationsMerged} duplicate citation${result.citationsMerged === 1 ? "" : "s"} across ${result.groupsMerged} exact DOI group${result.groupsMerged === 1 ? "" : "s"}`,
+        );
+      }
+      const notices: string[] = [];
+      if (result.screeningHistoryWarningCount > 0) {
+        notices.push(
+          `${result.screeningHistoryWarningCount} merged group${result.screeningHistoryWarningCount === 1 ? " had" : "s had"} screening decisions on multiple records. The automatically selected canonical record is authoritative; all prior decisions remain preserved in the audit trail.`,
+        );
+      }
+      if (result.groupsSkippedForReview > 0) {
+        notices.push(
+          `${result.groupsSkippedForReview} group${result.groupsSkippedForReview === 1 ? " was" : "s were"} left open because it also contained non-DOI evidence or stale citation data.`,
+        );
+      }
+      setBulkNotice(notices.length > 0 ? notices.join(" ") : null);
+      load();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to merge exact DOI matches");
+    } finally {
+      setBulkMerging(false);
+    }
+  }
+
   const suggestedPairCount =
     openGroups?.reduce(
       (sum, g) => sum + g.candidates.filter((c) => c.status === "SUGGESTED").length,
       0,
     ) ?? null;
+  const exactDoiGroups =
+    openGroups?.filter((group) => {
+      const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
+      return (
+        suggested.length > 0 &&
+        !group.candidates.some((candidate) => candidate.status === "REJECTED") &&
+        suggested.every(
+          (candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1,
+        )
+      );
+    }) ?? [];
+  const exactDoiCitationCount = exactDoiGroups.reduce((count, group) => {
+    const citationIds = new Set<string>();
+    for (const candidate of group.candidates) {
+      if (candidate.status !== "SUGGESTED") continue;
+      citationIds.add(candidate.citationAId);
+      citationIds.add(candidate.citationBId);
+    }
+    return count + Math.max(0, citationIds.size - 1);
+  }, 0);
+  const mixedExactDoiGroupCount =
+    openGroups?.filter((group) => {
+      const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
+      return (
+        suggested.some(
+          (candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1,
+        ) &&
+        suggested.some(
+          (candidate) => candidate.method !== "EXACT_DOI" || candidate.score !== 1,
+        )
+      );
+    }).length ?? 0;
 
   return (
     <div className="space-y-6">
@@ -140,9 +219,19 @@ export function DedupClient({ projectId }: { projectId: string }) {
         title="Deduplication"
         description="Detect and merge duplicate citations before screening."
         actions={
-          <Button onClick={runDetection} disabled={running}>
-            {running ? <Spinner /> : <ScanSearch />} Run detection
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setBulkMergeOpen(true)}
+              disabled={bulkMerging || exactDoiGroups.length === 0}
+            >
+              {bulkMerging ? <Spinner /> : <GitMerge />} Merge exact DOI matches
+              {exactDoiGroups.length > 0 && ` (${exactDoiGroups.length})`}
+            </Button>
+            <Button onClick={runDetection} disabled={running || bulkMerging}>
+              {running ? <Spinner /> : <ScanSearch />} Run detection
+            </Button>
+          </div>
         }
       />
 
@@ -174,6 +263,22 @@ export function DedupClient({ projectId }: { projectId: string }) {
               aria-label="Dismiss warning"
               className="shrink-0 opacity-70 hover:opacity-100"
               onClick={() => setMergeWarning(null)}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </Alert>
+      )}
+
+      {bulkNotice !== null && (
+        <Alert variant="warning">
+          <div className="flex items-start justify-between gap-3">
+            <span>{bulkNotice}</span>
+            <button
+              type="button"
+              aria-label="Dismiss bulk merge notice"
+              className="shrink-0 opacity-70 hover:opacity-100"
+              onClick={() => setBulkNotice(null)}
             >
               <X className="h-4 w-4" />
             </button>
@@ -373,6 +478,48 @@ export function DedupClient({ projectId }: { projectId: string }) {
           )}
         </TabsContent>
       </Tabs>
+
+      <Dialog open={bulkMergeOpen} onOpenChange={setBulkMergeOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Merge {exactDoiCitationCount} exact DOI duplicate
+              {exactDoiCitationCount === 1 ? "" : "s"}?
+            </DialogTitle>
+            <DialogDescription>
+              This will resolve {exactDoiGroups.length} group
+              {exactDoiGroups.length === 1 ? "" : "s"} whose suggested pairs all share the
+              same DOI. Each merge can still be undone from the Merged citations tab.
+            </DialogDescription>
+          </DialogHeader>
+          <Alert variant="warning">
+            Synthesis automatically keeps the record with existing screening decisions. Otherwise
+            it keeps the most complete citation, using the oldest-created record to break a tie.
+            Pending assignments and open conflicts on merged records will be voided under the
+            existing deduplication rules.
+          </Alert>
+          {mixedExactDoiGroupCount > 0 && (
+            <Alert variant="info">
+              {mixedExactDoiGroupCount} additional group
+              {mixedExactDoiGroupCount === 1 ? " contains" : "s contain"} an exact DOI pair plus
+              other match types. {mixedExactDoiGroupCount === 1 ? "It" : "They"} will remain open
+              for manual review.
+            </Alert>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBulkMergeOpen(false)}
+              disabled={bulkMerging}
+            >
+              Cancel
+            </Button>
+            <Button onClick={bulkMergeExactDoi} disabled={bulkMerging}>
+              {bulkMerging ? <Spinner /> : <GitMerge />} Merge exact DOI matches
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

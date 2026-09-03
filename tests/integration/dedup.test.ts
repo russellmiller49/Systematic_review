@@ -257,6 +257,165 @@ describe("dedup service", () => {
   });
 
   // --------------------------------------------------------------------- merge
+  it("bulk-merges exact DOI-only groups with deterministic canonicals and audited undo", async () => {
+    const { project, owner, reviewer1 } = await createProjectWithTeam();
+    const batch = await createImportBatch(project.id, owner.id);
+
+    const historyDoi = `10.2468/${uniq("history")}`;
+    const historyCanonical = await createCitationWithSource(project.id, batch.id, {
+      title: "Sparse record with established screening history",
+      doi: historyDoi,
+    });
+    await prisma.citation.update({
+      where: { id: historyCanonical.id },
+      data: { abstract: null, journal: null, year: null, authors: [] },
+    });
+    const historyDuplicate = await createCitationWithSource(project.id, batch.id, {
+      title: "Rich record without screening history",
+      doi: historyDoi,
+      pmid: "246801",
+    });
+    const stage = await createStage(project.id);
+    await prisma.screeningDecision.create({
+      data: {
+        stageId: stage.id,
+        citationId: historyCanonical.id,
+        reviewerId: reviewer1.id,
+        decision: "INCLUDE",
+      },
+    });
+
+    const metadataDoi = `10.1357/${uniq("metadata")}`;
+    const metadataDuplicate = await createCitationWithSource(project.id, batch.id, {
+      title: "Sparse imported record for metadata selection",
+      doi: metadataDoi,
+    });
+    await prisma.citation.update({
+      where: { id: metadataDuplicate.id },
+      data: { abstract: null, journal: null, year: null, authors: [] },
+    });
+    const metadataCanonical = await createCitationWithSource(project.id, batch.id, {
+      title: "Complete imported record for metadata selection",
+      doi: metadataDoi,
+      pmid: "135701",
+    });
+
+    await dedup.runDetection(ctx(owner.id), project.id);
+    const result = await dedup.bulkMergeExactDoiGroups(ctx(owner.id), project.id);
+    expect(result).toMatchObject({
+      exactDoiGroupsFound: 2,
+      groupsMerged: 2,
+      groupsSkippedForReview: 0,
+      citationsMerged: 2,
+      screeningHistoryWarningCount: 0,
+    });
+    expect(result.canonicalSelections.map((selection) => selection.canonicalCitationId)).toEqual(
+      expect.arrayContaining([historyCanonical.id, metadataCanonical.id]),
+    );
+
+    await expect(
+      prisma.citation.findUniqueOrThrow({ where: { id: historyDuplicate.id } }),
+    ).resolves.toMatchObject({
+      status: "DUPLICATE",
+      duplicateOfId: historyCanonical.id,
+    });
+    await expect(
+      prisma.citation.findUniqueOrThrow({ where: { id: metadataDuplicate.id } }),
+    ).resolves.toMatchObject({
+      status: "DUPLICATE",
+      duplicateOfId: metadataCanonical.id,
+    });
+
+    const citationAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        projectId: project.id,
+        entityType: "Citation",
+        entityId: metadataDuplicate.id,
+        action: "dedup.merged",
+      },
+    });
+    expect(citationAudit.metadata).toMatchObject({ bulkExactDoi: true });
+    const bulkAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        projectId: project.id,
+        entityType: "Project",
+        action: "dedup.exact_doi.bulk_merged",
+      },
+    });
+    expect(bulkAudit.metadata).toMatchObject({ groupsMerged: 2, citationsMerged: 2 });
+
+    await dedup.undoMerge(ctx(owner.id), project.id, metadataDuplicate.id);
+    await expect(
+      prisma.citation.findUniqueOrThrow({ where: { id: metadataDuplicate.id } }),
+    ).resolves.toMatchObject({ status: "ACTIVE", duplicateOfId: null });
+  });
+
+  it("bulk DOI merge leaves mixed-evidence groups open and requires dedup management", async () => {
+    const { project, owner, reviewer1 } = await createProjectWithTeam();
+    const batch = await createImportBatch(project.id, owner.id);
+    const doi = `10.9753/${uniq("mixed")}`;
+    await createCitationWithSource(project.id, batch.id, {
+      title: "Unrelated primary citation title",
+      doi,
+    });
+    await createCitationWithSource(project.id, batch.id, {
+      title: "Azithromycin reduces exacerbations in severe asthma randomized trial",
+      doi,
+    });
+    await createCitationWithSource(project.id, batch.id, {
+      title: "Azithromycin reduces exacerbations in severe asthma randomised trial",
+      doi: null,
+    });
+    await dedup.runDetection(ctx(owner.id), project.id);
+
+    const result = await dedup.bulkMergeExactDoiGroups(ctx(owner.id), project.id);
+    expect(result).toMatchObject({
+      exactDoiGroupsFound: 1,
+      groupsMerged: 0,
+      groupsSkippedForReview: 1,
+      citationsMerged: 0,
+    });
+    expect(await prisma.citation.count({ where: { projectId: project.id, status: "ACTIVE" } })).toBe(
+      3,
+    );
+    expect(await dedup.listGroups(ctx(owner.id), project.id)).toHaveLength(1);
+    expect(
+      await prisma.auditEvent.count({
+        where: { projectId: project.id, action: "dedup.exact_doi.bulk_merged" },
+      }),
+    ).toBe(0);
+
+    await expectAppError(
+      dedup.bulkMergeExactDoiGroups(ctx(reviewer1.id), project.id),
+      "FORBIDDEN",
+    );
+  });
+
+  it("bulk DOI merge never overrides a prior human rejection", async () => {
+    const { project, owner } = await createProjectWithTeam();
+    const batch = await createImportBatch(project.id, owner.id);
+    const doi = `10.8642/${uniq("rejected")}`;
+    for (const title of ["Registry report", "Conference report", "Journal report"]) {
+      await createCitationWithSource(project.id, batch.id, { title, doi });
+    }
+    await dedup.runDetection(ctx(owner.id), project.id);
+    const rejectedPair = await prisma.deduplicationCandidate.findFirstOrThrow({
+      where: { projectId: project.id, method: "EXACT_DOI", status: "SUGGESTED" },
+    });
+    await dedup.rejectCandidate(ctx(owner.id), project.id, rejectedPair.id);
+
+    const result = await dedup.bulkMergeExactDoiGroups(ctx(owner.id), project.id);
+    expect(result).toMatchObject({
+      exactDoiGroupsFound: 1,
+      groupsMerged: 0,
+      groupsSkippedForReview: 1,
+      citationsMerged: 0,
+    });
+    expect(await prisma.citation.count({ where: { projectId: project.id, status: "ACTIVE" } })).toBe(
+      3,
+    );
+  });
+
   it("merge: duplicate flipped, source records survive, PENDING assignment + OPEN conflict voided, audited", async () => {
     const seeded = await seedExactPair();
     const { project, owner, reviewer1, canonical, duplicate, candidate, groupId } = seeded;

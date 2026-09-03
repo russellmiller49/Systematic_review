@@ -10,7 +10,7 @@ import type { Ctx } from "@/server/auth/session";
 import { requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
-import type { AuthorName } from "@/server/services/citations/normalize";
+import { normalizeDoi, type AuthorName } from "@/server/services/citations/normalize";
 import { detectDuplicates, type CitationLite } from "./engine";
 
 export const listGroupsQuerySchema = z.object({
@@ -26,6 +26,61 @@ type MergeAuditMetadata = {
   voidedAssignmentIds?: string[];
   voidedConflictIds?: string[];
 };
+
+const bulkCanonicalCitationSelect = {
+  id: true,
+  status: true,
+  title: true,
+  authors: true,
+  year: true,
+  journal: true,
+  volume: true,
+  issue: true,
+  pages: true,
+  abstract: true,
+  doi: true,
+  pmid: true,
+  url: true,
+  language: true,
+  createdAt: true,
+  _count: { select: { decisions: true, identifiers: true, sourceRecords: true } },
+} satisfies Prisma.CitationSelect;
+
+type BulkCanonicalCitation = Prisma.CitationGetPayload<{
+  select: typeof bulkCanonicalCitationSelect;
+}>;
+
+function citationCompletenessScore(citation: BulkCanonicalCitation): number {
+  const authors = Array.isArray(citation.authors) ? citation.authors.length : 0;
+  const metadataFields = [
+    citation.year,
+    citation.journal,
+    citation.volume,
+    citation.issue,
+    citation.pages,
+    citation.pmid,
+    citation.url,
+    citation.language,
+  ];
+  return (
+    metadataFields.filter((value) => value !== null && value !== "").length +
+    (citation.abstract?.trim() ? 3 : 0) +
+    (authors > 0 ? 2 : 0) +
+    citation._count.identifiers +
+    citation._count.sourceRecords
+  );
+}
+
+function chooseBulkCanonical(citations: BulkCanonicalCitation[]): BulkCanonicalCitation {
+  return [...citations].sort((a, b) => {
+    const decisionDifference = b._count.decisions - a._count.decisions;
+    if (decisionDifference !== 0) return decisionDifference;
+    const completenessDifference = citationCompletenessScore(b) - citationCompletenessScore(a);
+    if (completenessDifference !== 0) return completenessDifference;
+    const createdDifference = a.createdAt.getTime() - b.createdAt.getTime();
+    return createdDifference !== 0 ? createdDifference : a.id.localeCompare(b.id);
+  })[0]!;
+}
 
 // Run (or re-run) duplicate detection over the project's ACTIVE citations. Idempotent:
 // pairs already decided (MERGED/REJECTED) are skipped, still-SUGGESTED pairs are refreshed,
@@ -221,134 +276,262 @@ export async function mergeGroup(
 ) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
-  return prisma.$transaction(async (tx) => {
-    const group = await tx.deduplicationGroup.findFirst({
-      where: { id: groupId, projectId },
-      include: { candidates: true },
-    });
-    if (!group) throw notFound("Deduplication group");
-    if (group.status !== "OPEN") throw invalidState("This group has already been resolved");
+  return prisma.$transaction((tx) =>
+    mergeGroupInTransaction(tx, ctx, projectId, groupId, input),
+  );
+}
 
-    // Membership = citations connected by still-SUGGESTED pairs (rejected pairs don't merge).
-    const suggested = group.candidates.filter((c) => c.status === "SUGGESTED");
-    if (suggested.length === 0) {
-      throw invalidState("This group has no suggested candidates left to merge");
-    }
-    const memberIds = new Set<string>();
-    for (const cand of suggested) {
-      memberIds.add(cand.citationAId);
-      memberIds.add(cand.citationBId);
-    }
-    if (!memberIds.has(input.canonicalCitationId)) {
-      throw invalidState("Canonical citation must be a member of this group");
-    }
-    const canonical = await tx.citation.findFirst({
-      where: { id: input.canonicalCitationId, projectId },
-    });
-    if (!canonical) throw notFound("Citation");
-    if (canonical.status !== "ACTIVE") {
-      throw invalidState("Canonical citation must be ACTIVE");
-    }
+async function mergeGroupInTransaction(
+  tx: Prisma.TransactionClient,
+  ctx: Ctx,
+  projectId: string,
+  groupId: string,
+  input: z.infer<typeof mergeGroupSchema>,
+  metadata?: { bulkExactDoi?: boolean },
+) {
+  const group = await tx.deduplicationGroup.findFirst({
+    where: { id: groupId, projectId },
+    include: { candidates: true },
+  });
+  if (!group) throw notFound("Deduplication group");
+  if (group.status !== "OPEN") throw invalidState("This group has already been resolved");
 
-    const duplicates = await tx.citation.findMany({
-      where: {
-        id: { in: [...memberIds].filter((id) => id !== canonical.id) },
-        projectId,
-        status: "ACTIVE",
+  // Membership = citations connected by still-SUGGESTED pairs (rejected pairs don't merge).
+  const suggested = group.candidates.filter((c) => c.status === "SUGGESTED");
+  if (suggested.length === 0) {
+    throw invalidState("This group has no suggested candidates left to merge");
+  }
+  const memberIds = new Set<string>();
+  for (const cand of suggested) {
+    memberIds.add(cand.citationAId);
+    memberIds.add(cand.citationBId);
+  }
+  if (!memberIds.has(input.canonicalCitationId)) {
+    throw invalidState("Canonical citation must be a member of this group");
+  }
+  const canonical = await tx.citation.findFirst({
+    where: { id: input.canonicalCitationId, projectId },
+  });
+  if (!canonical) throw notFound("Citation");
+  if (canonical.status !== "ACTIVE") {
+    throw invalidState("Canonical citation must be ACTIVE");
+  }
+
+  const duplicates = await tx.citation.findMany({
+    where: {
+      id: { in: [...memberIds].filter((id) => id !== canonical.id) },
+      projectId,
+      status: "ACTIVE",
+    },
+  });
+
+  // R8 warning: both canonical and a duplicate already carry screening decisions.
+  const decisionRows = await tx.screeningDecision.findMany({
+    where: { citationId: { in: [canonical.id, ...duplicates.map((d) => d.id)] } },
+    select: { citationId: true },
+  });
+  const citationIdsWithDecisions = new Set(decisionRows.map((d) => d.citationId));
+
+  const mergedCitationIds: string[] = [];
+  const voidedAssignmentIds: string[] = [];
+  const voidedConflictIds: string[] = [];
+  for (const dup of duplicates) {
+    const pendingAssignments = await tx.screeningAssignment.findMany({
+      where: { citationId: dup.id, status: "PENDING" },
+      select: { id: true },
+    });
+    const openConflicts = await tx.screeningConflict.findMany({
+      where: { citationId: dup.id, status: "OPEN" },
+      select: { id: true },
+    });
+    const dupVoidedAssignmentIds = pendingAssignments.map((a) => a.id);
+    const dupVoidedConflictIds = openConflicts.map((c) => c.id);
+    if (dupVoidedAssignmentIds.length > 0) {
+      await tx.screeningAssignment.updateMany({
+        where: { id: { in: dupVoidedAssignmentIds } },
+        data: { status: "VOIDED" },
+      });
+    }
+    if (dupVoidedConflictIds.length > 0) {
+      await tx.screeningConflict.updateMany({
+        where: { id: { in: dupVoidedConflictIds } },
+        data: { status: "VOIDED" },
+      });
+    }
+    await tx.citation.update({
+      where: { id: dup.id },
+      data: { status: "DUPLICATE", duplicateOfId: canonical.id },
+    });
+    await audit.record(tx, {
+      projectId,
+      userId: ctx.userId,
+      entityType: "Citation",
+      entityId: dup.id,
+      action: AuditActions.DEDUP_MERGED,
+      previousValue: { status: "ACTIVE" },
+      newValue: { status: "DUPLICATE", duplicateOfId: canonical.id },
+      metadata: {
+        groupId,
+        voidedAssignmentIds: dupVoidedAssignmentIds,
+        voidedConflictIds: dupVoidedConflictIds,
+        ...metadata,
       },
     });
+    mergedCitationIds.push(dup.id);
+    voidedAssignmentIds.push(...dupVoidedAssignmentIds);
+    voidedConflictIds.push(...dupVoidedConflictIds);
+  }
 
-    // R8 warning: both canonical and a duplicate already carry screening decisions.
-    const decisionRows = await tx.screeningDecision.findMany({
-      where: { citationId: { in: [canonical.id, ...duplicates.map((d) => d.id)] } },
-      select: { citationId: true },
-    });
-    const citationIdsWithDecisions = new Set(decisionRows.map((d) => d.citationId));
+  const decidedAt = new Date();
+  await tx.deduplicationCandidate.updateMany({
+    where: { groupId, status: "SUGGESTED" },
+    data: { status: "MERGED", decidedById: ctx.userId, decidedAt },
+  });
+  const resolvedGroup = await tx.deduplicationGroup.update({
+    where: { id: groupId },
+    data: { status: "RESOLVED" },
+  });
 
-    const mergedCitationIds: string[] = [];
-    const voidedAssignmentIds: string[] = [];
-    const voidedConflictIds: string[] = [];
-    for (const dup of duplicates) {
-      const pendingAssignments = await tx.screeningAssignment.findMany({
-        where: { citationId: dup.id, status: "PENDING" },
-        select: { id: true },
-      });
-      const openConflicts = await tx.screeningConflict.findMany({
-        where: { citationId: dup.id, status: "OPEN" },
-        select: { id: true },
-      });
-      const dupVoidedAssignmentIds = pendingAssignments.map((a) => a.id);
-      const dupVoidedConflictIds = openConflicts.map((c) => c.id);
-      if (dupVoidedAssignmentIds.length > 0) {
-        await tx.screeningAssignment.updateMany({
-          where: { id: { in: dupVoidedAssignmentIds } },
-          data: { status: "VOIDED" },
-        });
-      }
-      if (dupVoidedConflictIds.length > 0) {
-        await tx.screeningConflict.updateMany({
-          where: { id: { in: dupVoidedConflictIds } },
-          data: { status: "VOIDED" },
-        });
-      }
-      await tx.citation.update({
-        where: { id: dup.id },
-        data: { status: "DUPLICATE", duplicateOfId: canonical.id },
-      });
-      await audit.record(tx, {
-        projectId,
-        userId: ctx.userId,
-        entityType: "Citation",
-        entityId: dup.id,
-        action: AuditActions.DEDUP_MERGED,
-        previousValue: { status: "ACTIVE" },
-        newValue: { status: "DUPLICATE", duplicateOfId: canonical.id },
-        metadata: {
-          groupId,
-          voidedAssignmentIds: dupVoidedAssignmentIds,
-          voidedConflictIds: dupVoidedConflictIds,
+  const duplicatesWithDecisions = mergedCitationIds.filter((id) =>
+    citationIdsWithDecisions.has(id),
+  );
+  const warning =
+    citationIdsWithDecisions.has(canonical.id) && duplicatesWithDecisions.length > 0
+      ? {
+          code: "SCREENING_DECISIONS_ON_BOTH" as const,
+          message:
+            "Both the canonical citation and a merged duplicate already have screening " +
+            "decisions. The canonical citation's screening history is authoritative; the " +
+            "duplicate's decisions are kept for the record but ignored.",
+          canonicalCitationId: canonical.id,
+          duplicateCitationIdsWithDecisions: duplicatesWithDecisions,
+        }
+      : null;
+
+  return {
+    group: resolvedGroup,
+    canonicalCitationId: canonical.id,
+    mergedCitationIds,
+    voidedAssignmentIds,
+    voidedConflictIds,
+    warning,
+  };
+}
+
+// Bulk-resolve only groups whose current suggested graph is entirely made of exact DOI
+// matches. Mixed groups stay open because mergeGroup intentionally merges every connected
+// member, which would otherwise auto-merge citations joined only by fuzzy/title/PMID evidence.
+export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
+  await requirePermission(ctx, projectId, "dedup.manage");
+
+  return prisma.$transaction(
+    async (tx) => {
+      const groups = await tx.deduplicationGroup.findMany({
+        where: { projectId, status: "OPEN" },
+        orderBy: { createdAt: "asc" },
+        include: {
+          candidates: {
+            include: {
+              citationA: { select: bulkCanonicalCitationSelect },
+              citationB: { select: bulkCanonicalCitationSelect },
+            },
+          },
         },
       });
-      mergedCitationIds.push(dup.id);
-      voidedAssignmentIds.push(...dupVoidedAssignmentIds);
-      voidedConflictIds.push(...dupVoidedConflictIds);
-    }
 
-    const decidedAt = new Date();
-    await tx.deduplicationCandidate.updateMany({
-      where: { groupId, status: "SUGGESTED" },
-      data: { status: "MERGED", decidedById: ctx.userId, decidedAt },
-    });
-    const resolvedGroup = await tx.deduplicationGroup.update({
-      where: { id: groupId },
-      data: { status: "RESOLVED" },
-    });
+      const groupsWithExactDoiEvidence = groups.filter((group) =>
+        group.candidates.some(
+          (candidate) =>
+            candidate.status === "SUGGESTED" &&
+            candidate.method === "EXACT_DOI" &&
+            candidate.score === 1,
+        ),
+      );
+      const eligible = groupsWithExactDoiEvidence.flatMap((group) => {
+        const suggested = group.candidates.filter(
+          (candidate) => candidate.status === "SUGGESTED",
+        );
+        if (
+          suggested.length === 0 ||
+          group.candidates.some((candidate) => candidate.status === "REJECTED") ||
+          !suggested.every(
+            (candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1,
+          )
+        ) {
+          return [];
+        }
 
-    const duplicatesWithDecisions = mergedCitationIds.filter((id) =>
-      citationIdsWithDecisions.has(id),
-    );
-    const warning =
-      citationIdsWithDecisions.has(canonical.id) && duplicatesWithDecisions.length > 0
-        ? {
-            code: "SCREENING_DECISIONS_ON_BOTH" as const,
-            message:
-              "Both the canonical citation and a merged duplicate already have screening " +
-              "decisions. The canonical citation's screening history is authoritative; the " +
-              "duplicate's decisions are kept for the record but ignored.",
-            canonicalCitationId: canonical.id,
-            duplicateCitationIdsWithDecisions: duplicatesWithDecisions,
-          }
-        : null;
+        const citations = new Map<string, BulkCanonicalCitation>();
+        for (const candidate of suggested) {
+          citations.set(candidate.citationA.id, candidate.citationA);
+          citations.set(candidate.citationB.id, candidate.citationB);
+        }
+        const members = [...citations.values()];
+        const memberDois = members.map((citation) => normalizeDoi(citation.doi));
+        const normalizedDois = new Set(memberDois);
+        if (
+          members.length < 2 ||
+          members.some((citation) => citation.status !== "ACTIVE") ||
+          memberDois.some((doi) => doi === null) ||
+          normalizedDois.size !== 1
+        ) {
+          return [];
+        }
+        return [{ groupId: group.id, canonical: chooseBulkCanonical(members) }];
+      });
 
-    return {
-      group: resolvedGroup,
-      canonicalCitationId: canonical.id,
-      mergedCitationIds,
-      voidedAssignmentIds,
-      voidedConflictIds,
-      warning,
-    };
-  });
+      const results = [];
+      for (const item of eligible) {
+        results.push(
+          await mergeGroupInTransaction(
+            tx,
+            ctx,
+            projectId,
+            item.groupId,
+            { canonicalCitationId: item.canonical.id },
+            { bulkExactDoi: true },
+          ),
+        );
+      }
+
+      const summary = {
+        exactDoiGroupsFound: groupsWithExactDoiEvidence.length,
+        groupsMerged: results.length,
+        groupsSkippedForReview: groupsWithExactDoiEvidence.length - results.length,
+        citationsMerged: results.reduce(
+          (count, result) => count + result.mergedCitationIds.length,
+          0,
+        ),
+        voidedAssignmentCount: results.reduce(
+          (count, result) => count + result.voidedAssignmentIds.length,
+          0,
+        ),
+        voidedConflictCount: results.reduce(
+          (count, result) => count + result.voidedConflictIds.length,
+          0,
+        ),
+        screeningHistoryWarningCount: results.filter((result) => result.warning !== null).length,
+        canonicalSelections: results.map((result) => ({
+          groupId: result.group.id,
+          canonicalCitationId: result.canonicalCitationId,
+        })),
+      };
+
+      if (results.length > 0) {
+        await audit.record(tx, {
+          projectId,
+          userId: ctx.userId,
+          entityType: "Project",
+          entityId: projectId,
+          action: AuditActions.DEDUP_EXACT_DOI_BULK_MERGED,
+          metadata: summary,
+        });
+      }
+
+      return summary;
+    },
+    { timeout: 60_000 },
+  );
 }
 
 // Reject a suggested pair. When the group has no SUGGESTED pair left it is RESOLVED.

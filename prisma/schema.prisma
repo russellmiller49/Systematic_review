@@ -291,6 +291,7 @@ model User {
   screeningDecisions      ScreeningDecision[]           @relation("DecisionReviewer")
   adjudications           ScreeningAdjudication[]       @relation("Adjudicator")
   screeningKeywords       ScreeningKeyword[]            @relation("ScreeningKeywordCreator")
+  guidelineScreeningPools GuidelineScreeningPool[]      @relation("GuidelineScreeningPoolCreator")
   uploadedFiles           FullTextFile[]                @relation("FileUploader")
   retrievalAttempts       FullTextRetrievalAttempt[]    @relation("RetrievalRecorder")
   extractionTemplates     ExtractionTemplate[]          @relation("TemplateCreator")
@@ -424,36 +425,38 @@ model Project {
   parentProject Project?     @relation("GuidelineSubProjects", fields: [parentProjectId], references: [id])
   subProjects   Project[]    @relation("GuidelineSubProjects")
 
-  members               ProjectMember[]
-  invitations           ProjectInvitation[]
-  protocol              Protocol?
-  exclusionReasons      ExclusionReason[]
-  importSources         ImportSource[]
-  importBatches         ImportBatch[]
-  citations             Citation[]
-  dedupGroups           DeduplicationGroup[]
-  dedupCandidates       DeduplicationCandidate[]
-  studies               Study[]
-  screeningStages       ScreeningStage[]
-  screeningKeywords     ScreeningKeyword[]
-  fullTextFiles         FullTextFile[]
-  extractionTemplates   ExtractionTemplate[]
-  robTools              RiskOfBiasTool[]
-  prismaSnapshots       PrismaSnapshot[]
-  exportJobs            ExportJob[]
-  auditEvents           AuditEvent[]
-  aiScreeningRuns       AiScreeningRun[]
-  aiExtractionRuns      AiExtractionRun[]
-  aiRobRuns             AiRobRun[]
-  aiGradeRuns           AiGradeRun[]
-  analysisOutcomes      AnalysisOutcome[]
-  cohortCandidates      CohortCandidate[]
-  notifications         Notification[]
-  fullTextRetrievalRuns FullTextRetrievalRun[]
-  referenceEntries      ReferenceEntry[]
-  manuscript            Manuscript?
-  chatChannels          ChatChannel[]
-  chatAssignmentTasks   ChatAssignmentTask[]
+  members                 ProjectMember[]
+  invitations             ProjectInvitation[]
+  protocol                Protocol?
+  exclusionReasons        ExclusionReason[]
+  importSources           ImportSource[]
+  importBatches           ImportBatch[]
+  citations               Citation[]
+  dedupGroups             DeduplicationGroup[]
+  dedupCandidates         DeduplicationCandidate[]
+  studies                 Study[]
+  screeningStages         ScreeningStage[]
+  screeningKeywords       ScreeningKeyword[]
+  fullTextFiles           FullTextFile[]
+  extractionTemplates     ExtractionTemplate[]
+  robTools                RiskOfBiasTool[]
+  prismaSnapshots         PrismaSnapshot[]
+  exportJobs              ExportJob[]
+  auditEvents             AuditEvent[]
+  aiScreeningRuns         AiScreeningRun[]
+  aiExtractionRuns        AiExtractionRun[]
+  aiRobRuns               AiRobRun[]
+  aiGradeRuns             AiGradeRun[]
+  analysisOutcomes        AnalysisOutcome[]
+  cohortCandidates        CohortCandidate[]
+  notifications           Notification[]
+  fullTextRetrievalRuns   FullTextRetrievalRun[]
+  referenceEntries        ReferenceEntry[]
+  manuscript              Manuscript?
+  chatChannels            ChatChannel[]
+  chatAssignmentTasks     ChatAssignmentTask[]
+  guidelineScreeningPool  GuidelineScreeningPool?       @relation("GuidelineScreeningPoolGuideline")
+  screeningPoolMembership GuidelineScreeningPoolMember? @relation("GuidelineScreeningPoolProject")
 
   @@index([orgId])
   @@index([parentProjectId])
@@ -909,6 +912,35 @@ model StudyReportLink {
 // ---------------------------------------------------------------------------
 // Screening
 // ---------------------------------------------------------------------------
+
+// One persisted, administrator-defined combined title/abstract queue per guideline.
+// Reviewers never submit project ids: the service resolves the authoritative member PICOs
+// from these rows. PICOs outside the pool remain ordinary individual screening queues.
+model GuidelineScreeningPool {
+  id          String   @id @default(cuid())
+  guidelineId String   @unique
+  name        String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guideline Project                        @relation("GuidelineScreeningPoolGuideline", fields: [guidelineId], references: [id])
+  createdBy User                           @relation("GuidelineScreeningPoolCreator", fields: [createdById], references: [id])
+  members   GuidelineScreeningPoolMember[]
+}
+
+model GuidelineScreeningPoolMember {
+  id        String @id @default(cuid())
+  poolId    String
+  projectId String @unique
+  order     Int    @default(0)
+
+  pool    GuidelineScreeningPool @relation(fields: [poolId], references: [id])
+  project Project                @relation("GuidelineScreeningPoolProject", fields: [projectId], references: [id])
+
+  @@unique([poolId, projectId])
+  @@index([poolId, order])
+}
 
 model ScreeningStage {
   id                     String    @id @default(cuid())

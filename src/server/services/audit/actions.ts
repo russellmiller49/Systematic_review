@@ -46,6 +46,7 @@ export const AuditActions = {
   // dedup
   DEDUP_RUN: "dedup.run",
   DEDUP_MERGED: "dedup.merged",
+  DEDUP_EXACT_DOI_BULK_MERGED: "dedup.exact_doi.bulk_merged",
   DEDUP_REJECTED: "dedup.rejected",
   DEDUP_MERGE_UNDONE: "dedup.merge_undone",
 
@@ -61,6 +62,9 @@ export const AuditActions = {
   SCREENING_RESULT_REOPENED: "screening.result.reopened",
   SCREENING_STAGE_UPDATED: "screening.stage.updated",
   SCREENING_STAGE_UNBLINDED: "screening.stage.unblinded",
+  SCREENING_POOL_CREATED: "screening.pool.created",
+  SCREENING_POOL_UPDATED: "screening.pool.updated",
+  SCREENING_POOL_DELETED: "screening.pool.deleted",
   SCREENING_KEYWORD_CREATED: "screening.keyword.created",
   SCREENING_KEYWORD_UPDATED: "screening.keyword.updated",
   SCREENING_KEYWORD_DELETED: "screening.keyword.deleted",

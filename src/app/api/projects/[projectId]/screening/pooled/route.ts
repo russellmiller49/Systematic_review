@@ -13,8 +13,8 @@ export async function GET(req: Request, { params }: Params) {
   return handleRoute(async () => {
     const ctx = await getCtx();
     const { projectId } = await params;
-    const projectIds = new URL(req.url).searchParams.getAll("projectId");
-    const input = pooledSelectionSchema.parse({ projectIds });
+    const poolId = new URL(req.url).searchParams.get("poolId");
+    const input = pooledSelectionSchema.parse({ poolId });
     return ok(await getPooledQueue(ctx, projectId, input));
   });
 }

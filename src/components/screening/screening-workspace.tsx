@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ListChecks } from "lucide-react";
+import { Layers3, ListChecks, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EmptyState, Skeleton } from "@/components/ui/misc";
+import { Alert, EmptyState, Skeleton } from "@/components/ui/misc";
 import { PageHeader } from "@/components/layout/page-header";
 import { StageQueue } from "./stage-queue";
 import { AssignReviewersDialog } from "./assign-dialog";
@@ -19,6 +21,7 @@ import { PooledScreeningWorkspace } from "./pooled-screening-workspace";
 import {
   STAGE_LABELS,
   UNMATCHED_KEYWORD_GROUP,
+  type GuidelineScreeningConfiguration,
   type ProjectAiStatus,
   type ScreeningKeyword,
   type ScreeningStageSummary,
@@ -33,6 +36,10 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
         title: string;
         isGuideline: boolean;
         capabilities: string[];
+        parentProject: { id: string; title: string } | null;
+        screeningPoolMembership: {
+          pool: { id: string; name: string; guidelineId: string };
+        } | null;
         subProjects: {
           id: string;
           title: string;
@@ -78,16 +85,186 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
   }
   if (project.isGuideline) {
     return (
-      <PooledScreeningWorkspace
+      <GuidelineScreeningWorkspace
         guidelineId={projectId}
         guideline={project}
+      />
+    );
+  }
+  if (project.screeningPoolMembership) {
+    const pool = project.screeningPoolMembership.pool;
+    return (
+      <EmptyState
+        icon={Layers3}
+        title={`Screen through “${pool.name}”`}
+        description="This PICO belongs to a saved combined abstract-screening pool, so its title-and-abstract assignments are completed from the guideline workspace."
+        action={
+          <Link
+            className={buttonVariants()}
+            href={`/projects/${pool.guidelineId}/screening`}
+          >
+            Open combined pool
+          </Link>
+        }
       />
     );
   }
   return <ProjectScreeningWorkspace projectId={projectId} />;
 }
 
-function ProjectScreeningWorkspace({ projectId }: { projectId: string }) {
+function GuidelineScreeningWorkspace({
+  guidelineId,
+  guideline,
+}: {
+  guidelineId: string;
+  guideline: {
+    title: string;
+    capabilities: string[];
+    subProjects: {
+      id: string;
+      title: string;
+      researchQuestion: string | null;
+      status: string;
+    }[];
+  };
+}) {
+  const [configuration, setConfiguration] =
+    useState<GuidelineScreeningConfiguration | null | undefined>(undefined);
+  const [activeQueue, setActiveQueue] = useState<string | null>(null);
+  const canConfigure = guideline.capabilities.includes("screening.configure");
+
+  useEffect(() => {
+    let cancelled = false;
+    api<GuidelineScreeningConfiguration>(
+      `/api/projects/${guidelineId}/screening/pool`,
+    )
+      .then((response) => {
+        if (cancelled) return;
+        setConfiguration(response);
+        setActiveQueue((current) => {
+          const available = new Set([
+            ...(response.pool ? [`pool:${response.pool.id}`] : []),
+            ...response.unpooledPicos.map((pico) => `pico:${pico.id}`),
+          ]);
+          if (current && available.has(current)) return current;
+          return response.pool
+            ? `pool:${response.pool.id}`
+            : response.unpooledPicos[0]
+              ? `pico:${response.unpooledPicos[0].id}`
+              : null;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setConfiguration(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [guidelineId]);
+
+  const selectedPico = configuration?.unpooledPicos.find(
+    (pico) => activeQueue === `pico:${pico.id}`,
+  );
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Abstract screening"
+        description="Work from the saved combined pool or from a PICO that has its own individual queue."
+      />
+
+      {configuration === undefined ? (
+        <Skeleton className="h-36 w-full" />
+      ) : configuration === null ? (
+        <Alert variant="error">The guideline screening configuration could not be loaded.</Alert>
+      ) : configuration.pool || configuration.unpooledPicos.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Screening assignments</CardTitle>
+            <CardDescription>
+              Pool membership is set by an Owner or Admin. Selecting a queue here never changes
+              which PICOs are combined.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {configuration.pool && (
+              <Button
+                variant={activeQueue === `pool:${configuration.pool.id}` ? "default" : "outline"}
+                onClick={() => setActiveQueue(`pool:${configuration.pool!.id}`)}
+              >
+                <Layers3 /> {configuration.pool.name}
+                <Badge variant="secondary">Combined</Badge>
+              </Button>
+            )}
+            {configuration.unpooledPicos.map((pico) => (
+              <Button
+                key={pico.id}
+                variant={activeQueue === `pico:${pico.id}` ? "default" : "outline"}
+                onClick={() => setActiveQueue(`pico:${pico.id}`)}
+              >
+                PICO {pico.picoNumber} · {pico.title}
+              </Button>
+            ))}
+          </CardContent>
+        </Card>
+      ) : (
+        <EmptyState
+          icon={ListChecks}
+          title="No PICO screening queues yet"
+          description="Add PICO questions to this guideline before assigning abstract screening."
+        />
+      )}
+
+      {configuration && !configuration.pool && canConfigure && (
+        <Alert>
+          No combined pool is configured. Create and name one in{" "}
+          <Link className="font-medium underline" href={`/projects/${guidelineId}/settings`}>
+            guideline Settings
+          </Link>
+          , or keep every PICO as an individual queue.
+        </Alert>
+      )}
+
+      {configuration?.pool && activeQueue === `pool:${configuration.pool.id}` && (
+        <PooledScreeningWorkspace
+          guidelineId={guidelineId}
+          guideline={guideline}
+          pool={configuration.pool}
+          showHeader={false}
+        />
+      )}
+      {selectedPico && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">Individual PICO</Badge>
+            <span className="text-sm font-medium">
+              PICO {selectedPico.picoNumber} · {selectedPico.title}
+            </span>
+          </div>
+          <ProjectScreeningWorkspace projectId={selectedPico.id} showHeader={false} />
+        </div>
+      )}
+      {configuration && canConfigure && (
+        <div className="flex justify-end">
+          <Link
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+            href={`/projects/${guidelineId}/settings`}
+          >
+            <Settings /> Manage combined pool
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectScreeningWorkspace({
+  projectId,
+  showHeader = true,
+}: {
+  projectId: string;
+  showHeader?: boolean;
+}) {
   const [stages, setStages] = useState<ScreeningStageSummary[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [canConfigure, setCanConfigure] = useState(false);
@@ -172,10 +349,12 @@ function ProjectScreeningWorkspace({ projectId }: { projectId: string }) {
 
   return (
     <div>
-      <PageHeader
-        title="Screening"
-        description="Work through your assigned citations — keyboard-first: press ? for shortcuts."
-      />
+      {showHeader && (
+        <PageHeader
+          title="Screening"
+          description="Work through your assigned citations — keyboard-first: press ? for shortcuts."
+        />
+      )}
 
       {stages === null ? (
         <div className="space-y-4">

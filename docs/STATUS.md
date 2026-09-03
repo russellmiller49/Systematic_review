@@ -4,6 +4,68 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-09-02) — persisted named combined-screening pool — DONE
+
+Guideline Owners/Admins now define one named combined title/abstract pool in Settings. Reviewers
+choose between that authoritative combined assignment queue and any PICOs left as individual
+queues; they no longer assemble an ad hoc PICO selection in their browser.
+
+- **Persisted configuration:** migration `20260903010000_guideline_screening_pool` adds one
+  `GuidelineScreeningPool` per guideline plus ordered relational PICO membership. A pool requires
+  at least two same-family PICOs with matching title/abstract reviewer counts.
+- **Admin ownership:** `GET/PUT/DELETE /api/projects/[projectId]/screening/pool` exposes the
+  configuration to members but restricts creation, renaming, membership changes, and removal to
+  `project.edit` (Owner/Admin). Every lifecycle change is audited with before/after membership.
+- **Reviewer experience:** the guideline Screening page shows the saved pool name as one Combined
+  queue and lists only PICOs outside it as individual choices. Pool membership is read-only there;
+  the former browser-local PICO checkboxes and local-storage selection are gone.
+- **One authoritative path:** pooled queue, assignment, and decision APIs now accept a pool ID and
+  resolve PICO membership server-side. Ordinary title/abstract assignment, navigator, queue, and
+  decision endpoints reject pooled PICOs, while direct UI navigation sends the reviewer back to
+  the named guideline pool. Existing per-PICO decisions and R1/R3/R5/R6/R7 behavior remain the
+  source of truth; editing/removing a pool never deletes historical work.
+- **Verification:** Prisma schema/migration valid and applied locally; typecheck and production
+  build clean; **621 unit** and **328 integration** tests passing. Browser QA covered Settings
+  creation, the Combined queue selector, the direct-PICO redirect, and a clean console.
+
+## Current state (2026-09-02) — bulk merge exact DOI duplicates — DONE
+
+Deduplication managers can now merge all safely isolated 100% DOI-match groups in one confirmed
+action instead of opening and resolving each group individually.
+
+- **Strict eligibility:** only current `EXACT_DOI` candidates with a 100% score qualify, and
+  every suggested edge in the group must be an exact DOI match for the same normalized DOI.
+  Mixed fuzzy/title/PMID groups and groups containing a prior human rejection remain open for
+  manual review rather than over-merging a connected citation or overriding a decision.
+- **Deterministic canonical:** the bulk action keeps the citation with existing screening
+  decisions first, then the most complete metadata, then the oldest-created record. The
+  confirmation dialog explains this policy and previews group/citation counts.
+- **Existing safety lifecycle:** each citation still passes through the standard merge path,
+  including assignment/conflict voiding, R8 screening-history warnings, per-citation audit
+  events, resolved candidate/group state, and individual undo from Merged citations.
+- **Bulk accountability:** a run-level `dedup.exact_doi.bulk_merged` audit event records counts
+  and canonical selections; per-citation events identify the bulk action.
+- **Verification:** typecheck and production build clean; **621 unit** and **326 integration**
+  tests passing.
+
+## Current state (2026-09-02) — assign workspace members to projects — DONE
+
+Project Owners/Admins can now add an existing active workspace member from a named picker in
+project settings instead of re-entering an email address or creating a redundant invitation.
+
+- **Clear access model:** the dialog explains that workspace and project access are separate,
+  so accepting a workspace invitation does not silently grant access to every project.
+- **Eligible member list:** the project-scoped endpoint returns active workspace members who
+  are not already active in the project, including removed project members who may be
+  reactivated through the existing audited add-member path. Removed workspace members and
+  current project members are excluded.
+- **Guideline behavior:** adding from a guideline clearly notes that the selected project roles
+  propagate to all current PICO sub-projects through the existing family synchronization.
+- **Permissions:** only project Owners/Admins can read the assignable-member list or add a
+  member; project roles remain explicit and the R10 workspace-membership gate is unchanged.
+- **Verification:** typecheck and production build clean; **621 unit** and **323 integration**
+  tests pass, including eligible-member filtering and project-manager authorization.
+
 ## Current state (2026-09-01) — combined abstract screening across guideline PICOs — DONE
 
 Guideline teams can now choose two or more PICO sub-projects and screen their title/abstract

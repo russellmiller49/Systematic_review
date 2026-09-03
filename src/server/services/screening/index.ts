@@ -118,6 +118,22 @@ async function getStageOr404(tx: Tx, projectId: string, stageId: string) {
   return stage;
 }
 
+// A PICO inside a persisted guideline pool has one authoritative title/abstract entry point.
+// The pooled service calls createDecisionInTransaction directly after resolving the pool;
+// ordinary queue/assignment/decision endpoints are blocked to prevent partial, out-of-sync work.
+async function assertIndividualTitleAbstractAllowed(tx: Tx, stage: ScreeningStage) {
+  if (stage.type !== "TITLE_ABSTRACT") return;
+  const membership = await tx.guidelineScreeningPoolMember.findUnique({
+    where: { projectId: stage.projectId },
+    select: { pool: { select: { name: true } } },
+  });
+  if (membership) {
+    throw invalidState(
+      `This PICO is screened through the combined pool "${membership.pool.name}". Open screening from the guideline workspace.`,
+    );
+  }
+}
+
 // The citation "card" shown to screeners/adjudicators.
 const citationCardInclude = {
   identifiers: { select: { type: true, value: true } },
@@ -295,6 +311,7 @@ export async function createAssignments(
   await requirePermission(ctx, projectId, "screening.configure");
   return prisma.$transaction(async (tx) => {
     const stage = await getStageOr404(tx, projectId, stageId);
+    await assertIndividualTitleAbstractAllowed(tx, stage);
     const reviewerIds = [...new Set(input.reviewerIds)];
 
     // Reviewers must be ACTIVE project members holding screening.decide.
@@ -587,6 +604,7 @@ export async function getQueue(
 ) {
   await requirePermission(ctx, projectId, "screening.decide");
   const stage = await getStageOr404(prisma, projectId, stageId);
+  await assertIndividualTitleAbstractAllowed(prisma, stage);
   const keywordWhere = await screeningKeywordCitationWhere(
     prisma,
     projectId,
@@ -724,6 +742,7 @@ export async function getScreeningNavigator(
 ) {
   await requirePermission(ctx, projectId, "screening.decide");
   const stage = await getStageOr404(prisma, projectId, stageId);
+  await assertIndividualTitleAbstractAllowed(prisma, stage);
   const keywordWhere = await screeningKeywordCitationWhere(
     prisma,
     projectId,
@@ -1164,6 +1183,7 @@ export async function createDecision(
   await requirePermission(ctx, projectId, "screening.decide");
   return prisma.$transaction(async (tx) => {
     const stage = await getStageOr404(tx, projectId, stageId);
+    await assertIndividualTitleAbstractAllowed(tx, stage);
     return createDecisionInTransaction(tx, ctx, projectId, stage, input);
   });
 }

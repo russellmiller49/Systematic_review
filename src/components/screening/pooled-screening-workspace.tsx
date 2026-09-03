@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Layers3, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiPost, ApiError } from "@/lib/api";
@@ -22,7 +22,7 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
 import { PooledAssignDialog } from "./pooled-assign-dialog";
-import type { PooledQueueItem, PooledQueueResponse } from "./types";
+import type { PooledPico, PooledQueueItem, PooledQueueResponse } from "./types";
 
 interface GuidelineScreeningInfo {
   title: string;
@@ -35,32 +35,23 @@ interface GuidelineScreeningInfo {
   }[];
 }
 
-function selectedStorageKey(guidelineId: string) {
-  return `synthesis:pooled-screening-picos:${guidelineId}`;
-}
-
-function buildQueuePath(guidelineId: string, projectIds: string[]) {
+function buildQueuePath(guidelineId: string, poolId: string) {
   const params = new URLSearchParams();
-  for (const projectId of projectIds) params.append("projectId", projectId);
+  params.set("poolId", poolId);
   return `/api/projects/${guidelineId}/screening/pooled?${params.toString()}`;
-}
-
-function toggleId(current: Set<string>, id: string) {
-  const next = new Set(current);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  return next;
 }
 
 export function PooledScreeningWorkspace({
   guidelineId,
   guideline,
+  pool,
+  showHeader = true,
 }: {
   guidelineId: string;
   guideline: GuidelineScreeningInfo;
+  pool: { id: string; name: string; picos: PooledPico[] };
+  showHeader?: boolean;
 }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selectionReady, setSelectionReady] = useState(false);
   const [queue, setQueue] = useState<PooledQueueResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,35 +62,8 @@ export function PooledScreeningWorkspace({
   const canConfigure = guideline.capabilities.includes("screening.configure");
   const canScreen = guideline.capabilities.includes("screening.decide");
 
-  useEffect(() => {
-    const available = new Set(guideline.subProjects.map((project) => project.id));
-    let restored: string[] = [];
-    try {
-      const raw = window.localStorage.getItem(selectedStorageKey(guidelineId));
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(parsed)) {
-        restored = parsed.filter(
-          (value): value is string => typeof value === "string" && available.has(value),
-        );
-      }
-    } catch {
-      restored = [];
-    }
-    setSelected(
-      new Set(
-        restored.length >= 2 ? restored : guideline.subProjects.map((project) => project.id),
-      ),
-    );
-    setSelectionReady(true);
-  }, [guideline.subProjects, guidelineId]);
-
-  const selectedIds = useMemo(
-    () => guideline.subProjects.filter((project) => selected.has(project.id)).map((project) => project.id),
-    [guideline.subProjects, selected],
-  );
-
   const loadQueue = useCallback(async () => {
-    if (!canScreen || selectedIds.length < 2) {
+    if (!canScreen) {
       setQueue(null);
       setError(null);
       return;
@@ -108,7 +72,7 @@ export function PooledScreeningWorkspace({
     setLoading(true);
     try {
       const response = await api<PooledQueueResponse>(
-        buildQueuePath(guidelineId, selectedIds),
+        buildQueuePath(guidelineId, pool.id),
       );
       if (generation !== requestGeneration.current) return;
       setQueue(response);
@@ -120,11 +84,11 @@ export function PooledScreeningWorkspace({
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [canScreen, guidelineId, selectedIds]);
+  }, [canScreen, guidelineId, pool.id]);
 
   useEffect(() => {
-    if (selectionReady) void loadQueue();
-  }, [loadQueue, selectionReady]);
+    void loadQueue();
+  }, [loadQueue]);
 
   const current = queue?.items[0] ?? null;
   const canExclude = (queue?.reasons.length ?? 0) > 0;
@@ -133,14 +97,6 @@ export function PooledScreeningWorkspace({
     setNote("");
     setExcludeOpen(false);
   }, [currentKey]);
-
-  function updateSelected(next: Set<string>) {
-    setSelected(next);
-    window.localStorage.setItem(
-      selectedStorageKey(guidelineId),
-      JSON.stringify([...next]),
-    );
-  }
 
   const submitDecision = useCallback(
     async (
@@ -155,7 +111,7 @@ export function PooledScreeningWorkspace({
           appliedToCitationRecords: number;
           appliedToPicos: number;
         }>(`/api/projects/${guidelineId}/screening/pooled`, {
-          projectIds: selectedIds,
+          poolId: pool.id,
           citationIds: item.citationIds,
           decision,
           exclusionReasonLabel: exclusionReasonLabel ?? null,
@@ -176,7 +132,7 @@ export function PooledScreeningWorkspace({
         setBusy(false);
       }
     },
-    [guidelineId, loadQueue, note, selectedIds],
+    [guidelineId, loadQueue, note, pool.id],
   );
 
   useEffect(() => {
@@ -204,10 +160,12 @@ export function PooledScreeningWorkspace({
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Combined abstract screening"
-        description="Choose two or more PICO questions, review each unique abstract once, and apply one include or exclude decision to every linked PICO record."
-      />
+      {showHeader && (
+        <PageHeader
+          title={pool.name}
+          description="Review each unique abstract once and apply one include or exclude decision to every linked PICO record in this saved pool."
+        />
+      )}
 
       <Card>
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
@@ -216,24 +174,16 @@ export function PooledScreeningWorkspace({
               <Layers3 className="h-4 w-4" /> PICO pool
             </CardTitle>
             <CardDescription>
-              The selection is saved in this browser. PICO numbering follows the guideline.
+              This pool is configured in guideline Settings. Only an Owner or Admin can change
+              its name or PICO membership.
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => updateSelected(new Set(guideline.subProjects.map((project) => project.id)))}
-            >
-              Select all
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => updateSelected(new Set())}>
-              Clear
-            </Button>
             {canConfigure && queue && (
               <PooledAssignDialog
                 guidelineId={guidelineId}
-                projectIds={selectedIds}
+                poolId={pool.id}
+                poolName={pool.name}
                 reviewersPerCitation={queue.configuration.reviewersPerCitation}
                 onAssigned={loadQueue}
               />
@@ -241,38 +191,23 @@ export function PooledScreeningWorkspace({
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {guideline.subProjects.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Add at least two PICO questions to the guideline before creating a combined pool.
-            </p>
-          ) : (
-            <div className="grid gap-2 md:grid-cols-2">
-              {guideline.subProjects.map((project, index) => (
-                <label
-                  key={project.id}
-                  className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border px-3 py-2.5 hover:bg-muted/50"
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 h-4 w-4 accent-primary"
-                    checked={selected.has(project.id)}
-                    onChange={() => updateSelected(toggleId(selected, project.id))}
-                  />
-                  <span className="min-w-0 text-sm">
-                    <span className="font-medium">PICO {index + 1} · {project.title}</span>
-                    {project.researchQuestion && (
-                      <span className="mt-0.5 block line-clamp-2 text-xs text-muted-foreground">
-                        {project.researchQuestion}
-                      </span>
-                    )}
+          <div className="grid gap-2 md:grid-cols-2">
+            {pool.picos.map((project) => (
+              <div
+                key={project.id}
+                className="rounded-md border border-border px-3 py-2.5"
+              >
+                <span className="text-sm font-medium">
+                  PICO {project.picoNumber} · {project.title}
+                </span>
+                {project.researchQuestion && (
+                  <span className="mt-0.5 block line-clamp-2 text-xs text-muted-foreground">
+                    {project.researchQuestion}
                   </span>
-                </label>
-              ))}
-            </div>
-          )}
-          {selectedIds.length < 2 && (
-            <Alert variant="warning">Choose at least two PICO questions for combined screening.</Alert>
-          )}
+                )}
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
 
@@ -385,9 +320,9 @@ export function PooledScreeningWorkspace({
                 </p>
                 {queue.reasons.length === 0 && (
                   <Alert variant="warning">
-                    Exclusion is unavailable because the selected PICOs do not share an active
+                    Exclusion is unavailable because the pooled PICOs do not share an active
                     title/abstract exclusion-reason label. Add the same reason subgroup to each
-                    selected PICO.
+                    pooled PICO.
                   </Alert>
                 )}
               </div>
@@ -401,7 +336,7 @@ export function PooledScreeningWorkspace({
                   ? "You have completed your available combined screening decisions. Some abstracts are waiting for the other assigned reviewers."
                   : queue.summary.needsAssignment > 0
                     ? "The remaining abstracts need consistent reviewer assignments across their linked PICOs."
-                    : "This PICO selection has no undecided abstracts in your combined queue."
+                    : "This saved pool has no undecided abstracts in your combined queue."
               }
             />
           )}
@@ -453,7 +388,7 @@ function PooledExcludeDialog({
         <DialogHeader>
           <DialogTitle>Exclude from every linked PICO</DialogTitle>
           <DialogDescription>
-            Choose one reason subgroup shared by all selected PICOs. The overall exclusion and
+            Choose one reason subgroup shared by all pooled PICOs. The overall exclusion and
             note will be copied to each linked citation record.
           </DialogDescription>
         </DialogHeader>

@@ -11,6 +11,7 @@ export interface ScreeningStageRow {
 
 export interface ProjectDetail {
   id: string;
+  isGuideline: boolean;
   title: string;
   reviewType: string;
   researchQuestion: string | null;
@@ -20,4 +21,10 @@ export interface ProjectDetail {
   registrationId: string | null;
   myRoles: string[];
   screeningStages: ScreeningStageRow[];
+  subProjects: {
+    id: string;
+    title: string;
+    researchQuestion: string | null;
+    status: string;
+  }[];
 }

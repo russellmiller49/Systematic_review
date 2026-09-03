@@ -1,7 +1,7 @@
 // Guideline-level pooled title/abstract screening.
 //
 // A guideline stores each PICO as an independent review project. This service presents the
-// selected PICO projects as one blind-safe reviewer queue, groups exact cross-PICO citation
+// administrator-configured PICO projects as one blind-safe reviewer queue, groups exact cross-PICO citation
 // matches, assigns the same reviewers to every copy in a group, and writes one human choice to
 // every linked PICO record atomically. The underlying per-project ScreeningDecision,
 // ScreeningAssignment, conflict, and CitationStageResult rows remain the source of truth.
@@ -26,17 +26,17 @@ const projectIdsSchema = z
   .refine((ids) => new Set(ids).size === ids.length, "PICO projects must be unique");
 
 export const pooledSelectionSchema = z.object({
-  projectIds: projectIdsSchema,
+  poolId: z.string().trim().min(1),
 });
 
 export const createPooledAssignmentsSchema = z.object({
-  projectIds: projectIdsSchema,
+  poolId: z.string().trim().min(1),
   reviewerIds: z.array(z.string().trim().min(1)).min(1).max(50),
   strategy: z.enum(["all", "split"]),
 });
 
 export const createPooledDecisionSchema = z.object({
-  projectIds: projectIdsSchema,
+  poolId: z.string().trim().min(1),
   citationIds: z
     .array(z.string().trim().min(1))
     .min(1)
@@ -45,6 +45,11 @@ export const createPooledDecisionSchema = z.object({
   decision: z.enum(["INCLUDE", "EXCLUDE"]),
   exclusionReasonLabel: z.string().trim().min(1).max(300).nullable().optional(),
   notes: z.string().max(20_000).nullable().optional(),
+});
+
+export const saveGuidelineScreeningPoolSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  projectIds: projectIdsSchema,
 });
 
 type PooledIdentityRow = {
@@ -114,10 +119,9 @@ export function groupPooledCitationRows<T extends PooledIdentityRow>(rows: reado
   });
 }
 
-async function loadGuidelineSelection(
+async function loadGuideline(
   ctx: Ctx,
   guidelineId: string,
-  projectIds: string[],
   capability: Capability,
 ) {
   await requirePermission(ctx, guidelineId, capability);
@@ -134,17 +138,160 @@ async function loadGuidelineSelection(
   });
   if (!guideline) throw notFound("Guideline");
 
-  const requested = new Set(projectIds);
-  const selected = guideline.subProjects
-    .map((project, index) => ({ ...project, picoNumber: index + 1 }))
-    .filter((project) => requested.has(project.id));
+  return {
+    id: guideline.id,
+    title: guideline.title,
+    subProjects: guideline.subProjects.map((project, index) => ({
+      ...project,
+      picoNumber: index + 1,
+    })),
+  };
+}
+
+export async function getGuidelineScreeningConfiguration(ctx: Ctx, guidelineId: string) {
+  const guideline = await loadGuideline(ctx, guidelineId, "project.view");
+  const pool = await prisma.guidelineScreeningPool.findUnique({
+    where: { guidelineId },
+    include: {
+      members: {
+        select: { projectId: true },
+        orderBy: { order: "asc" },
+      },
+    },
+  });
+  const pooledIds = new Set(pool?.members.map((member) => member.projectId) ?? []);
+  const pooledPicos = guideline.subProjects.filter((project) => pooledIds.has(project.id));
+  const unpooledPicos = guideline.subProjects.filter((project) => !pooledIds.has(project.id));
+
+  return {
+    guideline: { id: guideline.id, title: guideline.title },
+    pool: pool
+      ? {
+          id: pool.id,
+          name: pool.name,
+          picos: pooledPicos,
+          createdAt: pool.createdAt,
+          updatedAt: pool.updatedAt,
+        }
+      : null,
+    unpooledPicos,
+    allPicos: guideline.subProjects,
+  };
+}
+
+export async function saveGuidelineScreeningPool(
+  ctx: Ctx,
+  guidelineId: string,
+  input: z.infer<typeof saveGuidelineScreeningPoolSchema>,
+) {
+  const guideline = await loadGuideline(ctx, guidelineId, "project.edit");
+  const requested = new Set(input.projectIds);
+  const selected = guideline.subProjects.filter((project) => requested.has(project.id));
   if (selected.length !== requested.size) {
-    throw validationError("Every selected project must be a PICO in this guideline");
+    throw validationError("Every pooled project must be a PICO in this guideline");
+  }
+  const orderedProjectIds = selected.map((project) => project.id);
+  await titleAbstractStages(orderedProjectIds);
+
+  return prisma.$transaction(async (tx) => {
+    const before = await tx.guidelineScreeningPool.findUnique({
+      where: { guidelineId },
+      include: { members: { orderBy: { order: "asc" } } },
+    });
+    const pool = before
+      ? await tx.guidelineScreeningPool.update({
+          where: { id: before.id },
+          data: { name: input.name },
+        })
+      : await tx.guidelineScreeningPool.create({
+          data: {
+            guidelineId,
+            name: input.name,
+            createdById: ctx.userId,
+          },
+        });
+    await tx.guidelineScreeningPoolMember.deleteMany({ where: { poolId: pool.id } });
+    await tx.guidelineScreeningPoolMember.createMany({
+      data: orderedProjectIds.map((projectId, order) => ({ poolId: pool.id, projectId, order })),
+    });
+    await audit.record(tx, {
+      projectId: guidelineId,
+      userId: ctx.userId,
+      entityType: "GuidelineScreeningPool",
+      entityId: pool.id,
+      action: before
+        ? AuditActions.SCREENING_POOL_UPDATED
+        : AuditActions.SCREENING_POOL_CREATED,
+      previousValue: before
+        ? {
+            name: before.name,
+            projectIds: before.members.map((member) => member.projectId),
+          }
+        : undefined,
+      newValue: { name: pool.name, projectIds: orderedProjectIds },
+      metadata: { guidelineId },
+    });
+    return { ...pool, picos: selected };
+  });
+}
+
+export async function deleteGuidelineScreeningPool(ctx: Ctx, guidelineId: string) {
+  await loadGuideline(ctx, guidelineId, "project.edit");
+  return prisma.$transaction(async (tx) => {
+    const pool = await tx.guidelineScreeningPool.findUnique({
+      where: { guidelineId },
+      include: { members: { orderBy: { order: "asc" } } },
+    });
+    if (!pool) throw notFound("Screening pool");
+    await tx.guidelineScreeningPoolMember.deleteMany({ where: { poolId: pool.id } });
+    await tx.guidelineScreeningPool.delete({ where: { id: pool.id } });
+    await audit.record(tx, {
+      projectId: guidelineId,
+      userId: ctx.userId,
+      entityType: "GuidelineScreeningPool",
+      entityId: pool.id,
+      action: AuditActions.SCREENING_POOL_DELETED,
+      previousValue: {
+        name: pool.name,
+        projectIds: pool.members.map((member) => member.projectId),
+      },
+      metadata: { guidelineId },
+    });
+    return { deleted: true, id: pool.id };
+  });
+}
+
+async function loadGuidelinePoolSelection(
+  ctx: Ctx,
+  guidelineId: string,
+  poolId: string,
+  capability: Capability,
+) {
+  const guideline = await loadGuideline(ctx, guidelineId, capability);
+  const pool = await prisma.guidelineScreeningPool.findFirst({
+    where: { id: poolId, guidelineId },
+    include: {
+      members: {
+        select: { projectId: true },
+        orderBy: { order: "asc" },
+      },
+    },
+  });
+  if (!pool) throw notFound("Screening pool");
+
+  const requested = new Set(pool.members.map((member) => member.projectId));
+  const selected = guideline.subProjects.filter((project) => requested.has(project.id));
+  if (selected.length !== requested.size) {
+    throw invalidState("This screening pool contains a project outside its guideline family");
   }
   for (const project of selected) {
     await requirePermission(ctx, project.id, capability);
   }
-  return { guideline: { id: guideline.id, title: guideline.title }, selected };
+  return {
+    guideline: { id: guideline.id, title: guideline.title },
+    pool: { id: pool.id, name: pool.name },
+    selected,
+  };
 }
 
 async function titleAbstractStages(projectIds: string[]): Promise<ScreeningStage[]> {
@@ -215,10 +362,10 @@ export async function getPooledQueue(
   guidelineId: string,
   input: z.infer<typeof pooledSelectionSchema>,
 ) {
-  const family = await loadGuidelineSelection(
+  const family = await loadGuidelinePoolSelection(
     ctx,
     guidelineId,
-    input.projectIds,
+    input.poolId,
     "screening.decide",
   );
   const orderedProjectIds = family.selected.map((project) => project.id);
@@ -332,6 +479,7 @@ export async function getPooledQueue(
   const projectById = new Map(family.selected.map((project) => [project.id, project]));
   return {
     guideline: family.guideline,
+    pool: family.pool,
     picos: family.selected,
     configuration: {
       reviewersPerCitation: stages[0]!.reviewersPerCitation,
@@ -377,10 +525,10 @@ export async function createPooledAssignments(
   guidelineId: string,
   input: z.infer<typeof createPooledAssignmentsSchema>,
 ) {
-  const family = await loadGuidelineSelection(
+  const family = await loadGuidelinePoolSelection(
     ctx,
     guidelineId,
-    input.projectIds,
+    input.poolId,
     "screening.configure",
   );
   const orderedProjectIds = family.selected.map((project) => project.id);
@@ -477,6 +625,8 @@ export async function createPooledAssignments(
         metadata: {
           strategy: input.strategy,
           pooledGuidelineId: guidelineId,
+          pooledScreeningPoolId: family.pool.id,
+          pooledScreeningPoolName: family.pool.name,
           pooledProjectIds: orderedProjectIds,
           reviewers: reviewerIds.length,
           eligibleAbstracts: groups.length,
@@ -501,10 +651,10 @@ export async function createPooledDecision(
   guidelineId: string,
   input: z.infer<typeof createPooledDecisionSchema>,
 ) {
-  const family = await loadGuidelineSelection(
+  const family = await loadGuidelinePoolSelection(
     ctx,
     guidelineId,
-    input.projectIds,
+    input.poolId,
     "screening.decide",
   );
   const orderedProjectIds = family.selected.map((project) => project.id);
@@ -562,6 +712,8 @@ export async function createPooledDecision(
     const stageByProject = new Map(stages.map((stage) => [stage.projectId, stage]));
     const metadata = {
       pooledGuidelineId: guidelineId,
+      pooledScreeningPoolId: family.pool.id,
+      pooledScreeningPoolName: family.pool.name,
       pooledProjectIds: orderedProjectIds,
       pooledCitationIds: group.map((citation) => citation.id).sort(),
     };

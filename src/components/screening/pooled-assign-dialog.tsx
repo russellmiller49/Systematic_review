@@ -35,12 +35,14 @@ function toggle(current: Set<string>, id: string): Set<string> {
 
 export function PooledAssignDialog({
   guidelineId,
-  projectIds,
+  poolId,
+  poolName,
   reviewersPerCitation,
   onAssigned,
 }: {
   guidelineId: string;
-  projectIds: string[];
+  poolId: string;
+  poolName: string;
   reviewersPerCitation: number;
   onAssigned: () => void;
 }) {
@@ -85,7 +87,7 @@ export function PooledAssignDialog({
         eligibleAbstracts: number;
         linkedCitationRecords: number;
       }>(`/api/projects/${guidelineId}/screening/pooled/assignments`, {
-        projectIds,
+        poolId,
         reviewerIds: [...reviewerIds],
         strategy,
       });
@@ -111,16 +113,17 @@ export function PooledAssignDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" disabled={projectIds.length < 2}>
+        <Button variant="outline" size="sm">
           <Users /> Assign pooled reviewers
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Assign the combined abstract pool</DialogTitle>
+          <DialogTitle>Assign “{poolName}”</DialogTitle>
           <DialogDescription>
             The same reviewer set is assigned to every copy of an abstract across the selected
-            PICOs. This keeps one combined decision synchronized across the guideline family.
+            PICOs in this saved pool. This keeps one combined decision synchronized across the
+            guideline family.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
