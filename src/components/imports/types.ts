@@ -77,6 +77,33 @@ export interface DeleteBatchResult {
     stageResults: number;
     aiSuggestions: number;
   };
+  deduplicationHistoryDeleted: {
+    candidates: number;
+    groups: number;
+    retainedCitationsRestored: number;
+    assignmentsRestored: number;
+    conflictsRestored: number;
+  };
+}
+
+export interface OwnerRollbackPreview {
+  id: string;
+  canDelete: boolean;
+  citationsToDelete: number;
+  citationsRetained: number;
+  screeningHistory: DeleteBatchResult["screeningHistoryDeleted"];
+  deduplication: {
+    citationsWithRelationships: number;
+    candidates: number;
+    groups: number;
+    retainedCitationsToRestore: number;
+  };
+  blockers: {
+    kind: string;
+    label: string;
+    count: number;
+    citations: { id: string; title: string }[];
+  }[];
 }
 
 export const FORMAT_LABELS: Record<ImportFormat, string> = {

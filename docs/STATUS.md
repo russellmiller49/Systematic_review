@@ -4,6 +4,27 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-09-04) — dedup-aware owner import rollback — DONE
+
+The owner override now distinguishes reversible deduplication work from true downstream review
+dependencies, and shows an exact preflight summary before an import can be deleted.
+
+- **Visible preflight:** `GET .../owner-rollback` reports the citations, screening records,
+  duplicate-pair records, groups, and retained citations affected by a rollback. The confirmation
+  dialog lists blocker categories and example titles instead of collapsing every condition into
+  the misleading phrase “work beyond screening.”
+- **Safe dedup rollback:** decided and suggested duplicate pairs involving batch-exclusive
+  citations are removed with the mistaken import. Duplicate self-links are cleared atomically.
+- **Preserves other imports:** when a citation from another import was merged into a canonical
+  supplied only by the mistaken batch, that retained citation is restored to `ACTIVE` through the
+  audited dedup undo path, including any assignments or conflicts that the merge voided.
+- **Conservative downstream boundary:** linked studies, full-text files/retrieval, extraction
+  forms, curated references, cohort work, and active AI screening runs still block deletion and
+  appear by name and count in the preflight.
+- **Verification:** typecheck and production build clean; **621 unit** and **331 integration**
+  tests passing. Coverage includes owner-only preflight, exact blocker reporting, cross-import
+  canonical restoration, assignment restoration, dedup cleanup, and the downstream guard.
+
 ## Current state (2026-09-04) — saved screening notes + batch exclusion — DONE
 
 Screeners can now trust that their decision notes remain attached to an article and can clear
@@ -39,9 +60,9 @@ citations already have screening history.
 - **Narrow cascade:** the override removes screening assignments, decisions, conflicts and their
   adjudications, materialized stage results, and AI screening suggestions before deleting the
   batch-exclusive citations. It never changes citations also linked to another import.
-- **Downstream guardrails:** active AI screening runs and work beyond screening—including study
-  links, full-text/retrieval records, extraction anchors, curated references, cohort decisions,
-  resolved dedup work, and duplicate relationships—still block rollback.
+- **Downstream guardrails:** active AI screening runs, study links, full-text/retrieval records,
+  extraction anchors, curated references, and cohort decisions still block rollback. Dedup work
+  is now handled by the safer rollback extension documented above.
 - **Auditability:** `import.batch.deleted` records the owner-supplied reason, the override flag,
   citation totals, and per-kind screening deletion counts. Historical audit events remain
   append-only.

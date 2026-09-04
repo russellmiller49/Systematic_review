@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
-import { prisma } from "@/server/db";
+import { prisma, type Tx } from "@/server/db";
 import { notFound, invalidState } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { requirePermission } from "@/server/permissions";
@@ -587,72 +587,93 @@ export async function rejectCandidate(ctx: Ctx, projectId: string, candidateId: 
 export async function undoMerge(ctx: Ctx, projectId: string, citationId: string) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
-  return prisma.$transaction(async (tx) => {
-    const citation = await tx.citation.findFirst({ where: { id: citationId, projectId } });
-    if (!citation) throw notFound("Citation");
-    if (citation.status !== "DUPLICATE") {
-      throw invalidState("Only citations merged as duplicates can be restored");
-    }
+  return prisma.$transaction((tx) => undoMergeInTransaction(tx, ctx, projectId, citationId));
+}
 
-    const mergeEvent = await tx.auditEvent.findFirst({
-      where: {
-        projectId,
-        entityType: "Citation",
-        entityId: citation.id,
-        action: AuditActions.DEDUP_MERGED,
-      },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!mergeEvent) {
-      throw invalidState("No merge event found for this citation — cannot undo");
-    }
-    const meta = (mergeEvent.metadata ?? {}) as unknown as MergeAuditMetadata;
-    const restoredAssignmentIds = meta.voidedAssignmentIds ?? [];
-    const restoredConflictIds = meta.voidedConflictIds ?? [];
-    const groupId = meta.groupId ?? null;
+// Internal form for workflows that must restore a retained citation as one step of a larger
+// transaction (for example, rolling back the import that supplied its former canonical).
+// Callers are responsible for authorization before entering their transaction.
+export async function undoMergeInTransaction(
+  tx: Tx,
+  ctx: Ctx,
+  projectId: string,
+  citationId: string,
+) {
+  const citation = await tx.citation.findFirst({ where: { id: citationId, projectId } });
+  if (!citation) throw notFound("Citation");
+  if (citation.status !== "DUPLICATE") {
+    throw invalidState("Only citations merged as duplicates can be restored");
+  }
 
-    const restored = await tx.citation.update({
-      where: { id: citation.id },
-      data: { status: "ACTIVE", duplicateOfId: null },
-    });
-    if (restoredAssignmentIds.length > 0) {
-      await tx.screeningAssignment.updateMany({
-        where: { id: { in: restoredAssignmentIds }, status: "VOIDED" },
-        data: { status: "PENDING" },
-      });
-    }
-    if (restoredConflictIds.length > 0) {
-      await tx.screeningConflict.updateMany({
-        where: { id: { in: restoredConflictIds }, status: "VOIDED" },
-        data: { status: "OPEN", resolvedAt: null },
-      });
-    }
-    if (groupId) {
-      await tx.deduplicationCandidate.updateMany({
-        where: {
-          groupId,
-          status: "MERGED",
-          OR: [{ citationAId: citation.id }, { citationBId: citation.id }],
-        },
-        data: { status: "SUGGESTED", decidedById: null, decidedAt: null },
-      });
-      await tx.deduplicationGroup.updateMany({
-        where: { id: groupId, projectId },
-        data: { status: "OPEN" },
-      });
-    }
-
-    await audit.record(tx, {
+  const mergeEvent = await tx.auditEvent.findFirst({
+    where: {
       projectId,
-      userId: ctx.userId,
       entityType: "Citation",
       entityId: citation.id,
-      action: AuditActions.DEDUP_MERGE_UNDONE,
-      previousValue: { status: "DUPLICATE", duplicateOfId: citation.duplicateOfId },
-      newValue: { status: "ACTIVE", duplicateOfId: null },
-      metadata: { groupId, restoredAssignmentIds, restoredConflictIds },
-    });
-
-    return { citation: restored, groupId, restoredAssignmentIds, restoredConflictIds };
+      action: AuditActions.DEDUP_MERGED,
+    },
+    orderBy: { createdAt: "desc" },
   });
+  if (!mergeEvent) {
+    throw invalidState("No merge event found for this citation — cannot undo");
+  }
+  const meta = (mergeEvent.metadata ?? {}) as unknown as MergeAuditMetadata;
+  const restoredAssignmentIds = meta.voidedAssignmentIds ?? [];
+  const restoredConflictIds = meta.voidedConflictIds ?? [];
+  const groupId = meta.groupId ?? null;
+
+  const restored = await tx.citation.update({
+    where: { id: citation.id },
+    data: { status: "ACTIVE", duplicateOfId: null },
+  });
+  if (restoredAssignmentIds.length > 0) {
+    await tx.screeningAssignment.updateMany({
+      where: {
+        id: { in: restoredAssignmentIds },
+        citationId: citation.id,
+        stage: { projectId },
+        status: "VOIDED",
+      },
+      data: { status: "PENDING" },
+    });
+  }
+  if (restoredConflictIds.length > 0) {
+    await tx.screeningConflict.updateMany({
+      where: {
+        id: { in: restoredConflictIds },
+        citationId: citation.id,
+        stage: { projectId },
+        status: "VOIDED",
+      },
+      data: { status: "OPEN", resolvedAt: null },
+    });
+  }
+  if (groupId) {
+    await tx.deduplicationCandidate.updateMany({
+      where: {
+        groupId,
+        projectId,
+        status: "MERGED",
+        OR: [{ citationAId: citation.id }, { citationBId: citation.id }],
+      },
+      data: { status: "SUGGESTED", decidedById: null, decidedAt: null },
+    });
+    await tx.deduplicationGroup.updateMany({
+      where: { id: groupId, projectId },
+      data: { status: "OPEN" },
+    });
+  }
+
+  await audit.record(tx, {
+    projectId,
+    userId: ctx.userId,
+    entityType: "Citation",
+    entityId: citation.id,
+    action: AuditActions.DEDUP_MERGE_UNDONE,
+    previousValue: { status: "DUPLICATE", duplicateOfId: citation.duplicateOfId },
+    newValue: { status: "ACTIVE", duplicateOfId: null },
+    metadata: { groupId, restoredAssignmentIds, restoredConflictIds },
+  });
+
+  return { citation: restored, groupId, restoredAssignmentIds, restoredConflictIds };
 }

@@ -104,7 +104,8 @@ export const guideSteps: GuideStep[] = [
       "Correct the source export when errors matter, then upload again; raw records remain inspectable.",
       "Commit the batch to create citations and retain the link back to its source.",
     ],
-    remember: "A committed import can be removed only while downstream review work does not depend on it.",
+    remember:
+      "Project Owners can inspect and roll back an accidental import with its screening and deduplication history; linked full text, studies, extraction, references, or cohort work still blocks deletion.",
     image: "/guide/captures/03-import.jpg",
   },
   {
