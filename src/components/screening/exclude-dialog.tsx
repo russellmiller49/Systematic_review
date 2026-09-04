@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,8 +17,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, Skeleton } from "@/components/ui/misc";
 import type { ExclusionReasonOption, StageType } from "./types";
 
-// Collects a project-defined exclusion subgroup plus an optional note before the
-// screening decision is submitted. Full-text reasons also feed the PRISMA report.
+// Collects an optional note, then submits as soon as the reviewer chooses a reason.
+// Full-text reasons also feed the PRISMA report.
 export function ExcludeDialog({
   open,
   onOpenChange,
@@ -74,12 +73,6 @@ export function ExcludeDialog({
     return () => window.removeEventListener("keydown", listener);
   }, [note, onConfirm, open, reasons]);
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!reasonId) return;
-    onConfirm(reasonId, note.trim());
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -110,7 +103,20 @@ export function ExcludeDialog({
             </Link>
           </div>
         ) : (
-          <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor={`${fieldPrefix}-exclusion-note`}>Note (optional)</Label>
+              <Textarea
+                id={`${fieldPrefix}-exclusion-note`}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                maxLength={20_000}
+                placeholder="Anything your co-reviewers or the adjudicator should know…"
+              />
+              <p className="text-xs text-muted-foreground">
+                Add the note first. Choosing a reason below excludes immediately.
+              </p>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor={`${fieldPrefix}-exclusion-reason`}>
                 Exclusion reason subgroup
@@ -119,7 +125,11 @@ export function ExcludeDialog({
                 id={`${fieldPrefix}-exclusion-reason`}
                 required
                 value={reasonId}
-                onChange={(e) => setReasonId(e.target.value)}
+                onChange={(event) => {
+                  const nextReasonId = event.target.value;
+                  setReasonId(nextReasonId);
+                  if (nextReasonId) onConfirm(nextReasonId, note.trim());
+                }}
               >
                 <option value="" disabled>
                   Select a reason…
@@ -132,27 +142,99 @@ export function ExcludeDialog({
                 ))}
               </Select>
               <p className="text-xs text-muted-foreground">
-                Press 1–9 to choose and exclude immediately.
+                Selecting a reason or pressing 1–9 excludes immediately.
               </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor={`${fieldPrefix}-exclusion-note`}>Note (optional)</Label>
-              <Textarea
-                id={`${fieldPrefix}-exclusion-note`}
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Anything your co-reviewers or the adjudicator should know…"
-              />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button type="submit" variant="exclude" disabled={!reasonId}>
-                <X /> Exclude citation
-              </Button>
             </DialogFooter>
-          </form>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function BatchExcludeDialog({
+  open,
+  onOpenChange,
+  count,
+  reasons,
+  busy,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  count: number;
+  reasons: ExclusionReasonOption[] | null;
+  busy: boolean;
+  onConfirm: (exclusionReasonId: string) => void;
+}) {
+  const [reasonId, setReasonId] = useState("");
+
+  useEffect(() => {
+    if (open) setReasonId("");
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={busy ? undefined : onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            Exclude {count} selected article{count === 1 ? "" : "s"}
+          </DialogTitle>
+          <DialogDescription>
+            Choose one common reason. The selected articles will be excluded immediately.
+          </DialogDescription>
+        </DialogHeader>
+
+        {reasons === null ? (
+          <Skeleton className="h-24" />
+        ) : reasons.length === 0 ? (
+          <Alert variant="warning">No active exclusion reasons are available.</Alert>
+        ) : (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="batch-exclusion-reason">Common exclusion reason</Label>
+              <Select
+                id="batch-exclusion-reason"
+                required
+                disabled={busy}
+                value={reasonId}
+                onChange={(event) => {
+                  const nextReasonId = event.target.value;
+                  setReasonId(nextReasonId);
+                  if (nextReasonId) onConfirm(nextReasonId);
+                }}
+              >
+                <option value="" disabled>
+                  Select a reason to exclude…
+                </option>
+                {reasons.map((reason) => (
+                  <option key={reason.id} value={reason.id}>
+                    {reason.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              {busy && (
+                <span className="inline-flex items-center text-sm text-muted-foreground">
+                  Excluding selected articles…
+                </span>
+              )}
+            </DialogFooter>
+          </div>
         )}
       </DialogContent>
     </Dialog>

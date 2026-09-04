@@ -4,6 +4,29 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-09-04) — saved screening notes + batch exclusion — DONE
+
+Screeners can now trust that their decision notes remain attached to an article and can clear
+obviously irrelevant assigned articles in a single batch.
+
+- **Saved-note round trip:** the personal article navigator returns the signed-in reviewer's own
+  note with their decision, restores it when an unsettled article is revisited, and displays it
+  read-only after the stage outcome locks. Revising a decision without sending a new note now
+  preserves the existing note; co-reviewer notes remain hidden under R1 blinding.
+- **Reason selection is the action:** the ordinary and combined-pool exclusion dialogs place the
+  optional note first, then exclude immediately when a reason is selected. The extra confirmation
+  click is gone, while the existing one-click reason buttons and 1–9 shortcuts remain available.
+- **Batch exclusion:** each undecided row in the personal navigator has a checkbox plus a
+  select-page control. Reviewers can choose up to 50 currently visible assigned articles and
+  apply one stage-compatible reason to all of them in one action.
+- **Atomic lifecycle:** the new batch endpoint preflights active citation status, the signed-in
+  reviewer's live assignment, absence of a prior personal decision, and absence of a final stage
+  result. Every decision, assignment completion, audit event, conflict evaluation, and result
+  materialization occurs in one transaction; any stale or invalid row rolls back the full batch.
+- **Verification:** typecheck and production build clean; **621 unit** and **332 integration**
+  tests passing. The Playwright happy path verifies note persistence, immediate reason selection,
+  two-article batch exclusion, updated queue counts, PRISMA, and export completion.
+
 ## Current state (2026-09-04) — owner rollback of screened import batches — DONE
 
 Project Owners can now remove an accidental committed import even when its batch-exclusive

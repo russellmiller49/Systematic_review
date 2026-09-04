@@ -90,8 +90,13 @@ export function ArticleNavigator({
   keywords,
   highlightsEnabled,
   loading,
+  batchSelectedIds,
+  batchBusy,
   onFilterChange,
   onSelect,
+  onBatchSelect,
+  onBatchSelectPage,
+  onBatchExclude,
   onSearchDraftChange,
   onSearch,
   onClearSearch,
@@ -104,8 +109,13 @@ export function ArticleNavigator({
   keywords: ScreeningKeyword[];
   highlightsEnabled: boolean;
   loading: boolean;
+  batchSelectedIds: Set<string>;
+  batchBusy: boolean;
   onFilterChange: (filter: ScreeningNavigatorFilter) => void;
   onSelect: (citationId: string) => void;
+  onBatchSelect: (citationId: string, selected: boolean) => void;
+  onBatchSelectPage: (citationIds: string[], selected: boolean) => void;
+  onBatchExclude: () => void;
   onSearchDraftChange: (value: string) => void;
   onSearch: () => void;
   onClearSearch: () => void;
@@ -119,6 +129,12 @@ export function ArticleNavigator({
     data.pagination.page * data.pagination.limit,
     data.pagination.total,
   );
+  const batchEligibleIds = data.items
+    .filter((item) => item.canDecide && item.myDecision === null)
+    .map((item) => item.citation.id);
+  const allEligibleSelected =
+    batchEligibleIds.length > 0 &&
+    batchEligibleIds.every((citationId) => batchSelectedIds.has(citationId));
 
   return (
     <aside
@@ -185,10 +201,36 @@ export function ArticleNavigator({
           Showing {firstShown.toLocaleString()}–{lastShown.toLocaleString()} of{" "}
           {data.pagination.total.toLocaleString()} {FILTER_LABELS[filter].toLowerCase()}
         </p>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+          <label className="inline-flex items-center gap-2 text-xs font-medium">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border accent-primary"
+              aria-label="Select all undecided articles on this page"
+              checked={allEligibleSelected}
+              disabled={batchEligibleIds.length === 0 || batchBusy}
+              onChange={(event) =>
+                onBatchSelectPage(batchEligibleIds, event.target.checked)
+              }
+            />
+            Select page
+          </label>
+          <Button
+            type="button"
+            variant="exclude"
+            size="sm"
+            disabled={batchSelectedIds.size === 0 || batchBusy}
+            onClick={onBatchExclude}
+          >
+            <X /> Exclude selected
+            {batchSelectedIds.size > 0 ? ` (${batchSelectedIds.size})` : ""}
+          </Button>
+        </div>
       </div>
 
       <div
-        role="listbox"
+        role="list"
         aria-label={`${FILTER_LABELS[filter]} articles`}
         aria-busy={loading}
         className={cn(
@@ -203,24 +245,37 @@ export function ArticleNavigator({
         ) : (
           data.items.map((item, index) => {
             const selected = item.citation.id === selectedId;
+            const batchEligible = item.canDecide && item.myDecision === null;
             const articleNumber =
               (data.pagination.page - 1) * data.pagination.limit + index + 1;
             return (
-              <button
+              <div
                 key={item.citation.id}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onClick={() => onSelect(item.citation.id)}
+                role="listitem"
                 className={cn(
-                  "grid w-full grid-cols-[2rem_minmax(0,1fr)] gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                  "grid w-full grid-cols-[1.25rem_2rem_minmax(0,1fr)] items-start gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/60",
                   selected && "bg-primary/5 ring-1 ring-inset ring-primary/25",
                 )}
               >
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-border accent-primary"
+                  aria-label={`Select ${item.citation.title} for batch exclusion`}
+                  checked={batchSelectedIds.has(item.citation.id)}
+                  disabled={!batchEligible || batchBusy}
+                  onChange={(event) =>
+                    onBatchSelect(item.citation.id, event.target.checked)
+                  }
+                />
                 <span className="pt-0.5 text-xs font-semibold tabular-nums text-muted-foreground">
                   {articleNumber}
                 </span>
-                <span className="min-w-0">
+                <button
+                  type="button"
+                  aria-current={selected ? "true" : undefined}
+                  onClick={() => onSelect(item.citation.id)}
+                  className="min-w-0 text-left"
+                >
                   <span className="line-clamp-2 text-sm font-medium leading-snug">
                     <KeywordHighlightedText
                       text={item.citation.title}
@@ -236,8 +291,8 @@ export function ArticleNavigator({
                     )}
                     <ArticleStatus item={item} />
                   </span>
-                </span>
-              </button>
+                </button>
+              </div>
             );
           })
         )}
