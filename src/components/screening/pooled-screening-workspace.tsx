@@ -392,27 +392,7 @@ function PooledExcludeDialog({
             note will be copied to each linked citation record.
           </DialogDescription>
         </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (reason) onConfirm(reason, dialogNote);
-          }}
-        >
-          <div className="space-y-1.5">
-            <Label htmlFor="pooled-exclusion-reason">Exclusion reason subgroup</Label>
-            <Select
-              id="pooled-exclusion-reason"
-              required
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            >
-              <option value="" disabled>Select a reason…</option>
-              {reasons.map((option) => (
-                <option key={option.label} value={option.label}>{option.label}</option>
-              ))}
-            </Select>
-          </div>
+        <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="pooled-exclusion-note">Reviewer note (optional)</Label>
             <Textarea
@@ -421,16 +401,41 @@ function PooledExcludeDialog({
               onChange={(event) => setDialogNote(event.target.value)}
               maxLength={20_000}
             />
+            <p className="text-xs text-muted-foreground">
+              Add the note first. Choosing a reason below excludes immediately.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pooled-exclusion-reason">Exclusion reason subgroup</Label>
+            <Select
+              id="pooled-exclusion-reason"
+              required
+              disabled={busy}
+              value={reason}
+              onChange={(event) => {
+                const nextReason = event.target.value;
+                setReason(nextReason);
+                if (nextReason) onConfirm(nextReason, dialogNote.trim());
+              }}
+            >
+              <option value="" disabled>Select a reason to exclude…</option>
+              {reasons.map((option) => (
+                <option key={option.label} value={option.label}>{option.label}</option>
+              ))}
+            </Select>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" variant="exclude" disabled={!reason || busy}>
-              {busy ? <Spinner /> : <X />} Exclude across linked PICOs
-            </Button>
+            {busy && <span className="text-sm text-muted-foreground">Excluding…</span>}
           </DialogFooter>
-        </form>
+        </div>
       </DialogContent>
     </Dialog>
   );

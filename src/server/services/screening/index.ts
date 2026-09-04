@@ -48,6 +48,15 @@ export const createDecisionSchema = z.object({
   flaggedForDiscussion: z.boolean().optional(),
 });
 
+export const batchExcludeSchema = z.object({
+  citationIds: z
+    .array(z.string().min(1))
+    .min(1, "Choose at least one citation")
+    .max(50, "You can exclude up to 50 citations at once")
+    .refine((ids) => new Set(ids).size === ids.length, "Citations must be unique"),
+  exclusionReasonId: z.string().min(1),
+});
+
 export const listDecisionsQuerySchema = z.object({
   citationId: z.string().min(1),
 });
@@ -838,7 +847,7 @@ export async function getScreeningNavigator(
     },
     decisions: {
       where: { stageId: stage.id, reviewerId: ctx.userId },
-      select: { decision: true },
+      select: { decision: true, notes: true },
       take: 1,
     },
     stageResults: {
@@ -1188,6 +1197,75 @@ export async function createDecision(
   });
 }
 
+// Apply one exclusion reason to several of the current reviewer's assigned citations.
+// The entire batch is atomic: if any citation is no longer actionable, every write rolls
+// back so a stale selection can never be partially applied.
+export async function batchExclude(
+  ctx: Ctx,
+  projectId: string,
+  stageId: string,
+  input: z.infer<typeof batchExcludeSchema>,
+) {
+  await requirePermission(ctx, projectId, "screening.decide");
+  return prisma.$transaction(async (tx) => {
+    const stage = await getStageOr404(tx, projectId, stageId);
+    await assertIndividualTitleAbstractAllowed(tx, stage);
+
+    // Validate the common reason before any decision writes. The per-citation helper also
+    // validates it, preserving the same lifecycle contract as an individual exclusion.
+    await validateExclusionReason(
+      tx,
+      projectId,
+      stage.type,
+      input.exclusionReasonId,
+    );
+
+    const actionableCount = await tx.citation.count({
+      where: {
+        id: { in: input.citationIds },
+        projectId,
+        status: "ACTIVE",
+        assignments: {
+          some: {
+            stageId: stage.id,
+            reviewerId: ctx.userId,
+            status: { not: "VOIDED" },
+          },
+        },
+        decisions: {
+          none: { stageId: stage.id, reviewerId: ctx.userId },
+        },
+        stageResults: { none: { stageId: stage.id } },
+      },
+    });
+    if (actionableCount !== input.citationIds.length) {
+      throw invalidState(
+        "One or more selected citations are no longer undecided and assigned to you. Refresh the article list and try again.",
+      );
+    }
+
+    for (const citationId of input.citationIds) {
+      await createDecisionInTransaction(
+        tx,
+        ctx,
+        projectId,
+        stage,
+        {
+          citationId,
+          decision: "EXCLUDE",
+          exclusionReasonId: input.exclusionReasonId,
+          notes: null,
+          labels: [],
+          flaggedForDiscussion: false,
+        },
+        { batchExclusion: true, batchSize: input.citationIds.length },
+      );
+    }
+
+    return { excluded: input.citationIds.length };
+  }, { timeout: 30_000 });
+}
+
 // Shared decision write used by both the ordinary per-PICO queue and the guideline-level
 // pooled title/abstract queue. Callers must perform their own permission checks before
 // opening the transaction. Keeping the mutation here preserves the exact R3/R5/R6/R7
@@ -1266,7 +1344,9 @@ export async function createDecisionInTransaction(
   const data = {
     decision: input.decision,
     exclusionReasonId,
-    notes: input.notes ?? null,
+    // An omitted note means "leave my note alone" on a revision. Sending null or an
+    // empty string remains an explicit clear, while a new decision still defaults to null.
+    notes: input.notes === undefined ? (previous?.notes ?? null) : input.notes,
     labels: input.labels ?? [],
     flaggedForDiscussion: input.flaggedForDiscussion ?? false,
   };

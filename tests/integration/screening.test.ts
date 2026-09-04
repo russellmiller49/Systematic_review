@@ -484,6 +484,7 @@ describe("screening service", () => {
     await screening.createDecision(ctx(reviewer1.id), project.id, stage.id, {
       citationId: decidedByMe.id,
       decision: "MAYBE",
+      notes: "my saved navigator note",
     });
     for (const reviewer of [reviewer1, reviewer2]) {
       await screening.createDecision(ctx(reviewer.id), project.id, stage.id, {
@@ -542,6 +543,9 @@ describe("screening service", () => {
     expect(new Set(decidedView.items.map((item) => item.citation.id))).toEqual(
       new Set([decidedByMe.id, included.id, excluded.id]),
     );
+    expect(
+      decidedView.items.find((item) => item.citation.id === decidedByMe.id)?.myDecision,
+    ).toEqual({ decision: "MAYBE", notes: "my saved navigator note" });
     expect((await navigate({ status: "INCLUDED" })).items[0]!.citation.id).toBe(
       included.id,
     );
@@ -587,6 +591,7 @@ describe("screening service", () => {
     });
     expect(second.decision.id).toBe(first.decision.id); // updated in place
     expect(second.decision.decision).toBe("INCLUDE");
+    expect(second.decision.notes).toBe("unsure");
     const count = await prisma.screeningDecision.count({
       where: { stageId: stage.id, citationId: citation.id, reviewerId: reviewer1.id },
     });
@@ -600,7 +605,7 @@ describe("screening service", () => {
       },
     });
     expect(updatedEvent.previousValue).toMatchObject({ decision: "MAYBE", notes: "unsure" });
-    expect(updatedEvent.newValue).toMatchObject({ decision: "INCLUDE" });
+    expect(updatedEvent.newValue).toMatchObject({ decision: "INCLUDE", notes: "unsure" });
     await prisma.auditEvent.findFirstOrThrow({
       where: {
         entityType: "ScreeningDecision",
@@ -608,6 +613,85 @@ describe("screening service", () => {
         action: "screening.decision.created",
       },
     });
+  });
+
+  it("batch excludes assigned citations with one reason and audits every decision", async () => {
+    const { reviewer1, reviewer2, project } = await createProjectWithTeam();
+    const stage = await makeStage(project.id, { reviewersPerCitation: 2 });
+    const firstCitation = await createTestCitation(project.id);
+    const secondCitation = await createTestCitation(project.id);
+    const firstAssignment = await assign(stage.id, firstCitation.id, reviewer1.id);
+    const secondAssignment = await assign(stage.id, secondCitation.id, reviewer1.id);
+    await assign(stage.id, firstCitation.id, reviewer2.id);
+    await assign(stage.id, secondCitation.id, reviewer2.id);
+    const reason = await makeReason(project.id, "TITLE_ABSTRACT");
+
+    const result = await screening.batchExclude(ctx(reviewer1.id), project.id, stage.id, {
+      citationIds: [firstCitation.id, secondCitation.id],
+      exclusionReasonId: reason.id,
+    });
+    expect(result).toEqual({ excluded: 2 });
+
+    const decisions = await prisma.screeningDecision.findMany({
+      where: {
+        stageId: stage.id,
+        reviewerId: reviewer1.id,
+        citationId: { in: [firstCitation.id, secondCitation.id] },
+      },
+      orderBy: { citationId: "asc" },
+    });
+    expect(decisions).toHaveLength(2);
+    expect(decisions.every((decision) => decision.decision === "EXCLUDE")).toBe(true);
+    expect(decisions.every((decision) => decision.exclusionReasonId === reason.id)).toBe(true);
+
+    const assignments = await prisma.screeningAssignment.findMany({
+      where: { id: { in: [firstAssignment.id, secondAssignment.id] } },
+    });
+    expect(assignments.every((assignment) => assignment.status === "COMPLETED")).toBe(true);
+
+    const events = await prisma.auditEvent.findMany({
+      where: {
+        entityType: "ScreeningDecision",
+        entityId: { in: decisions.map((decision) => decision.id) },
+        action: "screening.decision.created",
+      },
+    });
+    expect(events).toHaveLength(2);
+    expect(
+      events.every(
+        (event) =>
+          (event.metadata as { batchExclusion?: boolean; batchSize?: number })
+            .batchExclusion === true &&
+          (event.metadata as { batchSize?: number }).batchSize === 2,
+      ),
+    ).toBe(true);
+  });
+
+  it("rolls back an entire batch exclusion when any citation is not assigned", async () => {
+    const { reviewer1, project } = await createProjectWithTeam();
+    const stage = await makeStage(project.id, { reviewersPerCitation: 2 });
+    const assignedCitation = await createTestCitation(project.id);
+    const unassignedCitation = await createTestCitation(project.id);
+    const assignment = await assign(stage.id, assignedCitation.id, reviewer1.id);
+    const reason = await makeReason(project.id, "TITLE_ABSTRACT");
+
+    await expectAppError(
+      screening.batchExclude(ctx(reviewer1.id), project.id, stage.id, {
+        citationIds: [assignedCitation.id, unassignedCitation.id],
+        exclusionReasonId: reason.id,
+      }),
+      "INVALID_STATE",
+    );
+
+    expect(
+      await prisma.screeningDecision.count({
+        where: { stageId: stage.id, reviewerId: reviewer1.id },
+      }),
+    ).toBe(0);
+    expect(
+      (await prisma.screeningAssignment.findUniqueOrThrow({ where: { id: assignment.id } }))
+        .status,
+    ).toBe("PENDING");
   });
 
   it("requires a live (non-VOIDED) assignment to decide", async () => {

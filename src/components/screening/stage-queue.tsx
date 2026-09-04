@@ -27,7 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, EmptyState, Progress, Skeleton, Spinner } from "@/components/ui/misc";
 import { CitationCard } from "@/components/citations/citation-card";
 import { ArticleNavigator } from "./article-navigator";
-import { ExcludeDialog } from "./exclude-dialog";
+import { BatchExcludeDialog, ExcludeDialog } from "./exclude-dialog";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 import type {
   DecisionValue,
@@ -105,6 +105,11 @@ export function StageQueue({
   const [abstractDraft, setAbstractDraft] = useState("");
   const [abstractSaving, setAbstractSaving] = useState(false);
   const [excludeOpen, setExcludeOpen] = useState(false);
+  const [batchExcludeOpen, setBatchExcludeOpen] = useState(false);
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [batchBusy, setBatchBusy] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [inFlight, setInFlight] = useState(0);
   const [reasons, setReasons] = useState<ExclusionReasonOption[] | null>(null);
@@ -175,12 +180,14 @@ export function StageQueue({
     setNoteOpen(false);
     setAbstractEditing(false);
     setAbstractDraft("");
+    setBatchSelectedIds(new Set());
   }
 
   function search() {
     setQuery(searchDraft.trim());
     setPage(1);
     setSelectedId(null);
+    setBatchSelectedIds(new Set());
   }
 
   function clearSearch() {
@@ -188,9 +195,11 @@ export function StageQueue({
     setQuery("");
     setPage(1);
     setSelectedId(null);
+    setBatchSelectedIds(new Set());
   }
 
   function selectArticle(citationId: string) {
+    if (citationId === selectedId) return;
     setSelectedId(citationId);
     setNote("");
     setNoteOpen(false);
@@ -205,6 +214,7 @@ export function StageQueue({
     setNoteOpen(false);
     setAbstractEditing(false);
     setAbstractDraft("");
+    setBatchSelectedIds(new Set());
   }
 
   // Excludes at either stage use the project's applicable reason subgroups.
@@ -229,10 +239,14 @@ export function StageQueue({
   const current = currentIndex >= 0 ? (data?.items[currentIndex] ?? null) : null;
 
   // A server refresh can replace the selection without going through selectArticle.
+  // Hydrate the current reviewer's saved note so revisiting or revising an article never
+  // makes the note appear lost (or accidentally clears it on the next decision).
   useEffect(() => {
     setAbstractEditing(false);
     setAbstractDraft("");
-  }, [selectedId]);
+    setNote(current?.myDecision?.notes ?? "");
+    setNoteOpen(Boolean(current?.myDecision?.notes));
+  }, [current?.citation.id, current?.myDecision?.notes]);
 
   async function saveAbstract(event: React.FormEvent) {
     event.preventDefault();
@@ -310,6 +324,12 @@ export function StageQueue({
       null;
 
     handledRef.current.add(item.citation.id);
+    setBatchSelectedIds((selected) => {
+      if (!selected.has(item.citation.id)) return selected;
+      const next = new Set(selected);
+      next.delete(item.citation.id);
+      return next;
+    });
     setTally((currentTally) => ({
       ...currentTally,
       [decision]: currentTally[decision] + 1,
@@ -345,7 +365,7 @@ export function StageQueue({
             ? {
                 ...row,
                 assignmentStatus: "COMPLETED",
-                myDecision: { decision },
+                myDecision: { decision, notes: noteText },
                 completedReviews: row.myDecision
                   ? row.completedReviews
                   : Math.min(row.requiredReviews, row.completedReviews + 1),
@@ -361,10 +381,9 @@ export function StageQueue({
       citationId: string;
       decision: DecisionValue;
       exclusionReasonId?: string;
-      notes?: string;
-    } = { citationId: item.citation.id, decision };
+      notes: string | null;
+    } = { citationId: item.citation.id, decision, notes: noteText };
     if (exclusionReasonId) body.exclusionReasonId = exclusionReasonId;
-    if (noteText) body.notes = noteText;
 
     apiPost(decisionsUrl, body)
       .then(() => {
@@ -428,12 +447,69 @@ export function StageQueue({
     );
   }
 
+  function changeBatchSelection(citationId: string, selected: boolean) {
+    setBatchSelectedIds((currentSelection) => {
+      const next = new Set(currentSelection);
+      if (selected) next.add(citationId);
+      else next.delete(citationId);
+      return next;
+    });
+  }
+
+  function changeBatchPageSelection(citationIds: string[], selected: boolean) {
+    setBatchSelectedIds((currentSelection) => {
+      const next = new Set(currentSelection);
+      for (const citationId of citationIds) {
+        if (selected) next.add(citationId);
+        else next.delete(citationId);
+      }
+      return next;
+    });
+  }
+
+  async function confirmBatchExclude(exclusionReasonId: string) {
+    const citationIds = [...batchSelectedIds];
+    if (citationIds.length === 0 || batchBusy) return;
+
+    setBatchBusy(true);
+    inFlightRef.current += 1;
+    setInFlight((count) => count + 1);
+    try {
+      const response = await apiPost<{ excluded: number }>(
+        `${decisionsUrl}/batch-exclude`,
+        { citationIds, exclusionReasonId },
+      );
+      const reason = reasons?.find((item) => item.id === exclusionReasonId);
+      setBatchSelectedIds(new Set());
+      setBatchExcludeOpen(false);
+      setTally((currentTally) => ({
+        ...currentTally,
+        EXCLUDE: currentTally.EXCLUDE + response.excluded,
+      }));
+      toast.success(
+        `Excluded ${response.excluded} article${response.excluded === 1 ? "" : "s"}`,
+        { description: reason?.label },
+      );
+      setReloadKey((key) => key + 1);
+    } catch (error) {
+      setBatchExcludeOpen(false);
+      toast.error(
+        error instanceof ApiError ? error.message : "Failed to exclude selected articles",
+      );
+      setReloadKey((key) => key + 1);
+    } finally {
+      setBatchBusy(false);
+      inFlightRef.current -= 1;
+      setInFlight((count) => count - 1);
+    }
+  }
+
   // ----- keyboard shortcuts -------------------------------------------------
 
   const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   useEffect(() => {
     keyHandlerRef.current = (event: KeyboardEvent) => {
-      if (excludeOpen || helpOpen) return;
+      if (excludeOpen || batchExcludeOpen || helpOpen) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
       if (
@@ -557,8 +633,13 @@ export function StageQueue({
           keywords={keywords}
           highlightsEnabled={highlightsEnabled}
           loading={loading}
+          batchSelectedIds={batchSelectedIds}
+          batchBusy={batchBusy}
           onFilterChange={chooseFilter}
           onSelect={selectArticle}
+          onBatchSelect={changeBatchSelection}
+          onBatchSelectPage={changeBatchPageSelection}
+          onBatchExclude={() => setBatchExcludeOpen(true)}
           onSearchDraftChange={setSearchDraft}
           onSearch={search}
           onClearSearch={clearSearch}
@@ -877,12 +958,24 @@ export function StageQueue({
                       )}
                     </>
                   ) : (
-                    <Alert>
-                      This citation has a final{" "}
-                      <strong>{current.finalOutcome?.toLowerCase()}</strong> outcome.
-                      Screening decisions are locked unless an authorized user reopens the
-                      stage result.
-                    </Alert>
+                    <div className="space-y-3">
+                      <Alert>
+                        This citation has a final{" "}
+                        <strong>{current.finalOutcome?.toLowerCase()}</strong> outcome.
+                        Screening decisions are locked unless an authorized user reopens the
+                        stage result.
+                      </Alert>
+                      {current.myDecision?.notes && (
+                        <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Your saved note
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap text-sm">
+                            {current.myDecision.notes}
+                          </p>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </CitationCard>
@@ -944,6 +1037,16 @@ export function StageQueue({
         reasons={reasons}
         defaultNote={note.trim()}
         onConfirm={confirmExclude}
+      />
+      <BatchExcludeDialog
+        open={batchExcludeOpen}
+        onOpenChange={setBatchExcludeOpen}
+        count={batchSelectedIds.size}
+        reasons={reasons}
+        busy={batchBusy}
+        onConfirm={(exclusionReasonId) => {
+          void confirmBatchExclude(exclusionReasonId);
+        }}
       />
       <ShortcutsDialog
         open={helpOpen}
