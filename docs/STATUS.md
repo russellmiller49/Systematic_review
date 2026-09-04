@@ -4,6 +4,28 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-09-04) — owner rollback of screened import batches — DONE
+
+Project Owners can now remove an accidental committed import even when its batch-exclusive
+citations already have screening history.
+
+- **Explicit owner override:** the normal `import.manage` deletion remains conservative. Only an
+  active project member with the `OWNER` role can choose **also delete screening history**; the
+  destructive path requires a reason and exact filename confirmation, with server-side role and
+  confirmation enforcement.
+- **Narrow cascade:** the override removes screening assignments, decisions, conflicts and their
+  adjudications, materialized stage results, and AI screening suggestions before deleting the
+  batch-exclusive citations. It never changes citations also linked to another import.
+- **Downstream guardrails:** active AI screening runs and work beyond screening—including study
+  links, full-text/retrieval records, extraction anchors, curated references, cohort decisions,
+  resolved dedup work, and duplicate relationships—still block rollback.
+- **Auditability:** `import.batch.deleted` records the owner-supplied reason, the override flag,
+  citation totals, and per-kind screening deletion counts. Historical audit events remain
+  append-only.
+- **Verification:** typecheck and production build clean; **621 unit** and **330 integration**
+  tests passing. New coverage pins the ordinary guard, owner-only access, exact confirmation,
+  atomic screening deletion, audit counts, and the beyond-screening blocker.
+
 ## Current state (2026-09-02) — persisted named combined-screening pool — DONE
 
 Guideline Owners/Admins now define one named combined title/abstract pool in Settings. Reviewers

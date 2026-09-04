@@ -3,7 +3,7 @@
 import { z } from "zod";
 import type { IdentifierType, Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
-import { conflict, invalidState, notFound } from "@/server/errors";
+import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
@@ -36,6 +36,11 @@ export const createBatchSchema = z.object({
   sourceId: z.string().min(1),
   format: z.enum(["RIS", "BIBTEX", "CSV", "NBIB"]).optional(),
   content: z.string(),
+});
+
+export const ownerDeleteBatchSchema = z.object({
+  confirmation: z.string().trim().min(1).max(255),
+  reason: z.string().trim().min(3).max(2000),
 });
 
 // ---------------------------------------------------------------------------
@@ -268,12 +273,35 @@ export async function getBatch(ctx: Ctx, projectId: string, batchId: string) {
   return { ...batch, rows };
 }
 
-// Delete an import batch and roll back citations created only by that batch. A committed
-// import can be removed only while its citations are still untouched; downstream reviewer
-// work is never cascade-deleted. Citations that also have a source record from another batch
-// are retained and only this batch's provenance row is removed.
-export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) {
-  await requirePermission(ctx, projectId, "import.manage");
+type DeleteBatchOptions = {
+  deleteScreeningHistory: boolean;
+  confirmation?: string;
+  reason?: string;
+};
+
+const emptyScreeningHistoryCounts = () => ({
+  assignments: 0,
+  decisions: 0,
+  conflicts: 0,
+  adjudications: 0,
+  stageResults: 0,
+  aiSuggestions: 0,
+});
+
+// Delete an import batch and roll back citations created only by that batch. The ordinary
+// path remains conservative and refuses any downstream work. A separately confirmed,
+// OWNER-only path may also remove screening-layer rows; work beyond screening still blocks.
+// Citations linked to another import are retained with all of their history intact.
+async function deleteBatchInternal(
+  ctx: Ctx,
+  projectId: string,
+  batchId: string,
+  options: DeleteBatchOptions,
+) {
+  const member = await requirePermission(ctx, projectId, "import.manage");
+  if (options.deleteScreeningHistory && !member.roles.includes("OWNER")) {
+    throw forbidden("Only a project owner can delete screening history with an import");
+  }
 
   return prisma.$transaction(
     async (tx) => {
@@ -292,6 +320,10 @@ export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) 
           sourceRecords: { select: { citationId: true } },
         },
       });
+
+      if (options.deleteScreeningHistory && options.confirmation !== batch.filename) {
+        throw invalidState("Type the import filename exactly to confirm this owner override");
+      }
 
       const linkedCitationIds = [
         ...new Set(
@@ -318,6 +350,7 @@ export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) 
           .filter((id): id is string => id !== null),
       );
       const citationIdsToDelete = linkedCitationIds.filter((id) => !retainedCitationIds.has(id));
+      const screeningHistoryDeleted = emptyScreeningHistoryCounts();
 
       if (citationIdsToDelete.length > 0) {
         const activeAiRun = await tx.aiScreeningRun.findFirst({
@@ -330,6 +363,15 @@ export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) 
           );
         }
 
+        const screeningBlockers: Prisma.CitationWhereInput[] = options.deleteScreeningHistory
+          ? []
+          : [
+              { assignments: { some: {} } },
+              { decisions: { some: {} } },
+              { conflicts: { some: {} } },
+              { stageResults: { some: {} } },
+              { aiSuggestions: { some: {} } },
+            ];
         const blockedCitation = await tx.citation.findFirst({
           where: {
             projectId,
@@ -338,25 +380,79 @@ export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) 
               { status: "DUPLICATE" },
               { duplicateOfId: { not: null } },
               { duplicates: { some: {} } },
-              { assignments: { some: {} } },
-              { decisions: { some: {} } },
-              { conflicts: { some: {} } },
-              { stageResults: { some: {} } },
               { studyLinks: { some: {} } },
               { fullTextLinks: { some: {} } },
               { retrievalAttempts: { some: {} } },
               { extractionForms: { some: {} } },
-              { aiSuggestions: { some: {} } },
+              { referenceEntries: { some: {} } },
+              { cohortCandidatesAsA: { some: {} } },
+              { cohortCandidatesAsB: { some: {} } },
               { dedupCandidatesAsA: { some: { status: { not: "SUGGESTED" } } } },
               { dedupCandidatesAsB: { some: { status: { not: "SUGGESTED" } } } },
+              ...screeningBlockers,
             ],
           },
           select: { title: true },
         });
         if (blockedCitation) {
           throw invalidState(
-            `This import cannot be deleted because “${blockedCitation.title}” has downstream review work. Remove or reset that work first.`,
+            options.deleteScreeningHistory
+              ? `This import cannot be deleted because “${blockedCitation.title}” has work beyond screening. Remove or reset that work first.`
+              : `This import cannot be deleted because “${blockedCitation.title}” has downstream review work. Remove or reset that work first.`,
           );
+        }
+
+        if (options.deleteScreeningHistory) {
+          screeningHistoryDeleted.adjudications = (
+            await tx.screeningAdjudication.deleteMany({
+              where: {
+                conflict: {
+                  citationId: { in: citationIdsToDelete },
+                  stage: { projectId },
+                },
+              },
+            })
+          ).count;
+          screeningHistoryDeleted.conflicts = (
+            await tx.screeningConflict.deleteMany({
+              where: {
+                citationId: { in: citationIdsToDelete },
+                stage: { projectId },
+              },
+            })
+          ).count;
+          screeningHistoryDeleted.stageResults = (
+            await tx.citationStageResult.deleteMany({
+              where: {
+                citationId: { in: citationIdsToDelete },
+                stage: { projectId },
+              },
+            })
+          ).count;
+          screeningHistoryDeleted.decisions = (
+            await tx.screeningDecision.deleteMany({
+              where: {
+                citationId: { in: citationIdsToDelete },
+                stage: { projectId },
+              },
+            })
+          ).count;
+          screeningHistoryDeleted.assignments = (
+            await tx.screeningAssignment.deleteMany({
+              where: {
+                citationId: { in: citationIdsToDelete },
+                stage: { projectId },
+              },
+            })
+          ).count;
+          screeningHistoryDeleted.aiSuggestions = (
+            await tx.screeningSuggestion.deleteMany({
+              where: {
+                citationId: { in: citationIdsToDelete },
+                stage: { projectId },
+              },
+            })
+          ).count;
         }
 
         // Unreviewed dedup suggestions are derived data and can be regenerated after reimport.
@@ -402,6 +498,8 @@ export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) 
         id: batch.id,
         citationsDeleted: citationIdsToDelete.length,
         citationsRetained: retainedCitationIds.size,
+        ownerOverride: options.deleteScreeningHistory,
+        screeningHistoryDeleted,
       };
       await audit.record(tx, {
         projectId,
@@ -418,12 +516,30 @@ export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) 
           parsedRecords: batch.parsedRecords,
           failedRecords: batch.failedRecords,
         },
+        reason: options.reason,
         metadata: result,
       });
       return result;
     },
     { timeout: 60_000 },
   );
+}
+
+export async function deleteBatch(ctx: Ctx, projectId: string, batchId: string) {
+  return deleteBatchInternal(ctx, projectId, batchId, { deleteScreeningHistory: false });
+}
+
+export async function ownerDeleteBatchWithScreeningHistory(
+  ctx: Ctx,
+  projectId: string,
+  batchId: string,
+  input: z.infer<typeof ownerDeleteBatchSchema>,
+) {
+  return deleteBatchInternal(ctx, projectId, batchId, {
+    deleteScreeningHistory: true,
+    confirmation: input.confirmation,
+    reason: input.reason,
+  });
 }
 
 // ---------------------------------------------------------------------------

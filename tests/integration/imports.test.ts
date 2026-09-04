@@ -383,7 +383,20 @@ JT  - Am J Respir Crit Care Med
       });
 
       const result = await imports.deleteBatch(ctx(owner.id), project.id, batch.id);
-      expect(result).toEqual({ id: batch.id, citationsDeleted: 0, citationsRetained: 0 });
+      expect(result).toEqual({
+        id: batch.id,
+        citationsDeleted: 0,
+        citationsRetained: 0,
+        ownerOverride: false,
+        screeningHistoryDeleted: {
+          assignments: 0,
+          decisions: 0,
+          conflicts: 0,
+          adjudications: 0,
+          stageResults: 0,
+          aiSuggestions: 0,
+        },
+      });
       expect(await prisma.importBatch.findUnique({ where: { id: batch.id } })).toBeNull();
       expect(await prisma.citationSourceRecord.count({ where: { batchId: batch.id } })).toBe(0);
 
@@ -447,6 +460,202 @@ JT  - Am J Respir Crit Care Med
       });
 
       await expectAppError(imports.deleteBatch(ctx(owner.id), project.id, batch.id), "INVALID_STATE");
+      expect(await prisma.importBatch.findUnique({ where: { id: batch.id } })).not.toBeNull();
+      expect(await prisma.citation.findUnique({ where: { id: citation.id } })).not.toBeNull();
+    });
+
+    it("lets only an owner confirm deletion of an import and its screening history", async () => {
+      const { owner, reviewer1, reviewer2, adjudicator, org, project, source } =
+        await setupProject();
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "accidental-screened.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+      await imports.commitBatch(ctx(owner.id), project.id, batch.id);
+
+      const citation = await prisma.citation.findFirstOrThrow({
+        where: { projectId: project.id, pmid: "35143823" },
+      });
+      const stage = await prisma.screeningStage.create({
+        data: { projectId: project.id, type: "TITLE_ABSTRACT" },
+      });
+      await prisma.screeningAssignment.createMany({
+        data: [reviewer1.id, reviewer2.id].map((reviewerId) => ({
+          stageId: stage.id,
+          citationId: citation.id,
+          reviewerId,
+          status: "COMPLETED" as const,
+        })),
+      });
+      await prisma.screeningDecision.createMany({
+        data: [
+          {
+            stageId: stage.id,
+            citationId: citation.id,
+            reviewerId: reviewer1.id,
+            decision: "INCLUDE",
+            labels: [],
+          },
+          {
+            stageId: stage.id,
+            citationId: citation.id,
+            reviewerId: reviewer2.id,
+            decision: "EXCLUDE",
+            labels: [],
+          },
+        ],
+      });
+      const conflict = await prisma.screeningConflict.create({
+        data: {
+          stageId: stage.id,
+          citationId: citation.id,
+          status: "RESOLVED",
+          resolvedAt: new Date(),
+        },
+      });
+      await prisma.screeningAdjudication.create({
+        data: {
+          conflictId: conflict.id,
+          adjudicatorId: adjudicator.id,
+          finalDecision: "EXCLUDE",
+          reason: "Resolved before the import mistake was found",
+        },
+      });
+      await prisma.citationStageResult.create({
+        data: {
+          stageId: stage.id,
+          citationId: citation.id,
+          outcome: "EXCLUDE",
+          resolvedVia: "ADJUDICATION",
+        },
+      });
+      const aiRun = await prisma.aiScreeningRun.create({
+        data: {
+          projectId: project.id,
+          stageId: stage.id,
+          status: "COMPLETED",
+          provider: "test",
+          model: "test-model",
+          promptVersion: "test-v1",
+          totalCount: 1,
+          succeededCount: 1,
+          requestedById: owner.id,
+          completedAt: new Date(),
+        },
+      });
+      await prisma.screeningSuggestion.create({
+        data: {
+          stageId: stage.id,
+          citationId: citation.id,
+          runId: aiRun.id,
+          score: 50,
+          suggestedDecision: "MAYBE",
+          rationale: "Test suggestion",
+          provider: "test",
+          model: "test-model",
+          promptVersion: "test-v1",
+        },
+      });
+
+      const librarian = await createTestUser({ name: "Librarian" });
+      await addOrgMember(org.id, librarian.id);
+      await addProjectMember(project.id, librarian.id, ["LIBRARIAN"]);
+      await expectAppError(
+        imports.ownerDeleteBatchWithScreeningHistory(
+          ctx(librarian.id),
+          project.id,
+          batch.id,
+          {
+            confirmation: batch.filename,
+            reason: "Accidental import",
+          },
+        ),
+        "FORBIDDEN",
+      );
+      await expectAppError(
+        imports.ownerDeleteBatchWithScreeningHistory(ctx(owner.id), project.id, batch.id, {
+          confirmation: "wrong filename.csv",
+          reason: "Accidental import",
+        }),
+        "INVALID_STATE",
+      );
+
+      const result = await imports.ownerDeleteBatchWithScreeningHistory(
+        ctx(owner.id),
+        project.id,
+        batch.id,
+        {
+          confirmation: batch.filename,
+          reason: "Accidental import",
+        },
+      );
+      expect(result).toMatchObject({
+        id: batch.id,
+        citationsDeleted: 2,
+        citationsRetained: 0,
+        ownerOverride: true,
+        screeningHistoryDeleted: {
+          assignments: 2,
+          decisions: 2,
+          conflicts: 1,
+          adjudications: 1,
+          stageResults: 1,
+          aiSuggestions: 1,
+        },
+      });
+      expect(await prisma.citation.count({ where: { projectId: project.id } })).toBe(0);
+      expect(await prisma.screeningAssignment.count({ where: { stageId: stage.id } })).toBe(0);
+      expect(await prisma.screeningDecision.count({ where: { stageId: stage.id } })).toBe(0);
+      expect(await prisma.screeningConflict.count({ where: { stageId: stage.id } })).toBe(0);
+      expect(await prisma.citationStageResult.count({ where: { stageId: stage.id } })).toBe(0);
+      expect(await prisma.screeningSuggestion.count({ where: { stageId: stage.id } })).toBe(0);
+      expect(await prisma.aiScreeningRun.findUnique({ where: { id: aiRun.id } })).not.toBeNull();
+
+      const event = await prisma.auditEvent.findFirstOrThrow({
+        where: {
+          entityType: "ImportBatch",
+          entityId: batch.id,
+          action: "import.batch.deleted",
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      expect(event.reason).toBe("Accidental import");
+      expect(event.metadata).toMatchObject({
+        ownerOverride: true,
+        screeningHistoryDeleted: { decisions: 2, adjudications: 1 },
+      });
+    });
+
+    it("keeps work beyond screening as a blocker for the owner override", async () => {
+      const { owner, project, source } = await setupProject();
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "study-linked.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+      await imports.commitBatch(ctx(owner.id), project.id, batch.id);
+      const citation = await prisma.citation.findFirstOrThrow({
+        where: { projectId: project.id },
+      });
+      const study = await prisma.study.create({
+        data: {
+          projectId: project.id,
+          label: "Downstream study",
+          createdById: owner.id,
+        },
+      });
+      await prisma.studyReportLink.create({
+        data: { studyId: study.id, citationId: citation.id, isPrimaryReport: true },
+      });
+
+      await expectAppError(
+        imports.ownerDeleteBatchWithScreeningHistory(ctx(owner.id), project.id, batch.id, {
+          confirmation: batch.filename,
+          reason: "Accidental import",
+        }),
+        "INVALID_STATE",
+      );
       expect(await prisma.importBatch.findUnique({ where: { id: batch.id } })).not.toBeNull();
       expect(await prisma.citation.findUnique({ where: { id: citation.id } })).not.toBeNull();
     });
