@@ -143,7 +143,7 @@ export interface ScreeningNavigatorItem {
   assignmentId: string;
   assignmentStatus: "PENDING" | "COMPLETED";
   citation: QueueCitation;
-  myDecision: { decision: DecisionValue } | null;
+  myDecision: { decision: DecisionValue; notes: string | null } | null;
   finalOutcome: "INCLUDE" | "EXCLUDE" | null;
   completedReviews: number;
   requiredReviews: number;

@@ -12,6 +12,7 @@ const RIS = [
 ].join("\n");
 
 test("sign-up to export, entirely through the UI", async ({ page }) => {
+  test.setTimeout(90_000);
   const ts = Date.now();
   const email = `e2e-${ts}@test.local`;
 
@@ -76,7 +77,7 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   // Imported records can omit abstracts. An assigned screener can add the missing shared
   // metadata directly instead of trying to preserve it in a private decision note.
   await articleNavigator
-    .getByRole("option", { name: /Gamma narrative review of lung volume reduction/i })
+    .getByRole("button", { name: /Gamma narrative review of lung volume reduction/i })
     .click();
   await expect(page.getByText("No abstract available.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Add abstract", exact: true }).click();
@@ -129,8 +130,8 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
     timeout: 15_000,
   });
 
-  // The standard exclusion reasons are one-click buttons beside the decision controls.
-  // Their stable order maps to number keys, so 3 = Wrong publication type.
+  // A note is saved with the decision, and selecting an exclusion reason submits
+  // immediately without requiring a second Exclude click.
   const quickReasons = page.getByRole("group", { name: "Quick exclusion reasons" });
   await expect(
     quickReasons.getByRole("button", { name: /Exclude: Wrong population \(shortcut 1\)/i }),
@@ -141,26 +142,48 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
     }),
   ).toBeVisible();
   await page.locator('mark[data-keyword-term="randomized"]').first().click();
-  await page.keyboard.press("3");
+  await page.getByRole("button", { name: /^Note/ }).click();
+  const savedNote = "Narrative publication; exclude from primary-study screening.";
+  await page
+    .getByPlaceholder(/Optional note, saved with your next decision/i)
+    .fill(savedNote);
+  await page
+    .getByRole("region", { name: "Selected screening article" })
+    .getByRole("button", { name: /^Exclude/ })
+    .first()
+    .click();
+  const exclusionDialog = page.getByRole("dialog", { name: /Exclude at title & abstract/i });
+  await expect(exclusionDialog.getByLabel("Note (optional)")).toHaveValue(savedNote);
+  await exclusionDialog
+    .getByLabel("Exclusion reason subgroup")
+    .selectOption({ label: "3 · Wrong publication type" });
   await expect(page.getByText("Excluded — Wrong publication type")).toBeVisible();
   await articleNavigator.getByLabel("Filter article status").selectOption("EXCLUDED");
-  await expect(
-    articleNavigator.getByRole("option", {
-      name: /Alpha randomized trial of endobronchial valves/i,
-    }),
-  ).toBeVisible({ timeout: 15_000 });
+  const excludedArticle = articleNavigator.getByRole("button", {
+    name: /Alpha randomized trial of endobronchial valves/i,
+  });
+  await expect(excludedArticle).toBeVisible({ timeout: 15_000 });
+  await excludedArticle.click();
+  await expect(page.getByText(savedNote, { exact: true })).toBeVisible();
   await articleNavigator.getByLabel("Filter article status").selectOption("UNDECIDED");
 
-  for (const remaining of [2, 1]) {
-    await expect(
-      page.getByText(`Citation 1 of ${remaining}`, { exact: true }),
-    ).toBeVisible({ timeout: 15_000 });
-    await page.keyboard.press("i");
-  }
+  // Select every remaining undecided article and apply one shared reason in one batch.
+  await expect(page.getByText("Citation 1 of 2", { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+  await articleNavigator
+    .getByLabel("Select all undecided articles on this page")
+    .check();
+  await articleNavigator.getByRole("button", { name: "Exclude selected (2)" }).click();
+  const batchDialog = page.getByRole("dialog", { name: /Exclude 2 selected articles/i });
+  await batchDialog
+    .getByLabel("Common exclusion reason")
+    .selectOption({ label: "Wrong population" });
+  await expect(page.getByText("Excluded 2 articles", { exact: true })).toBeVisible();
   await expect(page.getByText(/Queue clear/i)).toBeVisible({ timeout: 15_000 });
   await expect(
     articleNavigator.getByLabel("Filter article status").locator('option[value="EXCLUDED"]'),
-  ).toHaveText("Excluded (1)");
+  ).toHaveText("Excluded (3)");
 
   // 6. PRISMA reflects the imported + screened counts.
   await page.getByRole("link", { name: "PRISMA", exact: true }).click();
