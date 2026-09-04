@@ -68,6 +68,15 @@ export interface DeleteBatchResult {
   id: string;
   citationsDeleted: number;
   citationsRetained: number;
+  ownerOverride: boolean;
+  screeningHistoryDeleted: {
+    assignments: number;
+    decisions: number;
+    conflicts: number;
+    adjudications: number;
+    stageResults: number;
+    aiSuggestions: number;
+  };
 }
 
 export const FORMAT_LABELS: Record<ImportFormat, string> = {
