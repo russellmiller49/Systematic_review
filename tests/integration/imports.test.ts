@@ -5,6 +5,7 @@ import { prisma } from "@/server/db";
 import { AppError } from "@/server/errors";
 import * as imports from "@/server/services/imports";
 import * as citations from "@/server/services/citations";
+import * as dedup from "@/server/services/dedup";
 import { resetDb } from "../db-utils";
 import {
   addOrgMember,
@@ -396,6 +397,13 @@ JT  - Am J Respir Crit Care Med
           stageResults: 0,
           aiSuggestions: 0,
         },
+        deduplicationHistoryDeleted: {
+          candidates: 0,
+          groups: 0,
+          retainedCitationsRestored: 0,
+          assignmentsRestored: 0,
+          conflictsRestored: 0,
+        },
       });
       expect(await prisma.importBatch.findUnique({ where: { id: batch.id } })).toBeNull();
       expect(await prisma.citationSourceRecord.count({ where: { batchId: batch.id } })).toBe(0);
@@ -574,6 +582,10 @@ JT  - Am J Respir Crit Care Med
         "FORBIDDEN",
       );
       await expectAppError(
+        imports.getOwnerDeleteBatchPreview(ctx(librarian.id), project.id, batch.id),
+        "FORBIDDEN",
+      );
+      await expectAppError(
         imports.ownerDeleteBatchWithScreeningHistory(ctx(owner.id), project.id, batch.id, {
           confirmation: "wrong filename.csv",
           reason: "Accidental import",
@@ -627,6 +639,140 @@ JT  - Am J Respir Crit Care Med
       });
     });
 
+    it("rolls back deduplication while preserving records from other imports", async () => {
+      const { owner, reviewer1, project, source } = await setupProject();
+      const originalBatch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "original.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+      const mistakenBatch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "mistaken.csv",
+        sourceId: source.id,
+        content: CSV_TWO_ROWS,
+      });
+      await imports.commitBatch(ctx(owner.id), project.id, originalBatch.id);
+      await imports.commitBatch(ctx(owner.id), project.id, mistakenBatch.id);
+
+      const [originalFirst, originalSecond, mistakenFirst, mistakenSecond] = await Promise.all([
+        prisma.citation.findFirstOrThrow({
+          where: { pmid: "35143823", sourceRecords: { some: { batchId: originalBatch.id } } },
+        }),
+        prisma.citation.findFirstOrThrow({
+          where: { pmid: "34059074", sourceRecords: { some: { batchId: originalBatch.id } } },
+        }),
+        prisma.citation.findFirstOrThrow({
+          where: { pmid: "35143823", sourceRecords: { some: { batchId: mistakenBatch.id } } },
+        }),
+        prisma.citation.findFirstOrThrow({
+          where: { pmid: "34059074", sourceRecords: { some: { batchId: mistakenBatch.id } } },
+        }),
+      ]);
+      const stage = await prisma.screeningStage.create({
+        data: { projectId: project.id, type: "TITLE_ABSTRACT" },
+      });
+      const retainedAssignment = await prisma.screeningAssignment.create({
+        data: { stageId: stage.id, citationId: originalFirst.id, reviewerId: reviewer1.id },
+      });
+
+      async function createPairGroup(citationOneId: string, citationTwoId: string) {
+        const group = await prisma.deduplicationGroup.create({
+          data: { projectId: project.id },
+        });
+        const orderedCitationIds = [citationOneId, citationTwoId].sort();
+        await prisma.deduplicationCandidate.create({
+          data: {
+            projectId: project.id,
+            groupId: group.id,
+            citationAId: orderedCitationIds[0]!,
+            citationBId: orderedCitationIds[1]!,
+            method: "EXACT_PMID",
+            score: 1,
+            reasons: { matchedFields: ["pmid"] },
+          },
+        });
+        return group;
+      }
+
+      const retainedBecomesDuplicate = await createPairGroup(originalFirst.id, mistakenFirst.id);
+      await dedup.mergeGroup(ctx(owner.id), project.id, retainedBecomesDuplicate.id, {
+        canonicalCitationId: mistakenFirst.id,
+      });
+      const mistakenBecomesDuplicate = await createPairGroup(originalSecond.id, mistakenSecond.id);
+      await dedup.mergeGroup(ctx(owner.id), project.id, mistakenBecomesDuplicate.id, {
+        canonicalCitationId: originalSecond.id,
+      });
+
+      expect(
+        (await prisma.screeningAssignment.findUniqueOrThrow({
+          where: { id: retainedAssignment.id },
+        })).status,
+      ).toBe("VOIDED");
+
+      const preview = await imports.getOwnerDeleteBatchPreview(
+        ctx(owner.id),
+        project.id,
+        mistakenBatch.id,
+      );
+      expect(preview).toMatchObject({
+        canDelete: true,
+        citationsToDelete: 2,
+        citationsRetained: 0,
+        deduplication: {
+          citationsWithRelationships: 2,
+          candidates: 2,
+          groups: 2,
+          retainedCitationsToRestore: 1,
+        },
+        blockers: [],
+      });
+
+      const result = await imports.ownerDeleteBatchWithScreeningHistory(
+        ctx(owner.id),
+        project.id,
+        mistakenBatch.id,
+        { confirmation: mistakenBatch.filename, reason: "Accidental duplicate import" },
+      );
+      expect(result.deduplicationHistoryDeleted).toEqual({
+        candidates: 2,
+        groups: 2,
+        retainedCitationsRestored: 1,
+        assignmentsRestored: 1,
+        conflictsRestored: 0,
+      });
+      expect(await prisma.citation.findUnique({ where: { id: mistakenFirst.id } })).toBeNull();
+      expect(await prisma.citation.findUnique({ where: { id: mistakenSecond.id } })).toBeNull();
+      await expect(
+        prisma.citation.findUniqueOrThrow({ where: { id: originalFirst.id } }),
+      ).resolves.toMatchObject({ status: "ACTIVE", duplicateOfId: null });
+      await expect(
+        prisma.citation.findUniqueOrThrow({ where: { id: originalSecond.id } }),
+      ).resolves.toMatchObject({ status: "ACTIVE", duplicateOfId: null });
+      expect(
+        (await prisma.screeningAssignment.findUniqueOrThrow({
+          where: { id: retainedAssignment.id },
+        })).status,
+      ).toBe("PENDING");
+      expect(
+        await prisma.deduplicationCandidate.count({
+          where: { groupId: { in: [retainedBecomesDuplicate.id, mistakenBecomesDuplicate.id] } },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.deduplicationGroup.count({
+          where: { id: { in: [retainedBecomesDuplicate.id, mistakenBecomesDuplicate.id] } },
+        }),
+      ).toBe(0);
+      await prisma.auditEvent.findFirstOrThrow({
+        where: {
+          projectId: project.id,
+          entityType: "Citation",
+          entityId: originalFirst.id,
+          action: "dedup.merge_undone",
+        },
+      });
+    });
+
     it("keeps work beyond screening as a blocker for the owner override", async () => {
       const { owner, project, source } = await setupProject();
       const batch = await imports.createBatch(ctx(owner.id), project.id, {
@@ -648,6 +794,21 @@ JT  - Am J Respir Crit Care Med
       await prisma.studyReportLink.create({
         data: { studyId: study.id, citationId: citation.id, isPrimaryReport: true },
       });
+
+      const preview = await imports.getOwnerDeleteBatchPreview(
+        ctx(owner.id),
+        project.id,
+        batch.id,
+      );
+      expect(preview.canDelete).toBe(false);
+      expect(preview.blockers).toEqual([
+        {
+          kind: "STUDY_LINK",
+          label: "linked studies",
+          count: 1,
+          citations: [{ id: citation.id, title: citation.title }],
+        },
+      ]);
 
       await expectAppError(
         imports.ownerDeleteBatchWithScreeningHistory(ctx(owner.id), project.id, batch.id, {

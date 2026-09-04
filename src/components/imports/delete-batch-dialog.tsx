@@ -17,7 +17,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, Spinner } from "@/components/ui/misc";
 import { Textarea } from "@/components/ui/textarea";
-import type { DeleteBatchResult, ImportBatchRow } from "./types";
+import type {
+  DeleteBatchResult,
+  ImportBatchRow,
+  OwnerRollbackPreview,
+} from "./types";
 
 export function DeleteBatchDialog({
   projectId,
@@ -37,6 +41,9 @@ export function DeleteBatchDialog({
   const [deleteScreeningHistory, setDeleteScreeningHistory] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const [reason, setReason] = useState("");
+  const [preview, setPreview] = useState<OwnerRollbackPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -59,7 +66,38 @@ export function DeleteBatchDialog({
     setDeleteScreeningHistory(false);
     setConfirmation("");
     setReason("");
+    setPreview(null);
+    setPreviewError(null);
   }, [open, batch?.id]);
+
+  useEffect(() => {
+    if (!open || !batch || !isOwner || !deleteScreeningHistory) {
+      setPreview(null);
+      setPreviewError(null);
+      setPreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    api<OwnerRollbackPreview>(
+      `/api/projects/${projectId}/imports/${batch.id}/owner-rollback`,
+    )
+      .then((result) => {
+        if (!cancelled) setPreview(result);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPreviewError(err instanceof ApiError ? err.message : "Failed to inspect this import");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [batch, deleteScreeningHistory, isOwner, open, projectId]);
 
   async function remove() {
     if (!batch) return;
@@ -89,6 +127,16 @@ export function DeleteBatchDialog({
           `${result.citationsRetained.toLocaleString()} citation${result.citationsRetained === 1 ? " was" : "s were"} retained because they are also linked to another import.`,
         );
       }
+      if (result.deduplicationHistoryDeleted.candidates > 0) {
+        descriptions.push(
+          `${result.deduplicationHistoryDeleted.candidates.toLocaleString()} duplicate-pair record${result.deduplicationHistoryDeleted.candidates === 1 ? " was" : "s were"} removed.`,
+        );
+      }
+      if (result.deduplicationHistoryDeleted.retainedCitationsRestored > 0) {
+        descriptions.push(
+          `${result.deduplicationHistoryDeleted.retainedCitationsRestored.toLocaleString()} citation${result.deduplicationHistoryDeleted.retainedCitationsRestored === 1 ? " from another import was" : "s from other imports were"} restored.`,
+        );
+      }
       toast.success(
         deleted > 0
           ? `Import deleted — ${deleted.toLocaleString()} citation${deleted === 1 ? "" : "s"} removed`
@@ -107,10 +155,15 @@ export function DeleteBatchDialog({
   const ownerConfirmationValid =
     !deleteScreeningHistory ||
     (batch !== null && confirmation === batch.filename && reason.trim().length >= 3);
+  const previewAllowsDelete =
+    !deleteScreeningHistory || (preview !== null && preview.canDelete && !previewLoading);
+  const previewScreeningRecords = preview
+    ? Object.values(preview.screeningHistory).reduce((total, count) => total + count, 0)
+    : 0;
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Delete import{batch ? ` “${batch.filename}”` : ""}?</DialogTitle>
           <DialogDescription>
@@ -152,10 +205,65 @@ export function DeleteBatchDialog({
                       This permanently deletes assignments, decisions, conflicts and
                       adjudications, final screening results, and AI screening suggestions for
                       citations created only by this import. Citations shared by another import
-                      keep all history. Work beyond screening will still block deletion.
+                      keep all history. Linked studies, full text, extraction, reference-library,
+                      retrieval, or cohort work will still block deletion.
                     </span>
                   </span>
                 </Alert>
+                {previewLoading && (
+                  <Alert>
+                    <span className="flex items-center gap-2">
+                      <Spinner /> Checking screening, deduplication, and downstream work…
+                    </span>
+                  </Alert>
+                )}
+                {previewError && <Alert variant="error">{previewError}</Alert>}
+                {preview && preview.blockers.length > 0 && (
+                  <Alert variant="error">
+                    <p className="font-medium">Deletion is blocked by:</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {preview.blockers.map((blocker) => (
+                        <li key={blocker.kind}>
+                          {blocker.count.toLocaleString()} citation
+                          {blocker.count === 1 ? "" : "s"} with {blocker.label}
+                          {blocker.citations.length > 0
+                            ? ` — ${blocker.citations.map((citation) => citation.title).join("; ")}`
+                            : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </Alert>
+                )}
+                {preview && preview.blockers.length === 0 && (
+                  <Alert variant="success">
+                    <p className="font-medium">This rollback can proceed.</p>
+                    <p className="mt-1">
+                      It will delete {preview.citationsToDelete.toLocaleString()} citation
+                      {preview.citationsToDelete === 1 ? "" : "s"} created only by this import.
+                    </p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      <li>
+                        Screening: {preview.screeningHistory.assignments.toLocaleString()} assignments,
+                        {" "}{preview.screeningHistory.decisions.toLocaleString()} decisions, and{" "}
+                        {preview.screeningHistory.stageResults.toLocaleString()} final results
+                        ({previewScreeningRecords.toLocaleString()} total records).
+                      </li>
+                      <li>
+                        Deduplication: {preview.deduplication.citationsWithRelationships.toLocaleString()} imported citations
+                        {" "}across {preview.deduplication.candidates.toLocaleString()} pair records
+                        and {preview.deduplication.groups.toLocaleString()} groups.
+                      </li>
+                      {preview.deduplication.retainedCitationsToRestore > 0 && (
+                        <li>
+                          {preview.deduplication.retainedCitationsToRestore.toLocaleString()} citation
+                          {preview.deduplication.retainedCitationsToRestore === 1
+                            ? " from another import will"
+                            : "s from other imports will"} be restored as active.
+                        </li>
+                      )}
+                    </ul>
+                  </Alert>
+                )}
                 <div className="space-y-1.5">
                   <Label htmlFor="delete-import-reason">Reason for owner override</Label>
                   <Textarea
@@ -188,7 +296,7 @@ export function DeleteBatchDialog({
           <Button
             variant="destructive"
             onClick={remove}
-            disabled={busy || !batch || !ownerConfirmationValid}
+            disabled={busy || !batch || !ownerConfirmationValid || !previewAllowsDelete}
           >
             {busy ? <Spinner /> : <Trash2 />} {deleteScreeningHistory
               ? "Delete import and screening history"

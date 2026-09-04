@@ -2,12 +2,13 @@
 // (upload/parse → PREVIEWED batch with every source row preserved → commit → citations).
 import { z } from "zod";
 import type { IdentifierType, Prisma } from "@prisma/client";
-import { prisma } from "@/server/db";
+import { prisma, type Tx } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
+import { undoMergeInTransaction } from "@/server/services/dedup";
 import {
   normalizeDoi,
   normalizePmid,
@@ -279,6 +280,51 @@ type DeleteBatchOptions = {
   reason?: string;
 };
 
+export type OwnerRollbackBlocker = {
+  kind:
+    | "ACTIVE_AI_RUN"
+    | "STUDY_LINK"
+    | "FULL_TEXT_FILE"
+    | "RETRIEVAL_ATTEMPT"
+    | "EXTRACTION_FORM"
+    | "REFERENCE_ENTRY"
+    | "COHORT_CANDIDATE";
+  label: string;
+  count: number;
+  citations: { id: string; title: string }[];
+};
+
+const ownerBlockerDefinitions: {
+  kind: Exclude<OwnerRollbackBlocker["kind"], "ACTIVE_AI_RUN">;
+  label: string;
+  where: Prisma.CitationWhereInput;
+}[] = [
+  { kind: "STUDY_LINK", label: "linked studies", where: { studyLinks: { some: {} } } },
+  { kind: "FULL_TEXT_FILE", label: "full-text files", where: { fullTextLinks: { some: {} } } },
+  {
+    kind: "RETRIEVAL_ATTEMPT",
+    label: "full-text retrieval attempts",
+    where: { retrievalAttempts: { some: {} } },
+  },
+  {
+    kind: "EXTRACTION_FORM",
+    label: "extraction forms",
+    where: { extractionForms: { some: {} } },
+  },
+  {
+    kind: "REFERENCE_ENTRY",
+    label: "curated reference entries",
+    where: { referenceEntries: { some: {} } },
+  },
+  {
+    kind: "COHORT_CANDIDATE",
+    label: "cohort-overlap work",
+    where: {
+      OR: [{ cohortCandidatesAsA: { some: {} } }, { cohortCandidatesAsB: { some: {} } }],
+    },
+  },
+];
+
 const emptyScreeningHistoryCounts = () => ({
   assignments: 0,
   decisions: 0,
@@ -287,6 +333,185 @@ const emptyScreeningHistoryCounts = () => ({
   stageResults: 0,
   aiSuggestions: 0,
 });
+
+const emptyDeduplicationRollbackCounts = () => ({
+  candidates: 0,
+  groups: 0,
+  retainedCitationsRestored: 0,
+  assignmentsRestored: 0,
+  conflictsRestored: 0,
+});
+
+async function loadBatchDeletionScope(db: Tx, projectId: string, batchId: string) {
+  const batch = await db.importBatch.findFirst({
+    where: { id: batchId, projectId },
+    include: { sourceRecords: { select: { citationId: true } } },
+  });
+  if (!batch) throw notFound("Import batch");
+
+  const linkedCitationIds = [
+    ...new Set(
+      batch.sourceRecords
+        .map((row) => row.citationId)
+        .filter((id): id is string => id !== null),
+    ),
+  ];
+  const otherSourceRows =
+    linkedCitationIds.length === 0
+      ? []
+      : await db.citationSourceRecord.findMany({
+          where: {
+            citationId: { in: linkedCitationIds },
+            batchId: { not: batch.id },
+          },
+          select: { citationId: true },
+          distinct: ["citationId"],
+        });
+  const retainedCitationIds = new Set(
+    otherSourceRows.map((row) => row.citationId).filter((id): id is string => id !== null),
+  );
+  const citationIdsToDelete = linkedCitationIds.filter((id) => !retainedCitationIds.has(id));
+  return { batch, citationIdsToDelete, retainedCitationIds };
+}
+
+async function findOwnerRollbackBlockers(
+  db: Tx,
+  projectId: string,
+  citationIds: string[],
+): Promise<OwnerRollbackBlocker[]> {
+  if (citationIds.length === 0) return [];
+  const blockers: OwnerRollbackBlocker[] = [];
+  for (const definition of ownerBlockerDefinitions) {
+    const where: Prisma.CitationWhereInput = {
+      projectId,
+      id: { in: citationIds },
+      AND: [definition.where],
+    };
+    const count = await db.citation.count({ where });
+    if (count === 0) continue;
+    const citations = await db.citation.findMany({
+      where,
+      select: { id: true, title: true },
+      orderBy: { createdAt: "asc" },
+      take: 5,
+    });
+    blockers.push({
+      kind: definition.kind,
+      label: definition.label,
+      count,
+      citations,
+    });
+  }
+  return blockers;
+}
+
+async function countScreeningHistory(db: Tx, projectId: string, citationIds: string[]) {
+  if (citationIds.length === 0) return emptyScreeningHistoryCounts();
+  const citationWhere = { citationId: { in: citationIds }, stage: { projectId } };
+  const [assignments, decisions, conflicts, adjudications, stageResults, aiSuggestions] =
+    await Promise.all([
+      db.screeningAssignment.count({ where: citationWhere }),
+      db.screeningDecision.count({ where: citationWhere }),
+      db.screeningConflict.count({ where: citationWhere }),
+      db.screeningAdjudication.count({
+        where: { conflict: citationWhere },
+      }),
+      db.citationStageResult.count({ where: citationWhere }),
+      db.screeningSuggestion.count({ where: citationWhere }),
+    ]);
+  return { assignments, decisions, conflicts, adjudications, stageResults, aiSuggestions };
+}
+
+async function getDeduplicationRollbackPreview(
+  db: Tx,
+  projectId: string,
+  citationIds: string[],
+) {
+  if (citationIds.length === 0) {
+    return {
+      citationsWithRelationships: 0,
+      candidates: 0,
+      groups: 0,
+      retainedCitationsToRestore: 0,
+    };
+  }
+  const candidateWhere: Prisma.DeduplicationCandidateWhereInput = {
+    projectId,
+    OR: [{ citationAId: { in: citationIds } }, { citationBId: { in: citationIds } }],
+  };
+  const [citationsWithRelationships, candidates, retainedCitations, candidateGroups] =
+    await Promise.all([
+      db.citation.count({
+        where: {
+          projectId,
+          id: { in: citationIds },
+          OR: [
+            { status: "DUPLICATE" },
+            { duplicateOfId: { not: null } },
+            { duplicates: { some: {} } },
+          ],
+        },
+      }),
+      db.deduplicationCandidate.count({ where: candidateWhere }),
+      db.citation.count({
+        where: { projectId, id: { notIn: citationIds }, duplicateOfId: { in: citationIds } },
+      }),
+      db.deduplicationCandidate.findMany({
+        where: { ...candidateWhere, groupId: { not: null } },
+        select: { groupId: true },
+        distinct: ["groupId"],
+      }),
+    ]);
+  return {
+    citationsWithRelationships,
+    candidates,
+    groups: candidateGroups.length,
+    retainedCitationsToRestore: retainedCitations,
+  };
+}
+
+export async function getOwnerDeleteBatchPreview(ctx: Ctx, projectId: string, batchId: string) {
+  const member = await requirePermission(ctx, projectId, "import.manage");
+  if (!member.roles.includes("OWNER")) {
+    throw forbidden("Only a project owner can inspect an import screening-history rollback");
+  }
+  const { batch, citationIdsToDelete, retainedCitationIds } = await loadBatchDeletionScope(
+    prisma,
+    projectId,
+    batchId,
+  );
+  const [activeAiRun, screeningHistory, deduplication, citationBlockers] = await Promise.all([
+    citationIdsToDelete.length > 0
+      ? prisma.aiScreeningRun.findFirst({
+          where: { projectId, status: { in: ["PENDING", "SUBMITTED"] } },
+          select: { id: true },
+        })
+      : Promise.resolve(null),
+    countScreeningHistory(prisma, projectId, citationIdsToDelete),
+    getDeduplicationRollbackPreview(prisma, projectId, citationIdsToDelete),
+    findOwnerRollbackBlockers(prisma, projectId, citationIdsToDelete),
+  ]);
+  const blockers: OwnerRollbackBlocker[] = activeAiRun
+    ? [
+        {
+          kind: "ACTIVE_AI_RUN",
+          label: "an active AI screening run",
+          count: 1,
+          citations: [],
+        },
+        ...citationBlockers,
+      ]
+    : citationBlockers;
+  return {
+    id: batch.id,
+    canDelete: blockers.length === 0,
+    citationsToDelete: citationIdsToDelete.length,
+    citationsRetained: retainedCitationIds.size,
+    screeningHistory,
+    deduplication,
+    blockers,
+  };
+}
 
 // Delete an import batch and roll back citations created only by that batch. The ordinary
 // path remains conservative and refuses any downstream work. A separately confirmed,
@@ -314,43 +539,15 @@ async function deleteBatchInternal(
       `;
       if (locked.length === 0) throw notFound("Import batch");
 
-      const batch = await tx.importBatch.findUniqueOrThrow({
-        where: { id: batchId },
-        include: {
-          sourceRecords: { select: { citationId: true } },
-        },
-      });
+      const { batch, citationIdsToDelete, retainedCitationIds } =
+        await loadBatchDeletionScope(tx, projectId, batchId);
 
       if (options.deleteScreeningHistory && options.confirmation !== batch.filename) {
         throw invalidState("Type the import filename exactly to confirm this owner override");
       }
 
-      const linkedCitationIds = [
-        ...new Set(
-          batch.sourceRecords
-            .map((row) => row.citationId)
-            .filter((id): id is string => id !== null),
-        ),
-      ];
-
-      const otherSourceRows =
-        linkedCitationIds.length === 0
-          ? []
-          : await tx.citationSourceRecord.findMany({
-              where: {
-                citationId: { in: linkedCitationIds },
-                batchId: { not: batch.id },
-              },
-              select: { citationId: true },
-              distinct: ["citationId"],
-            });
-      const retainedCitationIds = new Set(
-        otherSourceRows
-          .map((row) => row.citationId)
-          .filter((id): id is string => id !== null),
-      );
-      const citationIdsToDelete = linkedCitationIds.filter((id) => !retainedCitationIds.has(id));
       const screeningHistoryDeleted = emptyScreeningHistoryCounts();
+      const deduplicationHistoryDeleted = emptyDeduplicationRollbackCounts();
 
       if (citationIdsToDelete.length > 0) {
         const activeAiRun = await tx.aiScreeningRun.findFirst({
@@ -363,46 +560,68 @@ async function deleteBatchInternal(
           );
         }
 
-        const screeningBlockers: Prisma.CitationWhereInput[] = options.deleteScreeningHistory
-          ? []
-          : [
-              { assignments: { some: {} } },
-              { decisions: { some: {} } },
-              { conflicts: { some: {} } },
-              { stageResults: { some: {} } },
-              { aiSuggestions: { some: {} } },
-            ];
-        const blockedCitation = await tx.citation.findFirst({
-          where: {
-            projectId,
-            id: { in: citationIdsToDelete },
-            OR: [
-              { status: "DUPLICATE" },
-              { duplicateOfId: { not: null } },
-              { duplicates: { some: {} } },
-              { studyLinks: { some: {} } },
-              { fullTextLinks: { some: {} } },
-              { retrievalAttempts: { some: {} } },
-              { extractionForms: { some: {} } },
-              { referenceEntries: { some: {} } },
-              { cohortCandidatesAsA: { some: {} } },
-              { cohortCandidatesAsB: { some: {} } },
-              { dedupCandidatesAsA: { some: { status: { not: "SUGGESTED" } } } },
-              { dedupCandidatesAsB: { some: { status: { not: "SUGGESTED" } } } },
-              ...screeningBlockers,
-            ],
-          },
-          select: { title: true },
-        });
-        if (blockedCitation) {
-          throw invalidState(
-            options.deleteScreeningHistory
-              ? `This import cannot be deleted because “${blockedCitation.title}” has work beyond screening. Remove or reset that work first.`
-              : `This import cannot be deleted because “${blockedCitation.title}” has downstream review work. Remove or reset that work first.`,
-          );
+        if (options.deleteScreeningHistory) {
+          const [blocker] = await findOwnerRollbackBlockers(tx, projectId, citationIdsToDelete);
+          if (blocker) {
+            const example = blocker.citations[0];
+            throw invalidState(
+              `This import cannot be deleted because ${blocker.count.toLocaleString()} citation${blocker.count === 1 ? " has" : "s have"} ${blocker.label}${example ? ` (for example, “${example.title}”)` : ""}. Remove or reset that work first.`,
+            );
+          }
+        } else {
+          const blockedCitation = await tx.citation.findFirst({
+            where: {
+              projectId,
+              id: { in: citationIdsToDelete },
+              OR: [
+                { status: "DUPLICATE" },
+                { duplicateOfId: { not: null } },
+                { duplicates: { some: {} } },
+                { studyLinks: { some: {} } },
+                { fullTextLinks: { some: {} } },
+                { retrievalAttempts: { some: {} } },
+                { extractionForms: { some: {} } },
+                { referenceEntries: { some: {} } },
+                { cohortCandidatesAsA: { some: {} } },
+                { cohortCandidatesAsB: { some: {} } },
+                { dedupCandidatesAsA: { some: { status: { not: "SUGGESTED" } } } },
+                { dedupCandidatesAsB: { some: { status: { not: "SUGGESTED" } } } },
+                { assignments: { some: {} } },
+                { decisions: { some: {} } },
+                { conflicts: { some: {} } },
+                { stageResults: { some: {} } },
+                { aiSuggestions: { some: {} } },
+              ],
+            },
+            select: { title: true },
+          });
+          if (blockedCitation) {
+            throw invalidState(
+              `This import cannot be deleted because “${blockedCitation.title}” has downstream review work. Remove or reset that work first.`,
+            );
+          }
         }
 
         if (options.deleteScreeningHistory) {
+          // A retained citation can have been merged into a canonical supplied only by this
+          // import. Restore that retained record (including assignments/conflicts voided by
+          // the merge) before the canonical disappears.
+          const retainedDuplicates = await tx.citation.findMany({
+            where: {
+              projectId,
+              id: { notIn: citationIdsToDelete },
+              duplicateOfId: { in: citationIdsToDelete },
+            },
+            select: { id: true },
+          });
+          for (const retained of retainedDuplicates) {
+            const restored = await undoMergeInTransaction(tx, ctx, projectId, retained.id);
+            deduplicationHistoryDeleted.retainedCitationsRestored += 1;
+            deduplicationHistoryDeleted.assignmentsRestored +=
+              restored.restoredAssignmentIds.length;
+            deduplicationHistoryDeleted.conflictsRestored += restored.restoredConflictIds.length;
+          }
+
           screeningHistoryDeleted.adjudications = (
             await tx.screeningAdjudication.deleteMany({
               where: {
@@ -455,10 +674,12 @@ async function deleteBatchInternal(
           ).count;
         }
 
-        // Unreviewed dedup suggestions are derived data and can be regenerated after reimport.
-        const suggestedCandidates = await tx.deduplicationCandidate.findMany({
+        // Owner rollback also removes decided pairs involving the mistaken import. Ordinary
+        // deletion remains limited to unreviewed suggestions.
+        const dedupCandidates = await tx.deduplicationCandidate.findMany({
           where: {
-            status: "SUGGESTED",
+            projectId,
+            ...(options.deleteScreeningHistory ? {} : { status: "SUGGESTED" as const }),
             OR: [
               { citationAId: { in: citationIdsToDelete } },
               { citationBId: { in: citationIdsToDelete } },
@@ -466,16 +687,27 @@ async function deleteBatchInternal(
           },
           select: { id: true, groupId: true },
         });
-        const candidateIds = suggestedCandidates.map((candidate) => candidate.id);
+        const candidateIds = dedupCandidates.map((candidate) => candidate.id);
         const groupIds = [
           ...new Set(
-            suggestedCandidates
+            dedupCandidates
               .map((candidate) => candidate.groupId)
               .filter((id): id is string => id !== null),
           ),
         ];
         if (candidateIds.length > 0) {
-          await tx.deduplicationCandidate.deleteMany({ where: { id: { in: candidateIds } } });
+          deduplicationHistoryDeleted.candidates = (
+            await tx.deduplicationCandidate.deleteMany({ where: { id: { in: candidateIds } } })
+          ).count;
+        }
+
+        if (options.deleteScreeningHistory) {
+          // Clear self-relations among citations that are about to be removed. Any retained
+          // child was restored above, so no valid record is left pointing at a deleted one.
+          await tx.citation.updateMany({
+            where: { projectId, id: { in: citationIdsToDelete } },
+            data: { duplicateOfId: null },
+          });
         }
 
         await tx.citationIdentifier.deleteMany({
@@ -485,8 +717,18 @@ async function deleteBatchInternal(
         await tx.citation.deleteMany({ where: { id: { in: citationIdsToDelete } } });
 
         if (groupIds.length > 0) {
-          await tx.deduplicationGroup.deleteMany({
-            where: { id: { in: groupIds }, candidates: { none: {} } },
+          deduplicationHistoryDeleted.groups = (
+            await tx.deduplicationGroup.deleteMany({
+              where: { id: { in: groupIds }, projectId, candidates: { none: {} } },
+            })
+          ).count;
+          await tx.deduplicationGroup.updateMany({
+            where: {
+              id: { in: groupIds },
+              projectId,
+              candidates: { some: { status: "SUGGESTED" } },
+            },
+            data: { status: "OPEN" },
           });
         }
       } else {
@@ -500,6 +742,7 @@ async function deleteBatchInternal(
         citationsRetained: retainedCitationIds.size,
         ownerOverride: options.deleteScreeningHistory,
         screeningHistoryDeleted,
+        deduplicationHistoryDeleted,
       };
       await audit.record(tx, {
         projectId,
