@@ -267,12 +267,21 @@ enum AnalysisRole {
 // Users & teams
 // ---------------------------------------------------------------------------
 
+model PasswordResetToken {
+  userId    String   @id
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
 model User {
   id                String    @id @default(cuid())
   email             String    @unique // stored lowercased (service-enforced)
   name              String
   passwordHash      String
   passwordChangedAt DateTime? // JWTs issued before this are invalid (checked in jwt callback)
+  passwordResetToken PasswordResetToken?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 

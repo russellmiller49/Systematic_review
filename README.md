@@ -178,3 +178,28 @@ mismatch), org membership gates project access, passwords are bcrypt (cost 12, â
 uploads are PDF-only (server sniffs magic bytes, 50 MB cap) and served with `nosniff`, and
 invitation tokens are single-use and returned only once. Rate limiting and password-reset are
 deferred to the deployment layer (documented in `docs/09`).
+
+## Password reset email
+
+The sign-in page includes a **Reset password** button. Configure these server environment variables
+locally or in Railway before using it:
+
+- `APP_URL`: the public Synthesis origin, such as `https://synthesis.example.com`.
+  HTTP is accepted only for localhost development.
+- `RESEND_API_KEY`: a Resend API key with permission to send email.
+- `EMAIL_FROM`: a sender on your verified Resend domain, such as `Synthesis <accounts@example.com>`.
+
+See [Resendâ€™s send email documentation](https://resend.com/docs/api-reference/emails/send-email).
+Apply the database migration with `npm run db:deploy` (Railway already runs this before deployment).
+No email is sent when these settings are missing; the form reports that reset is unavailable.
+
+Reset links expire after 30 minutes, work once, and are replaced when a new link is requested.
+Requests have a database-backed 60-second cooldown per account. Registered and unregistered
+addresses receive the same confirmation. Email delivery failures are logged without addresses or
+reset secrets, and retain the cooldown. Check Resend delivery logs if an email does not arrive.
+Only SHA-256 hashes of reset tokens are stored. Links carry tokens in the URL fragment to keep
+them out of server access logs. Successful resets invalidate existing sessions and add an audit
+event without storing passwords or tokens. Users sign in again after resetting.
+
+Before enabling in production, use a test account to request an email, follow its link, and
+verify that the new password works, the old password fails, and the link cannot be reused.
