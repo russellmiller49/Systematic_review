@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { safeInternalPath } from "@/lib/navigation";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -68,6 +68,9 @@ function SignInForm() {
           <Button type="submit" className="w-full" disabled={busy}>
             {busy && <Spinner />} Sign in
           </Button>
+          <Link href="/forgot-password" className={`${buttonVariants({ variant: "outline" })} w-full`}>
+            Reset password
+          </Link>
           <p className="text-center text-sm text-muted-foreground">
             No account?{" "}
             <Link

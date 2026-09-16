@@ -16,6 +16,7 @@ export const AuditActions = {
   INVITATION_ACCEPTED: "invitation.accepted",
   INVITATION_REVOKED: "invitation.revoked",
   USER_CREATED: "user.created",
+  USER_PASSWORD_RESET: "user.password_reset",
 
   // protocol
   PROTOCOL_UPDATED: "protocol.updated",

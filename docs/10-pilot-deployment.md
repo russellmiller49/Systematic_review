@@ -19,7 +19,8 @@ it uses a single attached volume.
 - Web service: `synthesis`
 - Region: US West
 - AI: disabled until a provider API key is added
-- Deployment source: local CLI upload; updates are not yet connected to a Git remote
+- Deployment source: `russellmiller49/Systematic_review` on GitHub, branch `main`.
+  Pushing or merging to `main` triggers a Railway deployment.
 
 ## 1. Preflight
 
