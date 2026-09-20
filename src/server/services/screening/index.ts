@@ -5,6 +5,7 @@
 //   R6 (conflict evaluation on every decision write, same transaction)
 //   R7 (MAYBE semantics; unanimous MAYBE always conflicts)
 
+import { lockDedupProject } from "@/server/services/dedup/groups";
 import { z } from "zod";
 import {
   Prisma,
@@ -1385,6 +1386,7 @@ export async function batchExclude(
       const stage = await getStageOr404(tx, projectId, stageId);
       await assertIndividualTitleAbstractAllowed(tx, stage);
 
+      if (stage.type === "FULL_TEXT") await lockDedupProject(tx, projectId);
       await lockScreeningStages(tx, [stage.id]);
       const quota = await quotaProgress(tx, { stageId }, ctx.userId);
       // Validate the common reason before any decision writes. The per-citation helper also
@@ -1475,6 +1477,7 @@ export async function createDecisionInTransaction(
       );
     }
   } else {
+    if (stage.type === "FULL_TEXT") await lockDedupProject(tx, projectId);
     await lockScreeningStages(tx, [stage.id]);
   }
   stage = await getStageOr404(tx, projectId, stage.id);
@@ -1895,9 +1898,11 @@ export async function adjudicateConflict(
   return prisma.$transaction(async (tx) => {
     const lockTarget = await tx.screeningConflict.findFirst({
       where: { id: conflictId, stage: { projectId } },
-      select: { stageId: true },
+      select: { stageId: true, stage: { select: { type: true } } },
     });
     if (!lockTarget) throw notFound("Conflict");
+    if (lockTarget.stage.type === "FULL_TEXT")
+      await lockDedupProject(tx, projectId);
     await lockScreeningStages(tx, [lockTarget.stageId]);
     // R9: tenant scoping via the stage's project.
     const conflictRow = await tx.screeningConflict.findFirst({
@@ -2065,6 +2070,7 @@ export async function reopenCitation(
       where: { projectId_type: { projectId, type: input.stageType } },
     });
     if (!stage) throw notFound("Screening stage");
+    if (stage.type === "FULL_TEXT") await lockDedupProject(tx, projectId);
     await lockScreeningStages(tx, [stage.id]);
     const result = await tx.citationStageResult.findUnique({
       where: {

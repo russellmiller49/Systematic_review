@@ -1,8 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCheck, Copy, GitMerge, RotateCcw, ScanSearch, X } from "lucide-react";
+import {
+  CheckCheck,
+  Copy,
+  GitMerge,
+  RotateCcw,
+  ScanSearch,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
+import { can } from "@/server/permissions/matrix";
+import type { ProjectRole } from "@prisma/client";
 import { api, apiPost, ApiError } from "@/lib/api";
 import { PageHeader, StatCard } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -35,17 +44,25 @@ import type {
   RunSummary,
   UndoResult,
 } from "./types";
-import { METHOD_LABELS, scorePercent } from "./types";
+import { DECISION_LABELS, METHOD_LABELS, scorePercent } from "./types";
 
 const MERGES_PAGE_LIMIT = 200;
 const CANONICAL_TITLE_FETCH_CAP = 60;
 
 export function DedupClient({ projectId }: { projectId: string }) {
+  const [canManage, setCanManage] = useState(false);
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [openGroups, setOpenGroups] = useState<DedupGroup[] | null>(null);
-  const [resolvedGroups, setResolvedGroups] = useState<DedupGroup[] | null>(null);
-  const [duplicates, setDuplicates] = useState<DuplicateCitationRow[] | null>(null);
+  const [resolvedGroups, setResolvedGroups] = useState<DedupGroup[] | null>(
+    null,
+  );
+  const [duplicates, setDuplicates] = useState<DuplicateCitationRow[] | null>(
+    null,
+  );
   const [hasMoreDuplicates, setHasMoreDuplicates] = useState(false);
-  const [canonicalTitles, setCanonicalTitles] = useState<Record<string, string>>({});
+  const [canonicalTitles, setCanonicalTitles] = useState<
+    Record<string, string>
+  >({});
   const [running, setRunning] = useState(false);
   const [bulkMergeOpen, setBulkMergeOpen] = useState(false);
   const [bulkMerging, setBulkMerging] = useState(false);
@@ -55,13 +72,18 @@ export function DedupClient({ projectId }: { projectId: string }) {
 
   const load = useCallback(async () => {
     await Promise.all([
+      api<{ myRoles: ProjectRole[] }>(`/api/projects/${projectId}`)
+        .then((p) => setCanManage(can(p.myRoles, "dedup.manage")))
+        .catch(() => setCanManage(false)),
       api<DedupGroup[]>(`/api/projects/${projectId}/dedup/groups?status=OPEN`)
         .then(setOpenGroups)
         .catch(() => {
           setOpenGroups([]);
           toast.error("Failed to load duplicate groups");
         }),
-      api<DedupGroup[]>(`/api/projects/${projectId}/dedup/groups?status=RESOLVED`)
+      api<DedupGroup[]>(
+        `/api/projects/${projectId}/dedup/groups?status=RESOLVED`,
+      )
         .then(setResolvedGroups)
         .catch(() => setResolvedGroups([])),
       api<CitationListResponse>(
@@ -86,14 +108,18 @@ export function DedupClient({ projectId }: { projectId: string }) {
       ...new Set(
         duplicates
           .map((d) => d.duplicateOfId)
-          .filter((id): id is string => id !== null && !(id in canonicalTitles)),
+          .filter(
+            (id): id is string => id !== null && !(id in canonicalTitles),
+          ),
       ),
     ].slice(0, CANONICAL_TITLE_FETCH_CAP);
     if (ids.length === 0) return;
     let cancelled = false;
     Promise.all(
       ids.map((id) =>
-        api<{ id: string; title: string }>(`/api/projects/${projectId}/citations/${id}`)
+        api<{ id: string; title: string }>(
+          `/api/projects/${projectId}/citations/${id}`,
+        )
           .then((c) => [id, c.title] as const)
           .catch(() => [id, ""] as const),
       ),
@@ -112,7 +138,9 @@ export function DedupClient({ projectId }: { projectId: string }) {
   async function runDetection() {
     setRunning(true);
     try {
-      const s = await apiPost<RunSummary>(`/api/projects/${projectId}/dedup/run`);
+      const s = await apiPost<RunSummary>(
+        `/api/projects/${projectId}/dedup/run`,
+      );
       toast.success(
         `Detection found ${s.pairsDetected.toLocaleString()} candidate pair${s.pairsDetected === 1 ? "" : "s"} in ${s.groupsOpen.toLocaleString()} open group${s.groupsOpen === 1 ? "" : "s"}`,
         {
@@ -121,7 +149,9 @@ export function DedupClient({ projectId }: { projectId: string }) {
       );
       load();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to run detection");
+      toast.error(
+        err instanceof ApiError ? err.message : "Failed to run detection",
+      );
     } finally {
       setRunning(false);
     }
@@ -133,7 +163,8 @@ export function DedupClient({ projectId }: { projectId: string }) {
       const result = await apiPost<UndoResult>(
         `/api/projects/${projectId}/dedup/merges/${row.id}/undo`,
       );
-      const restored = result.restoredAssignmentIds.length + result.restoredConflictIds.length;
+      const restored =
+        result.restoredAssignmentIds.length + result.restoredConflictIds.length;
       toast.success("Merge undone — citation restored to active", {
         description:
           restored > 0
@@ -142,7 +173,9 @@ export function DedupClient({ projectId }: { projectId: string }) {
       });
       load();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to undo merge");
+      toast.error(
+        err instanceof ApiError ? err.message : "Failed to undo merge",
+      );
     } finally {
       setUndoingId(null);
     }
@@ -177,7 +210,11 @@ export function DedupClient({ projectId }: { projectId: string }) {
       setBulkNotice(notices.length > 0 ? notices.join(" ") : null);
       load();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to merge exact DOI matches");
+      toast.error(
+        err instanceof ApiError
+          ? err.message
+          : "Failed to merge exact DOI matches",
+      );
     } finally {
       setBulkMerging(false);
     }
@@ -185,10 +222,12 @@ export function DedupClient({ projectId }: { projectId: string }) {
 
   const suggestedPairCount =
     openGroups?.reduce(
-      (sum, g) => sum + g.candidates.filter((c) => c.status === "SUGGESTED").length,
+      (sum, g) =>
+        sum + g.candidates.filter((c) => c.status === "SUGGESTED").length,
       0,
     ) ?? null;
-  const exactDoiGroups = openGroups?.filter((group) => group.bulkExactDoiEligible) ?? [];
+  const exactDoiGroups =
+    openGroups?.filter((group) => group.bulkExactDoiEligible) ?? [];
   const exactDoiCitationCount = exactDoiGroups.reduce((count, group) => {
     const citationIds = new Set<string>();
     for (const candidate of group.candidates) {
@@ -200,10 +239,18 @@ export function DedupClient({ projectId }: { projectId: string }) {
   }, 0);
   const mixedExactDoiGroupCount =
     openGroups?.filter((group) => {
-      const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
+      const suggested = group.candidates.filter(
+        (candidate) => candidate.status === "SUGGESTED",
+      );
       return (
-        suggested.some((candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1) &&
-        suggested.some((candidate) => candidate.method !== "EXACT_DOI" || candidate.score !== 1)
+        suggested.some(
+          (candidate) =>
+            candidate.method === "EXACT_DOI" && candidate.score === 1,
+        ) &&
+        suggested.some(
+          (candidate) =>
+            candidate.method !== "EXACT_DOI" || candidate.score !== 1,
+        )
       );
     }).length ?? 0;
 
@@ -315,6 +362,7 @@ export function DedupClient({ projectId }: { projectId: string }) {
                     .join(",")}`}
                   projectId={projectId}
                   group={group}
+                  canManage={canManage}
                   onChanged={load}
                   onMergeWarning={setMergeWarning}
                 />
@@ -330,7 +378,7 @@ export function DedupClient({ projectId }: { projectId: string }) {
             <EmptyState
               icon={CheckCheck}
               title="No resolved groups"
-              description="Groups appear here once every suggested pair has been merged or rejected."
+              description="Decided pairs appear here as merged, not a duplicate, or same study / separate report."
             />
           ) : (
             <div className="rounded-lg border border-border bg-card">
@@ -341,6 +389,7 @@ export function DedupClient({ projectId }: { projectId: string }) {
                     <TableHead className="w-28">Method</TableHead>
                     <TableHead className="w-20">Score</TableHead>
                     <TableHead className="w-24">Decision</TableHead>
+                    <TableHead>Revision</TableHead>
                     <TableHead>Decided by</TableHead>
                     <TableHead className="w-28">Date</TableHead>
                   </TableRow>
@@ -350,27 +399,75 @@ export function DedupClient({ projectId }: { projectId: string }) {
                     group.candidates.map((c) => (
                       <TableRow key={c.id}>
                         <TableCell className="max-w-96">
-                          <p className="truncate font-medium" title={c.citationA.title}>
+                          <p
+                            className="truncate font-medium"
+                            title={c.citationA.title}
+                          >
                             {c.citationA.title}
                           </p>
-                          <p className="truncate text-muted-foreground" title={c.citationB.title}>
+                          <p
+                            className="truncate text-muted-foreground"
+                            title={c.citationB.title}
+                          >
                             vs {c.citationB.title}
                           </p>
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline">{METHOD_LABELS[c.method]}</Badge>
-                        </TableCell>
-                        <TableCell className="tabular-nums">{scorePercent(c.score)}</TableCell>
-                        <TableCell>
-                          <Badge variant={c.status === "MERGED" ? "include" : "muted"}>
-                            {c.status.toLowerCase()}
+                          <Badge variant="outline">
+                            {METHOD_LABELS[c.method]}
                           </Badge>
+                        </TableCell>
+                        <TableCell className="tabular-nums">
+                          {scorePercent(c.score)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              c.status === "MERGED" ? "include" : "muted"
+                            }
+                          >
+                            {DECISION_LABELS[c.status]}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {canManage &&
+                            (c.status === "COMPANION" ||
+                              c.status === "REJECTED") && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={reopeningId !== null}
+                                onClick={async () => {
+                                  setReopeningId(c.id);
+                                  try {
+                                    await apiPost(
+                                      `/api/projects/${projectId}/dedup/candidates/${c.id}/reopen`,
+                                    );
+                                    toast.success("Pair reopened for review");
+                                    await load();
+                                  } catch (err) {
+                                    toast.error(
+                                      err instanceof ApiError
+                                        ? err.message
+                                        : "Could not reopen decision",
+                                      { duration: 12000 },
+                                    );
+                                  } finally {
+                                    setReopeningId(null);
+                                  }
+                                }}
+                              >
+                                Reopen decision
+                              </Button>
+                            )}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {c.decidedBy?.name ?? "—"}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
-                          {c.decidedAt ? new Date(c.decidedAt).toLocaleDateString() : "—"}
+                          {c.decidedAt
+                            ? new Date(c.decidedAt).toLocaleDateString()
+                            : "—"}
                         </TableCell>
                       </TableRow>
                     )),
@@ -405,7 +502,9 @@ export function DedupClient({ projectId }: { projectId: string }) {
                 <TableBody>
                   {duplicates.map((row) => {
                     const canonicalTitle =
-                      row.duplicateOfId !== null ? canonicalTitles[row.duplicateOfId] : undefined;
+                      row.duplicateOfId !== null
+                        ? canonicalTitles[row.duplicateOfId]
+                        : undefined;
                     return (
                       <TableRow key={row.id}>
                         <TableCell className="max-w-96">
@@ -432,7 +531,10 @@ export function DedupClient({ projectId }: { projectId: string }) {
                               {row.duplicateOfId}
                             </span>
                           ) : (
-                            <span className="line-clamp-2" title={canonicalTitle}>
+                            <span
+                              className="line-clamp-2"
+                              title={canonicalTitle}
+                            >
                               {canonicalTitle}
                             </span>
                           )}
@@ -459,7 +561,8 @@ export function DedupClient({ projectId }: { projectId: string }) {
                             disabled={undoingId === row.id}
                             onClick={() => undoMerge(row)}
                           >
-                            {undoingId === row.id ? <Spinner /> : <RotateCcw />} Undo
+                            {undoingId === row.id ? <Spinner /> : <RotateCcw />}{" "}
+                            Undo
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -485,24 +588,27 @@ export function DedupClient({ projectId }: { projectId: string }) {
               {exactDoiCitationCount === 1 ? "" : "s"}?
             </DialogTitle>
             <DialogDescription>
-              Groups with identifier or metadata conflicts or possible conference/full-publication
-              pairs require manual review and are excluded. This will resolve{" "}
-              {exactDoiGroups.length} group
-              {exactDoiGroups.length === 1 ? "" : "s"} whose suggested pairs all share the same DOI.
-              Each merge can still be undone from the Merged citations tab.
+              Groups with identifier or metadata conflicts or possible
+              conference/full-publication pairs require manual review and are
+              excluded. This will resolve {exactDoiGroups.length} group
+              {exactDoiGroups.length === 1 ? "" : "s"} whose suggested pairs all
+              share the same DOI. Each merge can still be undone from the Merged
+              citations tab.
             </DialogDescription>
           </DialogHeader>
           <Alert variant="warning">
-            Synthesis automatically keeps the record with existing screening decisions. Otherwise it
-            keeps the most complete citation, using the oldest-created record to break a tie.
-            Pending assignments and open conflicts on merged records will be voided under the
-            existing deduplication rules.
+            Synthesis automatically keeps the record with existing screening
+            decisions. Otherwise it keeps the most complete citation, using the
+            oldest-created record to break a tie. Pending assignments and open
+            conflicts on merged records will be voided under the existing
+            deduplication rules.
           </Alert>
           {mixedExactDoiGroupCount > 0 && (
             <Alert variant="info">
               {mixedExactDoiGroupCount} additional group
-              {mixedExactDoiGroupCount === 1 ? " contains" : "s contain"} an exact DOI pair plus
-              other match types. {mixedExactDoiGroupCount === 1 ? "It" : "They"} will remain open
+              {mixedExactDoiGroupCount === 1 ? " contains" : "s contain"} an
+              exact DOI pair plus other match types.{" "}
+              {mixedExactDoiGroupCount === 1 ? "It" : "They"} will remain open
               for manual review.
             </Alert>
           )}

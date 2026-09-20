@@ -48,6 +48,9 @@ export const AuditActions = {
   DEDUP_RUN: "dedup.run",
   DEDUP_MERGED: "dedup.merged",
   DEDUP_EXACT_DOI_BULK_MERGED: "dedup.exact_doi.bulk_merged",
+  DEDUP_COMPANION_CONFIRMED: "dedup.companion_confirmed",
+  DEDUP_COMPANION_APPLIED: "dedup.companion_applied",
+  DEDUP_DECISION_REOPENED: "dedup.decision_reopened",
   DEDUP_REJECTED: "dedup.rejected",
   DEDUP_MERGE_UNDONE: "dedup.merge_undone",
 

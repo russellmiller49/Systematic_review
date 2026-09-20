@@ -40,7 +40,9 @@ export function CompanionReportsTab({
   async function runDetection() {
     setRunning(true);
     try {
-      const summary = await apiPost<CohortRunSummary>(`/api/projects/${projectId}/cohort/run`);
+      const summary = await apiPost<CohortRunSummary>(
+        `/api/projects/${projectId}/cohort/run`,
+      );
       setLastRun(summary);
       toast.success(
         `Detection proposed ${summary.candidates} companion pair${summary.candidates === 1 ? "" : "s"}`,
@@ -50,14 +52,19 @@ export function CompanionReportsTab({
       );
       load();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to run detection");
+      toast.error(
+        err instanceof ApiError ? err.message : "Failed to run detection",
+      );
     } finally {
       setRunning(false);
     }
   }
 
   const suggested = candidates?.filter((c) => c.status === "SUGGESTED") ?? [];
-  const decided = candidates?.filter((c) => c.status !== "SUGGESTED") ?? [];
+  const decided =
+    candidates?.filter(
+      (c) => c.status !== "SUGGESTED" && c.status !== "COMPANION",
+    ) ?? [];
 
   return (
     <div className="space-y-4">
@@ -65,10 +72,10 @@ export function CompanionReportsTab({
         <div>
           <h2 className="text-base font-semibold">Companion reports</h2>
           <p className="max-w-2xl text-sm text-muted-foreground">
-            Multiple reports of the same trial cohort (follow-ups, secondary analyses)
-            should share one study so participants are never double-counted. Detection
-            matches shared trial-registry ids, then author / affiliation / title / year
-            overlap.
+            Multiple reports of the same trial cohort (follow-ups, secondary
+            analyses) should share one study so participants are never
+            double-counted. Detection matches shared trial-registry ids, then
+            author / affiliation / title / year overlap.
           </p>
         </div>
         {canManage && (
@@ -78,13 +85,29 @@ export function CompanionReportsTab({
         )}
       </div>
 
+      {candidates
+        ?.filter((c) => c.status === "COMPANION")
+        .map((candidate) => (
+          <CandidateCard
+            key={candidate.id}
+            projectId={projectId}
+            candidate={candidate}
+            canManage={canManage}
+            onChanged={load}
+          />
+        ))}
+
       {lastRun !== null && (
         <p className="text-xs text-muted-foreground">
-          Last run: {lastRun.candidates} candidate{lastRun.candidates === 1 ? "" : "s"} from{" "}
-          {lastRun.populationSize} citations
-          {lastRun.populationCapped ? " (population capped)" : ""} · {lastRun.newlySuggested} new
-          · {lastRun.refreshed} refreshed · {lastRun.removed} removed
-          {lastRun.backfilled > 0 ? ` · ${lastRun.backfilled} citations backfilled` : ""}
+          Last run: {lastRun.candidates} candidate
+          {lastRun.candidates === 1 ? "" : "s"} from {lastRun.populationSize}{" "}
+          citations
+          {lastRun.populationCapped ? " (population capped)" : ""} ·{" "}
+          {lastRun.newlySuggested} new · {lastRun.refreshed} refreshed ·{" "}
+          {lastRun.removed} removed
+          {lastRun.backfilled > 0
+            ? ` · ${lastRun.backfilled} citations backfilled`
+            : ""}
         </p>
       )}
 
@@ -126,7 +149,11 @@ export function CompanionReportsTab({
 
       {decided.length > 0 && (
         <div className="space-y-3">
-          <Button variant="ghost" size="sm" onClick={() => setShowDecided((v) => !v)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowDecided((v) => !v)}
+          >
             {showDecided ? "Hide" : "Show"} decided ({decided.length})
           </Button>
           {showDecided &&

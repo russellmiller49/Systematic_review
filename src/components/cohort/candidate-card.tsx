@@ -20,7 +20,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/misc";
-import type { CohortCandidate, CohortCitation, CohortLinkResult } from "./types";
+import type {
+  CohortCandidate,
+  CohortCitation,
+  CohortLinkResult,
+} from "./types";
 import {
   COHORT_METHOD_LABELS,
   cohortScorePercent,
@@ -93,9 +97,12 @@ export function CandidateCard({
       onChanged();
     } catch (err) {
       // 422 carries the blocked-merge explanation (manual reconciliation needed).
-      toast.error(err instanceof ApiError ? err.message : "Failed to link candidate", {
-        duration: 10000,
-      });
+      toast.error(
+        err instanceof ApiError ? err.message : "Failed to link candidate",
+        {
+          duration: 10000,
+        },
+      );
       setConfirmOpen(false);
     } finally {
       setLinking(false);
@@ -105,11 +112,15 @@ export function CandidateCard({
   async function reject() {
     setRejecting(true);
     try {
-      await apiPost(`/api/projects/${projectId}/cohort/candidates/${candidate.id}/reject`);
+      await apiPost(
+        `/api/projects/${projectId}/cohort/candidates/${candidate.id}/reject`,
+      );
       toast.success("Marked as not the same cohort");
       onChanged();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Failed to reject candidate");
+      toast.error(
+        err instanceof ApiError ? err.message : "Failed to reject candidate",
+      );
     } finally {
       setRejecting(false);
     }
@@ -118,9 +129,13 @@ export function CandidateCard({
   return (
     <div className="rounded-lg border border-border bg-card shadow-sm">
       <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-3">
-        <Badge variant="outline">{COHORT_METHOD_LABELS[candidate.method]}</Badge>
+        <Badge variant="outline">
+          {COHORT_METHOD_LABELS[candidate.method]}
+        </Badge>
         <Badge variant={candidate.score >= 0.9 ? "include" : "maybe"}>
-          {cohortScorePercent(candidate.score)} match
+          {candidate.status === "COMPANION"
+            ? "Human confirmed"
+            : `${cohortScorePercent(candidate.score)} match`}
         </Badge>
         {chips.map((chip) => (
           <Badge key={chip} variant="secondary">
@@ -129,8 +144,12 @@ export function CandidateCard({
         ))}
         {decided && (
           <span className="ml-auto text-xs text-muted-foreground">
-            <Badge variant={candidate.status === "LINKED" ? "include" : "muted"}>
-              {candidate.status.toLowerCase()}
+            <Badge
+              variant={candidate.status === "LINKED" ? "include" : "muted"}
+            >
+              {candidate.status === "COMPANION"
+                ? "Same study / separate report"
+                : candidate.status.toLowerCase()}
             </Badge>
             {candidate.decidedBy ? ` by ${candidate.decidedBy.name}` : ""}
             {candidate.decidedAt
@@ -159,10 +178,20 @@ export function CandidateCard({
                 <div className="px-3 py-2 text-xs font-medium text-muted-foreground">
                   {f.label}
                 </div>
-                <div className={cn("border-l border-border px-3 py-2", f.mono && "font-mono text-xs")}>
+                <div
+                  className={cn(
+                    "border-l border-border px-3 py-2",
+                    f.mono && "font-mono text-xs",
+                  )}
+                >
                   {a ?? <span className="text-muted-foreground">—</span>}
                 </div>
-                <div className={cn("border-l border-border px-3 py-2", f.mono && "font-mono text-xs")}>
+                <div
+                  className={cn(
+                    "border-l border-border px-3 py-2",
+                    f.mono && "font-mono text-xs",
+                  )}
+                >
                   {b ?? <span className="text-muted-foreground">—</span>}
                 </div>
               </div>
@@ -171,6 +200,15 @@ export function CandidateCard({
         </div>
       </div>
 
+      {candidate.status === "COMPANION" && (
+        <p className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
+          {candidate.citationA.studies.some((a) =>
+            candidate.citationB.studies.some((b) => b.id === a.id),
+          )
+            ? "These reports share one study. The original deduplication judgment remains in Resolved."
+            : "Confirmed companion reports. Only full-text included reports join the study automatically; excluded reports remain unlinked. Revise early judgments in Deduplication → Resolved."}
+        </p>
+      )}
       {!decided && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3">
           <p className="text-xs text-muted-foreground">{preview}</p>
@@ -184,7 +222,11 @@ export function CandidateCard({
               >
                 {rejecting ? <Spinner /> : <X />} Not the same cohort
               </Button>
-              <Button size="sm" disabled={linking || rejecting} onClick={() => setConfirmOpen(true)}>
+              <Button
+                size="sm"
+                disabled={linking || rejecting}
+                onClick={() => setConfirmOpen(true)}
+              >
                 <Link2 /> Link
               </Button>
             </div>
@@ -199,10 +241,15 @@ export function CandidateCard({
             <DialogDescription>{preview}.</DialogDescription>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Both reports will count as one study in analyses. This decision is audited.
+            Both reports will count as one study in analyses. This decision is
+            audited.
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={linking}>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+              disabled={linking}
+            >
               Cancel
             </Button>
             <Button onClick={link} disabled={linking}>

@@ -1,8 +1,16 @@
 // Client-side interfaces for the dedup API payloads (only the fields the UI consumes).
 import type { DedupPublication } from "@/lib/dedup-publication";
 
-export type DedupMethod = "EXACT_DOI" | "EXACT_PMID" | "NORMALIZED_TITLE" | "FUZZY";
-export type DedupCandidateStatus = "SUGGESTED" | "MERGED" | "REJECTED";
+export type DedupMethod =
+  | "EXACT_DOI"
+  | "EXACT_PMID"
+  | "NORMALIZED_TITLE"
+  | "FUZZY";
+export type DedupCandidateStatus =
+  | "SUGGESTED"
+  | "MERGED"
+  | "REJECTED"
+  | "COMPANION";
 export type DedupGroupStatus = "OPEN" | "RESOLVED";
 
 export interface DedupAuthor {
@@ -140,3 +148,10 @@ export const METHOD_LABELS: Record<DedupMethod, string> = {
 export function scorePercent(score: number): string {
   return `${Math.round(score * 100)}%`;
 }
+
+export const DECISION_LABELS: Record<DedupCandidateStatus, string> = {
+  SUGGESTED: "Suggested",
+  MERGED: "Merged",
+  REJECTED: "Not a duplicate",
+  COMPANION: "Same study / separate report",
+};

@@ -22,10 +22,16 @@ function authorsOf(c: DedupCitation): DedupAuthor[] {
 
 function authorText(authors: DedupAuthor[]): string | null {
   if (authors.length === 0) return null;
-  return authors.map((a) => (a.given ? `${a.family} ${a.given}` : (a.raw ?? a.family))).join(", ");
+  return authors
+    .map((a) => (a.given ? `${a.family} ${a.given}` : (a.raw ?? a.family)))
+    .join(", ");
 }
 
-function compare(aVal: string | null, bVal: string | null, normalize = false): FieldState {
+function compare(
+  aVal: string | null,
+  bVal: string | null,
+  normalize = false,
+): FieldState {
   if (aVal === null || bVal === null) return "neutral";
   const a = normalize ? aVal.trim().toLowerCase() : aVal;
   const b = normalize ? bVal.trim().toLowerCase() : bVal;
@@ -39,7 +45,8 @@ function buildFields(
 ): CompareField[] {
   const aAuthors = authorText(authorsOf(a));
   const bAuthors = authorText(authorsOf(b));
-  const titleState: FieldState = a.normalizedTitle === b.normalizedTitle ? "match" : "differ";
+  const titleState: FieldState =
+    a.normalizedTitle === b.normalizedTitle ? "match" : "differ";
   const authorState: FieldState =
     aAuthors === null || bAuthors === null
       ? "neutral"
@@ -47,9 +54,15 @@ function buildFields(
         ? "match"
         : compare(aAuthors, bAuthors, true);
   const yearState: FieldState =
-    a.year === null || b.year === null ? "neutral" : a.year === b.year ? "match" : "differ";
+    a.year === null || b.year === null
+      ? "neutral"
+      : a.year === b.year
+        ? "match"
+        : "differ";
   const journalState: FieldState =
-    reasons?.journalMatch === true ? "match" : compare(a.journal, b.journal, true);
+    reasons?.journalMatch === true
+      ? "match"
+      : compare(a.journal, b.journal, true);
 
   return [
     {
@@ -122,7 +135,9 @@ function publicationLabel(citation: DedupCitation): string {
       : publication?.kind === "journal"
         ? "Journal article (possible full publication)"
         : "Publication type unknown";
-  return publication?.types.length ? `${label} · ${publication.types.join(", ")}` : label;
+  return publication?.types.length
+    ? `${label} · ${publication.types.join(", ")}`
+    : label;
 }
 
 // Side-by-side field comparison for a candidate duplicate pair. Matching fields get a
@@ -179,14 +194,18 @@ export function PairCompare({
           role="note"
           className="space-y-1 border-b border-border bg-maybe-muted px-3 py-3 text-sm"
         >
-          <p className="font-medium">Possible conference abstract and full publication</p>
+          <p className="font-medium">
+            Possible conference abstract and full publication
+          </p>
           <p>
-            These may be separate reports of the same study. Compare their abstracts before deciding
-            whether they are duplicates; use “Not a duplicate” to retain both reports.
+            These may be separate reports of the same study. Compare their
+            abstracts before deciding whether they are duplicates. Choose “Same
+            study / separate report” to keep both citations and remember a
+            confirmed shared cohort.
           </p>
           <p className="text-xs text-muted-foreground">
-            Based on imported publication types. Full-text availability and the relationship between
-            these reports have not been verified.
+            Based on imported publication types. Full-text availability and the
+            relationship between these reports have not been verified.
           </p>
         </div>
       )}
@@ -203,13 +222,16 @@ export function PairCompare({
           >
             <div className="px-3 py-2 text-xs font-medium text-muted-foreground">
               {f.label}
-              {f.hint && <span className="mt-0.5 block font-normal">{f.hint}</span>}
+              {f.hint && (
+                <span className="mt-0.5 block font-normal">{f.hint}</span>
+              )}
             </div>
             <div
               className={cn(
                 "border-l border-border px-3 py-2",
                 STATE_CLASS[
-                  metadataConflicts.length > 0 && (f.label === "DOI" || f.label === "PMID")
+                  metadataConflicts.length > 0 &&
+                  (f.label === "DOI" || f.label === "PMID")
                     ? "differ"
                     : f.state
                 ],
@@ -222,7 +244,8 @@ export function PairCompare({
               className={cn(
                 "border-l border-border px-3 py-2",
                 STATE_CLASS[
-                  metadataConflicts.length > 0 && (f.label === "DOI" || f.label === "PMID")
+                  metadataConflicts.length > 0 &&
+                  (f.label === "DOI" || f.label === "PMID")
                     ? "differ"
                     : f.state
                 ],
@@ -238,7 +261,9 @@ export function PairCompare({
             Compare abstracts
           </summary>
           <div className="grid grid-cols-[6.5rem_1fr_1fr] border-t border-border text-sm">
-            <div className="px-3 py-3 text-xs font-medium text-muted-foreground">Abstract</div>
+            <div className="px-3 py-3 text-xs font-medium text-muted-foreground">
+              Abstract
+            </div>
             {[a, b].map((citation, index) => (
               <section
                 key={citation.id}

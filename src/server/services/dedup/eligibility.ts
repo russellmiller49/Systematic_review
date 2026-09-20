@@ -1,7 +1,10 @@
 import { normalizeDoi } from "@/server/services/citations/normalize";
 import { clusterMetadataConflicts, type ConflictCitation } from "./conflicts";
 import { connectedComponents } from "./graph";
-import { hasConferencePublicationPair, type DedupPublication } from "@/lib/dedup-publication";
+import {
+  hasConferencePublicationPair,
+  type DedupPublication,
+} from "@/lib/dedup-publication";
 
 type Member = ConflictCitation & {
   id: string;
@@ -20,11 +23,19 @@ type Candidate = {
   citationB: Member;
 };
 
-export function exactDoiEligible(projectId: string, candidates: Candidate[]): boolean {
-  const suggested = candidates.filter((candidate) => candidate.status === "SUGGESTED");
+export function exactDoiEligible(
+  projectId: string,
+  candidates: Candidate[],
+): boolean {
+  const suggested = candidates.filter(
+    (candidate) => candidate.status === "SUGGESTED",
+  );
   if (
     connectedComponents(suggested).length !== 1 ||
-    candidates.some((candidate) => candidate.status === "REJECTED") ||
+    candidates.some(
+      (candidate) =>
+        candidate.status === "REJECTED" || candidate.status === "COMPANION",
+    ) ||
     !suggested.every(
       (candidate) =>
         candidate.projectId === projectId &&
@@ -45,7 +56,10 @@ export function exactDoiEligible(projectId: string, candidates: Candidate[]): bo
   const dois = members.map((citation) => normalizeDoi(citation.doi));
   return (
     members.length >= 2 &&
-    members.every((citation) => citation.status === "ACTIVE" && citation.projectId === projectId) &&
+    members.every(
+      (citation) =>
+        citation.status === "ACTIVE" && citation.projectId === projectId,
+    ) &&
     dois.every((doi) => doi !== null) &&
     new Set(dois).size === 1 &&
     !hasConferencePublicationPair(members) &&

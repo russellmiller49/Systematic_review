@@ -2,6 +2,13 @@
 // Policies: R8 (merge after screening began), R9 (tenant-scoped loads), R17 (canonical must
 // be in the group and in the project). Engine (engine.ts) is pure; all persistence is here.
 
+export {
+  confirmCompanions,
+  reopenDecision,
+  confirmCompanionGroupSchema,
+} from "./companion-decisions";
+import { companionGraph } from "@/server/services/studies/companions";
+
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
@@ -81,19 +88,24 @@ function citationCompletenessScore(citation: BulkCanonicalCitation): number {
   );
 }
 
-function chooseBulkCanonical(citations: BulkCanonicalCitation[]): BulkCanonicalCitation {
+function chooseBulkCanonical(
+  citations: BulkCanonicalCitation[],
+): BulkCanonicalCitation {
   return [...citations].sort((a, b) => {
     const decisionDifference = b._count.decisions - a._count.decisions;
     if (decisionDifference !== 0) return decisionDifference;
-    const completenessDifference = citationCompletenessScore(b) - citationCompletenessScore(a);
+    const completenessDifference =
+      citationCompletenessScore(b) - citationCompletenessScore(a);
     if (completenessDifference !== 0) return completenessDifference;
     const createdDifference = a.createdAt.getTime() - b.createdAt.getTime();
-    return createdDifference !== 0 ? createdDifference : a.id.localeCompare(b.id);
+    return createdDifference !== 0
+      ? createdDifference
+      : a.id.localeCompare(b.id);
   })[0]!;
 }
 
 // Run (or re-run) duplicate detection over the project's ACTIVE citations. Idempotent:
-// pairs already decided (MERGED/REJECTED) are skipped, still-SUGGESTED pairs are refreshed,
+// pairs already decided (MERGED/REJECTED/COMPANION) are skipped, still-SUGGESTED pairs are refreshed,
 // and groups are rebuilt as connected components over SUGGESTED pairs.
 export async function runDetection(ctx: Ctx, projectId: string) {
   await requirePermission(ctx, projectId, "dedup.manage");
@@ -120,20 +132,29 @@ export async function runDetection(ctx: Ctx, projectId: string) {
         pmid: c.pmid,
         year: c.year,
         journal: c.journal,
-        authors: Array.isArray(c.authors) ? (c.authors as unknown as AuthorName[]) : [],
+        authors: Array.isArray(c.authors)
+          ? (c.authors as unknown as AuthorName[])
+          : [],
       }));
       const pairs = detectDuplicates(lites);
 
       const existing = await tx.deduplicationCandidate.findMany({
         where: { projectId },
       });
-      const byPair = new Map(existing.map((c) => [`${c.citationAId}|${c.citationBId}`, c]));
+      const byPair = new Map(
+        existing.map((c) => [`${c.citationAId}|${c.citationBId}`, c]),
+      );
 
+      const companions = await companionGraph(tx, projectId);
       let candidatesCreated = 0;
       let candidatesRefreshed = 0;
       let candidatesSkippedDecided = 0;
       for (const pair of pairs) {
         const current = byPair.get(`${pair.aId}|${pair.bId}`);
+        if (!current && companions.sameStudy(pair.aId, pair.bId)) {
+          candidatesSkippedDecided++;
+          continue;
+        }
         if (!current) {
           await tx.deduplicationCandidate.create({
             data: {
@@ -157,7 +178,7 @@ export async function runDetection(ctx: Ctx, projectId: string) {
           });
           candidatesRefreshed++;
         } else {
-          candidatesSkippedDecided++; // human already decided (MERGED/REJECTED) — never resurrect
+          candidatesSkippedDecided++; // human already decided (MERGED/REJECTED/COMPANION) — never resurrect
         }
       }
 
@@ -186,9 +207,9 @@ export async function runDetection(ctx: Ctx, projectId: string) {
 }
 
 // Keep raw import text server-side; send only the compact provenance/type summary.
-function withPublication<T extends { sourceRecords: Parameters<typeof publicationInfo>[0] }>(
-  citation: T,
-) {
+function withPublication<
+  T extends { sourceRecords: Parameters<typeof publicationInfo>[0] },
+>(citation: T) {
   const { sourceRecords, ...fields } = citation;
   return { ...fields, publication: publicationInfo(sourceRecords) };
 }
@@ -205,12 +226,20 @@ export async function listGroups(
       await lockDedupProject(tx, projectId);
       await normalizeGroups(tx, projectId);
       const groups = await tx.deduplicationGroup.findMany({
-        where: { projectId, status: query.status ?? "OPEN" },
+        where: {
+          projectId,
+          ...(query.status === "RESOLVED"
+            ? { candidates: { some: { status: { not: "SUGGESTED" } } } }
+            : { status: "OPEN" as const }),
+        },
         orderBy: { createdAt: "asc" },
         include: {
           candidates: {
             where: {
               projectId,
+              ...(query.status === "RESOLVED"
+                ? { status: { not: "SUGGESTED" as const } }
+                : {}),
               citationA: { projectId },
               citationB: { projectId },
             },
@@ -233,19 +262,25 @@ export async function listGroups(
           },
         },
       });
+      const companions = await companionGraph(tx, projectId);
       return groups.map((group) => {
         const candidates = group.candidates.map((candidate) => ({
           ...candidate,
           citationA: withPublication(candidate.citationA),
           citationB: withPublication(candidate.citationB),
-          metadataConflicts: metadataConflicts(candidate.citationA, candidate.citationB),
+          metadataConflicts: metadataConflicts(
+            candidate.citationA,
+            candidate.citationB,
+          ),
         }));
         const members = [
           ...new Map(
             candidates
               .filter((c) => c.status === "SUGGESTED")
               .flatMap((c) =>
-                [c.citationA, c.citationB].map((citation) => [citation.id, citation] as const),
+                [c.citationA, c.citationB].map(
+                  (citation) => [citation.id, citation] as const,
+                ),
               ),
           ).values(),
         ];
@@ -253,7 +288,9 @@ export async function listGroups(
           ...group,
           candidates,
           metadataConflicts: clusterMetadataConflicts(members),
-          bulkExactDoiEligible: exactDoiEligible(projectId, candidates),
+          bulkExactDoiEligible:
+            exactDoiEligible(projectId, candidates) &&
+            !companions.conflicts(members.map((c) => c.id)),
         };
       });
     },
@@ -301,7 +338,8 @@ async function mergeGroupInTransaction(
     },
   });
   if (!group) throw notFound("Deduplication group");
-  if (group.status !== "OPEN") throw invalidState("This group has already been resolved");
+  if (group.status !== "OPEN")
+    throw invalidState("This group has already been resolved");
 
   // Membership = citations connected by still-SUGGESTED pairs (rejected pairs don't merge).
   const suggested = group.candidates.filter((c) => c.status === "SUGGESTED");
@@ -340,14 +378,19 @@ async function mergeGroupInTransaction(
       citationB: { projectId, status: "ACTIVE" },
       AND: [
         {
-          OR: [{ citationAId: { in: [...memberIds] } }, { citationBId: { in: [...memberIds] } }],
+          OR: [
+            { citationAId: { in: [...memberIds] } },
+            { citationBId: { in: [...memberIds] } },
+          ],
         },
         { OR: [{ groupId: null }, { groupId: { not: groupId } }] },
       ],
     },
   });
   if (outsideEdge)
-    throw invalidState("Duplicate cluster membership is stale. Refresh before merging.");
+    throw invalidState(
+      "Duplicate cluster membership is stale. Refresh before merging.",
+    );
   const canonical = await tx.citation.findFirst({
     where: { id: input.canonicalCitationId, projectId },
   });
@@ -355,6 +398,23 @@ async function mergeGroupInTransaction(
   if (canonical.status !== "ACTIVE") {
     throw invalidState("Canonical citation must be ACTIVE");
   }
+
+  const companions = await companionGraph(tx, projectId);
+  if (companions.conflicts(memberIds)) {
+    throw invalidState(
+      "This cluster contains confirmed separate reports of the same study. Classify the remaining pairs before merging citation duplicates.",
+    );
+  }
+  const linkedDuplicate = await tx.studyReportLink.findFirst({
+    where: {
+      citationId: { in: [...memberIds].filter((id) => id !== canonical.id) },
+      study: { projectId },
+    },
+  });
+  if (linkedDuplicate)
+    throw invalidState(
+      "A citation being merged already belongs to an analysis study. Reconcile its study links before merging.",
+    );
 
   const duplicates = await tx.citation.findMany({
     where: {
@@ -371,7 +431,9 @@ async function mergeGroupInTransaction(
     },
     select: { citationId: true },
   });
-  const citationIdsWithDecisions = new Set(decisionRows.map((d) => d.citationId));
+  const citationIdsWithDecisions = new Set(
+    decisionRows.map((d) => d.citationId),
+  );
 
   const mergedCitationIds: string[] = [];
   const voidedAssignmentIds: string[] = [];
@@ -437,7 +499,8 @@ async function mergeGroupInTransaction(
     citationIdsWithDecisions.has(id),
   );
   const warning =
-    citationIdsWithDecisions.has(canonical.id) && duplicatesWithDecisions.length > 0
+    citationIdsWithDecisions.has(canonical.id) &&
+    duplicatesWithDecisions.length > 0
       ? {
           code: "SCREENING_DECISIONS_ON_BOTH" as const,
           message:
@@ -490,8 +553,11 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
             candidate.score === 1,
         ),
       );
+      const companions = await companionGraph(tx, projectId);
       const eligible = groupsWithExactDoiEvidence.flatMap((group) => {
-        const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
+        const suggested = group.candidates.filter(
+          (candidate) => candidate.status === "SUGGESTED",
+        );
         const candidates = group.candidates.map((candidate) => ({
           ...candidate,
           citationA: withPublication(candidate.citationA),
@@ -505,6 +571,7 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
           citations.set(candidate.citationB.id, candidate.citationB);
         }
         const members = [...citations.values()];
+        if (companions.conflicts(members.map((c) => c.id))) return [];
         return [{ groupId: group.id, canonical: chooseBulkCanonical(members) }];
       });
 
@@ -525,7 +592,8 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
       const summary = {
         exactDoiGroupsFound: groupsWithExactDoiEvidence.length,
         groupsMerged: results.length,
-        groupsSkippedForReview: groupsWithExactDoiEvidence.length - results.length,
+        groupsSkippedForReview:
+          groupsWithExactDoiEvidence.length - results.length,
         citationsMerged: results.reduce(
           (count, result) => count + result.mergedCitationIds.length,
           0,
@@ -538,7 +606,9 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
           (count, result) => count + result.voidedConflictIds.length,
           0,
         ),
-        screeningHistoryWarningCount: results.filter((result) => result.warning !== null).length,
+        screeningHistoryWarningCount: results.filter(
+          (result) => result.warning !== null,
+        ).length,
         canonicalSelections: results.map((result) => ({
           groupId: result.group.id,
           canonicalCitationId: result.canonicalCitationId,
@@ -563,7 +633,11 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
 }
 
 // Reject a suggested pair and immediately repartition the remaining ACTIVE graph.
-export async function rejectCandidate(ctx: Ctx, projectId: string, candidateId: string) {
+export async function rejectCandidate(
+  ctx: Ctx,
+  projectId: string,
+  candidateId: string,
+) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
   return prisma.$transaction(
@@ -617,12 +691,19 @@ export async function rejectCandidate(ctx: Ctx, projectId: string, candidateId: 
 
 // Undo a merge for one merged citation. The restore payload comes from the audit metadata
 // of its latest DEDUP_MERGED event (R8: restore voided assignments/conflicts to prior status).
-export async function undoMerge(ctx: Ctx, projectId: string, citationId: string) {
+export async function undoMerge(
+  ctx: Ctx,
+  projectId: string,
+  citationId: string,
+) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
-  return prisma.$transaction((tx) => undoMergeInTransaction(tx, ctx, projectId, citationId), {
-    timeout: 60_000,
-  });
+  return prisma.$transaction(
+    (tx) => undoMergeInTransaction(tx, ctx, projectId, citationId),
+    {
+      timeout: 60_000,
+    },
+  );
 }
 
 // Internal form for workflows that must restore a retained citation as one step of a larger
