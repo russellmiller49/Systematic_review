@@ -25,7 +25,7 @@ export function GroupCard({
 }: {
   projectId: string;
   group: DedupGroup;
-  onChanged: () => void;
+  onChanged: () => Promise<void>;
   onMergeWarning: (warning: MergeWarning) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -37,10 +37,7 @@ export function GroupCard({
     () => group.candidates.filter((c) => c.status === "SUGGESTED"),
     [group],
   );
-  const decided = useMemo(
-    () => group.candidates.filter((c) => c.status !== "SUGGESTED"),
-    [group],
-  );
+  const decided = useMemo(() => group.candidates.filter((c) => c.status !== "SUGGESTED"), [group]);
   const memberCount = useMemo(() => {
     const ids = new Set<string>();
     for (const c of suggested) {
@@ -52,6 +49,11 @@ export function GroupCard({
   const methods = useMemo(() => [...new Set(suggested.map((c) => c.method))], [suggested]);
   const topScore = suggested.length > 0 ? Math.max(...suggested.map((c) => c.score)) : 0;
   const leadTitle = suggested[0]?.citationA.title ?? group.candidates[0]?.citationA.title ?? "";
+
+  const hasConflict = group.metadataConflicts.length > 0;
+  const canonicalIsMember = suggested.some(
+    (c) => c.citationAId === canonicalId || c.citationBId === canonicalId,
+  );
 
   async function merge() {
     if (canonicalId === null) return;
@@ -68,9 +70,10 @@ export function GroupCard({
         toast.warning(result.warning.message, { duration: 12000 });
         onMergeWarning(result.warning);
       }
-      onChanged();
+      await onChanged();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to merge group");
+      if (err instanceof ApiError && err.code === "INVALID_STATE") await onChanged();
     } finally {
       setMerging(false);
     }
@@ -85,9 +88,9 @@ export function GroupCard({
       toast.success("Marked as not a duplicate", {
         description: result.groupResolved
           ? "No suggested pairs left — the group was resolved."
-          : undefined,
+          : "Duplicate clusters have been refreshed; disconnected citations are shown separately.",
       });
-      onChanged();
+      await onChanged();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to reject candidate");
     } finally {
@@ -99,7 +102,7 @@ export function GroupCard({
     <div className="rounded-lg border border-border bg-card shadow-sm">
       <button
         type="button"
-        className="flex w-full items-center gap-3 px-5 py-4 text-left"
+        className="flex w-full flex-wrap items-center gap-3 px-5 py-4 text-left"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
       >
@@ -118,14 +121,18 @@ export function GroupCard({
             {decided.length > 0 ? ` · ${decided.length} already decided` : ""}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:max-w-[50%]">
           {methods.map((m) => (
             <Badge key={m} variant="outline">
               {METHOD_LABELS[m]}
             </Badge>
           ))}
-          {suggested.length > 0 && (
-            <Badge variant={scoreVariant(topScore)}>{scorePercent(topScore)} match</Badge>
+          {hasConflict ? (
+            <Badge variant="maybe">Identifier / metadata conflict — manual review required</Badge>
+          ) : (
+            suggested.length > 0 && (
+              <Badge variant={scoreVariant(topScore)}>{scorePercent(topScore)} match</Badge>
+            )
           )}
         </div>
       </button>
@@ -133,9 +140,25 @@ export function GroupCard({
       {expanded && (
         <div className="space-y-4 border-t border-border px-5 py-4">
           <p className="text-sm text-muted-foreground">
-            Pick the record to keep, then merge — the other citations become duplicates of it.
-            Reject a pair if it is not a true duplicate.
+            Choose the citation to retain for this duplicate cluster. All other citations still
+            connected by remaining duplicate suggestions in this cluster will be marked as
+            duplicates. Suggestions are possible matches, not confirmed duplicates. Reject false
+            relationships before merging; this may split the cluster into separate cards.
           </p>
+
+          {hasConflict && (
+            <div role="note" className="rounded-md bg-maybe-muted p-3 text-sm">
+              <p className="font-medium">Identifier / metadata conflict — manual review required</p>
+              <ul className="list-inside list-disc">
+                {group.metadataConflicts.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+              <p>
+                Check the imported records before merging. Matching identifiers may contain errors.
+              </p>
+            </div>
+          )}
 
           {suggested.map((candidate) => (
             <div key={candidate.id} className="space-y-2">
@@ -143,6 +166,7 @@ export function GroupCard({
                 a={candidate.citationA}
                 b={candidate.citationB}
                 reasons={candidate.reasons}
+                metadataConflicts={candidate.metadataConflicts}
                 radioName={`canonical-${group.id}`}
                 canonicalId={canonicalId}
                 onSelectCanonical={setCanonicalId}
@@ -150,8 +174,14 @@ export function GroupCard({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Badge variant="outline">{METHOD_LABELS[candidate.method]}</Badge>
-                  <Badge variant={scoreVariant(candidate.score)}>
-                    {scorePercent(candidate.score)}
+                  <Badge
+                    variant={
+                      candidate.metadataConflicts.length ? "maybe" : scoreVariant(candidate.score)
+                    }
+                  >
+                    {candidate.metadataConflicts.length
+                      ? "Manual review required"
+                      : scorePercent(candidate.score)}
                   </Badge>
                   {candidate.reasons !== null && (
                     <span>
@@ -163,7 +193,7 @@ export function GroupCard({
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={rejectingId === candidate.id}
+                  disabled={rejectingId !== null || merging}
                   onClick={() => reject(candidate)}
                 >
                   {rejectingId === candidate.id ? <Spinner /> : <X />} Not a duplicate
@@ -175,21 +205,24 @@ export function GroupCard({
           {decided.length > 0 && (
             <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               {decided.map((c) => (
-                <p key={c.id} className="truncate">
+                <div key={c.id} className="truncate">
                   <Badge variant="muted" className="mr-1.5">
                     {c.status.toLowerCase()}
                   </Badge>
                   {c.citationA.title}
                   {c.decidedBy ? ` — decided by ${c.decidedBy.name}` : ""}
                   {c.decidedAt ? ` on ${new Date(c.decidedAt).toLocaleDateString()}` : ""}
-                </p>
+                </div>
               ))}
             </div>
           )}
 
           {suggested.length > 0 && (
             <div className="flex justify-end border-t border-border pt-4">
-              <Button onClick={merge} disabled={merging || canonicalId === null}>
+              <Button
+                onClick={merge}
+                disabled={merging || rejectingId !== null || !canonicalIsMember}
+              >
                 {merging ? <Spinner /> : <GitMerge />}
                 {canonicalId === null ? "Select a canonical citation to merge" : "Merge group"}
               </Button>

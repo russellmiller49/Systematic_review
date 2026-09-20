@@ -53,27 +53,31 @@ export function DedupClient({ projectId }: { projectId: string }) {
   const [undoingId, setUndoingId] = useState<string | null>(null);
   const [mergeWarning, setMergeWarning] = useState<MergeWarning | null>(null);
 
-  const load = useCallback(() => {
-    api<DedupGroup[]>(`/api/projects/${projectId}/dedup/groups?status=OPEN`)
-      .then(setOpenGroups)
-      .catch(() => {
-        setOpenGroups([]);
-        toast.error("Failed to load duplicate groups");
-      });
-    api<DedupGroup[]>(`/api/projects/${projectId}/dedup/groups?status=RESOLVED`)
-      .then(setResolvedGroups)
-      .catch(() => setResolvedGroups([]));
-    api<CitationListResponse>(
-      `/api/projects/${projectId}/citations?status=DUPLICATE&limit=${MERGES_PAGE_LIMIT}`,
-    )
-      .then((res) => {
-        setDuplicates(res.items);
-        setHasMoreDuplicates(res.nextCursor !== null);
-      })
-      .catch(() => setDuplicates([]));
+  const load = useCallback(async () => {
+    await Promise.all([
+      api<DedupGroup[]>(`/api/projects/${projectId}/dedup/groups?status=OPEN`)
+        .then(setOpenGroups)
+        .catch(() => {
+          setOpenGroups([]);
+          toast.error("Failed to load duplicate groups");
+        }),
+      api<DedupGroup[]>(`/api/projects/${projectId}/dedup/groups?status=RESOLVED`)
+        .then(setResolvedGroups)
+        .catch(() => setResolvedGroups([])),
+      api<CitationListResponse>(
+        `/api/projects/${projectId}/citations?status=DUPLICATE&limit=${MERGES_PAGE_LIMIT}`,
+      )
+        .then((res) => {
+          setDuplicates(res.items);
+          setHasMoreDuplicates(res.nextCursor !== null);
+        })
+        .catch(() => setDuplicates([])),
+    ]);
   }, [projectId]);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   // Resolve canonical titles for the merges tab ("" marks a failed lookup so we don't retry).
   useEffect(() => {
@@ -94,7 +98,11 @@ export function DedupClient({ projectId }: { projectId: string }) {
           .catch(() => [id, ""] as const),
       ),
     ).then((entries) => {
-      if (!cancelled) setCanonicalTitles((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+      if (!cancelled)
+        setCanonicalTitles((prev) => ({
+          ...prev,
+          ...Object.fromEntries(entries),
+        }));
     });
     return () => {
       cancelled = true;
@@ -163,7 +171,7 @@ export function DedupClient({ projectId }: { projectId: string }) {
       }
       if (result.groupsSkippedForReview > 0) {
         notices.push(
-          `${result.groupsSkippedForReview} group${result.groupsSkippedForReview === 1 ? " was" : "s were"} left open because it also contained non-DOI evidence or stale citation data.`,
+          `${result.groupsSkippedForReview} group${result.groupsSkippedForReview === 1 ? " was" : "s were"} left open because it also contained non-DOI evidence, rejected pairs, metadata conflicts, or stale citation data.`,
         );
       }
       setBulkNotice(notices.length > 0 ? notices.join(" ") : null);
@@ -180,17 +188,7 @@ export function DedupClient({ projectId }: { projectId: string }) {
       (sum, g) => sum + g.candidates.filter((c) => c.status === "SUGGESTED").length,
       0,
     ) ?? null;
-  const exactDoiGroups =
-    openGroups?.filter((group) => {
-      const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
-      return (
-        suggested.length > 0 &&
-        !group.candidates.some((candidate) => candidate.status === "REJECTED") &&
-        suggested.every(
-          (candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1,
-        )
-      );
-    }) ?? [];
+  const exactDoiGroups = openGroups?.filter((group) => group.bulkExactDoiEligible) ?? [];
   const exactDoiCitationCount = exactDoiGroups.reduce((count, group) => {
     const citationIds = new Set<string>();
     for (const candidate of group.candidates) {
@@ -204,12 +202,8 @@ export function DedupClient({ projectId }: { projectId: string }) {
     openGroups?.filter((group) => {
       const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
       return (
-        suggested.some(
-          (candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1,
-        ) &&
-        suggested.some(
-          (candidate) => candidate.method !== "EXACT_DOI" || candidate.score !== 1,
-        )
+        suggested.some((candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1) &&
+        suggested.some((candidate) => candidate.method !== "EXACT_DOI" || candidate.score !== 1)
       );
     }).length ?? 0;
 
@@ -314,7 +308,11 @@ export function DedupClient({ projectId }: { projectId: string }) {
             <div className="space-y-3">
               {openGroups.map((group) => (
                 <GroupCard
-                  key={group.id}
+                  key={`${group.id}:${group.candidates
+                    .filter((c) => c.status === "SUGGESTED")
+                    .map((c) => c.id)
+                    .sort()
+                    .join(",")}`}
                   projectId={projectId}
                   group={group}
                   onChanged={load}
@@ -487,14 +485,15 @@ export function DedupClient({ projectId }: { projectId: string }) {
               {exactDoiCitationCount === 1 ? "" : "s"}?
             </DialogTitle>
             <DialogDescription>
+              Groups with identifier or metadata conflicts require manual review and are excluded.
               This will resolve {exactDoiGroups.length} group
-              {exactDoiGroups.length === 1 ? "" : "s"} whose suggested pairs all share the
-              same DOI. Each merge can still be undone from the Merged citations tab.
+              {exactDoiGroups.length === 1 ? "" : "s"} whose suggested pairs all share the same DOI.
+              Each merge can still be undone from the Merged citations tab.
             </DialogDescription>
           </DialogHeader>
           <Alert variant="warning">
-            Synthesis automatically keeps the record with existing screening decisions. Otherwise
-            it keeps the most complete citation, using the oldest-created record to break a tie.
+            Synthesis automatically keeps the record with existing screening decisions. Otherwise it
+            keeps the most complete citation, using the oldest-created record to break a tie.
             Pending assignments and open conflicts on merged records will be voided under the
             existing deduplication rules.
           </Alert>

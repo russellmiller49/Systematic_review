@@ -21,9 +21,7 @@ function authorsOf(c: DedupCitation): DedupAuthor[] {
 
 function authorText(authors: DedupAuthor[]): string | null {
   if (authors.length === 0) return null;
-  return authors
-    .map((a) => (a.given ? `${a.family} ${a.given}` : (a.raw ?? a.family)))
-    .join(", ");
+  return authors.map((a) => (a.given ? `${a.family} ${a.given}` : (a.raw ?? a.family))).join(", ");
 }
 
 function compare(aVal: string | null, bVal: string | null, normalize = false): FieldState {
@@ -80,8 +78,20 @@ function buildFields(
       state: yearState,
     },
     { label: "Journal", a: a.journal, b: b.journal, state: journalState },
-    { label: "DOI", a: a.doi, b: b.doi, state: compare(a.doi, b.doi, true), mono: true },
-    { label: "PMID", a: a.pmid, b: b.pmid, state: compare(a.pmid, b.pmid), mono: true },
+    {
+      label: "DOI",
+      a: a.doi,
+      b: b.doi,
+      state: compare(a.doi, b.doi, true),
+      mono: true,
+    },
+    {
+      label: "PMID",
+      a: a.pmid,
+      b: b.pmid,
+      state: compare(a.pmid, b.pmid),
+      mono: true,
+    },
   ];
 }
 
@@ -98,6 +108,7 @@ export function PairCompare({
   a,
   b,
   reasons,
+  metadataConflicts = [],
   radioName,
   canonicalId,
   onSelectCanonical,
@@ -105,6 +116,7 @@ export function PairCompare({
   a: DedupCitation;
   b: DedupCitation;
   reasons: PairEvidence | null;
+  metadataConflicts?: string[];
   radioName?: string;
   canonicalId?: string | null;
   onSelectCanonical?: (citationId: string) => void;
@@ -119,6 +131,7 @@ export function PairCompare({
           <input
             type="radio"
             name={radioName}
+            aria-label={`Keep ${citation.title} (${citation.id}) as canonical`}
             className="h-3.5 w-3.5 accent-primary"
             checked={canonicalId === citation.id}
             disabled={citation.status !== "ACTIVE"}
@@ -129,7 +142,9 @@ export function PairCompare({
       ) : (
         <span>Citation {side}</span>
       )}
-      {citation.status !== "ACTIVE" && <Badge variant="muted">{citation.status.toLowerCase()}</Badge>}
+      {citation.status !== "ACTIVE" && (
+        <Badge variant="muted">{citation.status.toLowerCase()}</Badge>
+      )}
     </div>
   );
 
@@ -153,7 +168,11 @@ export function PairCompare({
             <div
               className={cn(
                 "border-l border-border px-3 py-2",
-                STATE_CLASS[f.state],
+                STATE_CLASS[
+                  metadataConflicts.length > 0 && (f.label === "DOI" || f.label === "PMID")
+                    ? "differ"
+                    : f.state
+                ],
                 f.mono && "font-mono text-xs",
               )}
             >
@@ -162,7 +181,11 @@ export function PairCompare({
             <div
               className={cn(
                 "border-l border-border px-3 py-2",
-                STATE_CLASS[f.state],
+                STATE_CLASS[
+                  metadataConflicts.length > 0 && (f.label === "DOI" || f.label === "PMID")
+                    ? "differ"
+                    : f.state
+                ],
                 f.mono && "font-mono text-xs",
               )}
             >

@@ -73,8 +73,10 @@ PANEL_MEMBER, TRAINEE, OBSERVER` (capability matrix in `05-permissions.md`).
   (`EXACT_DOI|EXACT_PMID|NORMALIZED_TITLE|FUZZY`), score (0–1), `reasons` JSON (human-readable
   evidence: matched fields, similarity values), status `SUGGESTED|MERGED|REJECTED`, decidedBy,
   decidedAt. Unique on the pair.
-- `DeduplicationGroup` + member link — clusters candidates for the review UI (connected
-  components of SUGGESTED pairs).
+- `DeduplicationGroup` — one connected component of current SUGGESTED pairs between ACTIVE
+  citations. Rejection immediately repartitions groups; merge fails closed on disconnected
+  membership. Imported identifier conflicts require manual review and exclude bulk DOI merge.
+  See [deduplication safety](deduplication-safety.md) for normalization, undo, and conflict rules.
 - Merge = pick canonical citation; others get `status=DUPLICATE`, `duplicateOfId=canonical`;
   identifiers/source-records are **linked, never moved or deleted**; PRISMA "duplicates removed"
   counts `status=DUPLICATE`. Undo restores `ACTIVE` and re-opens the candidate. All three

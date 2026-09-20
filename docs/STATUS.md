@@ -1,3 +1,11 @@
+## Current state (2026-09-20) — deduplication component safety
+
+Rejection now transactionally splits disconnected duplicate clusters. A shared normalizer
+repairs detection, review, undo, and import rollback topology; merge checks connectivity,
+ACTIVE membership, project ownership, and complete component membership before any writes.
+Derived identifier/bibliographic conflict warnings exclude conflicting groups from exact-DOI
+bulk merge. No database migration. See [behavior and regression coverage](deduplication-safety.md).
+
 # Build Status (living document — updated after every milestone)
 
 > Purpose: durable progress anchor. If you are resuming work on this repo, read this first,
