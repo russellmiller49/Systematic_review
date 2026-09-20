@@ -1,8 +1,12 @@
 // Client-side interfaces for the cohort (companion-report) API payloads — only the
 // fields the UI consumes. Mirrors src/server/services/cohort responses.
 
-export type CohortMethod = "REGISTRY_ID" | "COMPOSITE";
-export type CohortCandidateStatus = "SUGGESTED" | "LINKED" | "REJECTED";
+export type CohortMethod = "REGISTRY_ID" | "COMPOSITE" | "MANUAL_DEDUP";
+export type CohortCandidateStatus =
+  | "SUGGESTED"
+  | "LINKED"
+  | "REJECTED"
+  | "COMPANION";
 
 export interface CohortAuthor {
   family: string;
@@ -79,6 +83,7 @@ export interface CohortLinkResult {
 }
 
 export const COHORT_METHOD_LABELS: Record<CohortMethod, string> = {
+  MANUAL_DEDUP: "Confirmed during deduplication",
   REGISTRY_ID: "Registry ID",
   COMPOSITE: "Composite",
 };
@@ -106,9 +111,14 @@ export function evidenceChips(signals: CohortSignals | null): string[] {
         : `${Math.round(signals.affiliationSimilarity * 100)}% affiliation overlap`,
     );
   }
-  for (const acronym of signals.acronyms ?? []) chips.push(`Acronym: ${acronym}`);
+  for (const acronym of signals.acronyms ?? [])
+    chips.push(`Acronym: ${acronym}`);
   if (signals.yearDelta !== undefined && signals.yearDelta !== null) {
-    chips.push(signals.yearDelta === 0 ? "Same year" : `Δ${signals.yearDelta} year${signals.yearDelta === 1 ? "" : "s"}`);
+    chips.push(
+      signals.yearDelta === 0
+        ? "Same year"
+        : `Δ${signals.yearDelta} year${signals.yearDelta === 1 ? "" : "s"}`,
+    );
   }
   return chips;
 }

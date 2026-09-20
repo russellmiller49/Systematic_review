@@ -106,6 +106,7 @@ enum DedupCandidateStatus {
   SUGGESTED
   MERGED
   REJECTED
+  COMPANION // Human-confirmed separate reports of one study; not a StudyReportLink
 }
 
 enum DedupGroupStatus {
