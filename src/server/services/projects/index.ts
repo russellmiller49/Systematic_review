@@ -20,7 +20,7 @@ import { getAiConfig } from "@/server/ai/config";
 import { resetManuscriptToPicoDefaultsInTransaction } from "@/server/services/manuscript";
 import { hasPicoDefaultSectionStructure } from "@/server/services/manuscript/default-sections";
 
-const INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+const INVITATION_TTL_MS = 45 * 24 * 60 * 60 * 1000; // 45 days
 
 export const DEFAULT_SCREENING_EXCLUSION_REASONS = [
   "Wrong population",

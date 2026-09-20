@@ -97,6 +97,8 @@ project access while preserving their attributed work. Test: org-REMOVED user wi
 project-ACTIVE row → 403.
 
 ### R11. Invitations
+New project and organization invitations expire 45 days after creation. Existing invitations
+retain their stored expiry dates.
 Project and organization invitation tokens use `crypto.randomBytes(32)` base64url and are
 returned only in the create response, never in lists. Accept requires: session user's email ===
 invitation.email (lowercased), not expired, not accepted, not revoked — checked and consumed
