@@ -1,5 +1,6 @@
 // Citation import parsers — format detection + dispatch. All parsers are pure and never
-// throw; every input row becomes either a ParsedRecord or a ParseRowError.
+// throw; citation candidates become ParsedRecords or ParseRowErrors. RIS metadata
+// outside TY..ER blocks is not a citation candidate.
 import { parseBibtex } from "./bibtex";
 import { parseCsv } from "./csv";
 import { parseNbib } from "./nbib";

@@ -44,7 +44,8 @@ export async function POST(req: Request, { params }: Params) {
       filename: file.name || "import",
       sourceId: typeof sourceId === "string" ? sourceId : "",
       format: typeof format === "string" && format.length > 0 ? format : undefined,
-      content: await file.text(),
+      // Keep the BOM in the preserved upload; parsers normalize their own copy.
+      content: new TextDecoder("utf-8", { ignoreBOM: true }).decode(await file.arrayBuffer()),
     });
     return created(await createBatch(ctx, projectId, input));
   });

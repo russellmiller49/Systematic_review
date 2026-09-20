@@ -6,6 +6,8 @@ import { AppError } from "@/server/errors";
 import * as imports from "@/server/services/imports";
 import * as citations from "@/server/services/citations";
 import * as dedup from "@/server/services/dedup";
+import { computePrismaCounts } from "@/server/services/prisma-report";
+import { RIS_COCHRANE_CENTRAL_3 } from "@/server/services/imports/parsers/__fixtures__/ris";
 import { resetDb } from "../db-utils";
 import {
   addOrgMember,
@@ -139,6 +141,83 @@ describe("imports + citations", () => {
   });
 
   describe("import flow (RIS end-to-end)", () => {
+    it("preserves a CENTRAL upload while counting only citations in preview, commit, and PRISMA", async () => {
+      const { owner, project, source } = await setupProject();
+      const content = "\uFEFF" + RIS_COCHRANE_CENTRAL_3.replace(/\n/g, "\r\n") +
+        "Provider: John Wiley & Sons, Ltd.\rExport complete\n";
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "central.ris",
+        sourceId: source.id,
+        content,
+      });
+      expect(batch).toMatchObject({ totalRecords: 3, parsedRecords: 3, failedRecords: 0 });
+      const preview = await imports.getBatch(ctx(owner.id), project.id, batch.id);
+      expect(preview.rows.map((row) => row.rowNumber)).toEqual([1, 2, 3]);
+      expect(preview.rows.every((row) => row.parseErrors === null)).toBe(true);
+      expect(preview.rows.every((row) => !row.rawRecord.includes("Provider:"))).toBe(true);
+      const listed = await imports.listBatches(ctx(owner.id), project.id);
+      expect(listed.find((b) => b.id === batch.id)).toMatchObject({
+        totalRecords: 3, parsedRecords: 3, failedRecords: 0,
+      });
+      const beforeCommit = await computePrismaCounts(project.id);
+      expect(beforeCommit.counts.find((c) => c.key === "records_identified")?.value).toBe(0);
+
+      const committed = await imports.commitBatch(ctx(owner.id), project.id, batch.id);
+      expect(committed.citationsCreated).toBe(3);
+      const report = await computePrismaCounts(project.id);
+      expect(report.counts.find((c) => c.key === "records_identified")).toMatchObject({
+        value: 3, breakdown: { [source.name]: 3 },
+      });
+      expect(await prisma.citation.count({ where: { projectId: project.id } })).toBe(3);
+      const upload = await prisma.importBatchUpload.findUniqueOrThrow({
+        where: { batchId: batch.id },
+      });
+      expect(upload.content).toBe(content);
+      for (const action of ["import.batch.created", "import.batch.committed"]) {
+        const event = await prisma.auditEvent.findFirstOrThrow({
+          where: { entityId: batch.id, action },
+        });
+        expect(event.metadata).toMatchObject({
+          totalRecords: 3, parsedRecords: 3, failedRecords: 0,
+        });
+      }
+    });
+
+    it.each(["", "\uFEFF \r\n", "Provider: John Wiley & Sons, Ltd.\n"])(
+      "creates no citation rows for an RIS upload without TY records (%j)",
+      async (content) => {
+        const { owner, project, source } = await setupProject();
+        const batch = await imports.createBatch(ctx(owner.id), project.id, {
+          filename: "empty.ris", sourceId: source.id, content,
+        });
+        expect(batch).toMatchObject({ totalRecords: 0, parsedRecords: 0, failedRecords: 0 });
+        expect((await imports.getBatch(ctx(owner.id), project.id, batch.id)).rows).toEqual([]);
+        expect((await prisma.importBatchUpload.findUniqueOrThrow({
+          where: { batchId: batch.id },
+        })).content).toBe(content);
+      },
+    );
+
+    it("keeps a real unterminated citation as a failure without counting surrounding metadata", async () => {
+      const { owner, project, source } = await setupProject();
+      const content = RIS_COCHRANE_CENTRAL_3 +
+        "Provider: John Wiley & Sons, Ltd.\nTY  - JOUR\nTI  - Unterminated citation\n";
+      const batch = await imports.createBatch(ctx(owner.id), project.id, {
+        filename: "malformed.ris", sourceId: source.id, content,
+      });
+      expect(batch).toMatchObject({ totalRecords: 4, parsedRecords: 3, failedRecords: 1 });
+      const preview = await imports.getBatch(ctx(owner.id), project.id, batch.id);
+      expect(preview.rows).toHaveLength(4);
+      expect(preview.rows[3]).toMatchObject({
+        rowNumber: 4,
+        rawRecord: "TY  - JOUR\nTI  - Unterminated citation",
+        parseErrors: [{ message: "Unterminated RIS record (missing ER tag)" }],
+      });
+      expect((await imports.commitBatch(ctx(owner.id), project.id, batch.id)).citationsCreated).toBe(3);
+      const report = await computePrismaCounts(project.id);
+      expect(report.counts.find((c) => c.key === "records_identified")?.value).toBe(3);
+    });
+
     it("upload → preview rows (incl. malformed) → commit → citations + identifiers + audit", async () => {
       const { owner, project, source } = await setupProject();
 

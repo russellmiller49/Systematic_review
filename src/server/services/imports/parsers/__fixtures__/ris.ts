@@ -105,6 +105,44 @@ ER  -
 
 export const RIS_EMPTY = "";
 
+// Synthetic CENTRAL-style export: three citations and three provider metadata
+// chunks, before and between records. Bibliographic values are test data.
+export const RIS_COCHRANE_CENTRAL_3 = `Provider: John Wiley & Sons, Ltd.
+Database: Cochrane Central Register of Controlled Trials (CENTRAL)
+
+TY  - JOUR
+ID  - CN-TEST0001
+TI  - Pulmonary rehabilitation trial: CENTRAL fixture one
+AU  - Example, Alice
+PY  - 2020
+T2  - Journal of Test Trials
+AB  - First line of the trial abstract
+      continued within the citation.
+ER  -
+
+Provider: John Wiley & Sons, Ltd.
+Database: Cochrane Central Register of Controlled Trials (CENTRAL)
+
+TY  - JOUR
+ID  - CN-TEST0002
+TI  - Pulmonary rehabilitation trial: CENTRAL fixture two
+AU  - Example, Bob
+PY  - 2021
+T2  - Journal of Test Trials
+ER  -
+
+Provider: John Wiley & Sons, Ltd.
+Database: Cochrane Central Register of Controlled Trials (CENTRAL)
+
+TY  - JOUR
+ID  - CN-TEST0003
+TI  - Pulmonary rehabilitation trial: CENTRAL fixture three
+AU  - Example, Carol
+PY  - 2022
+T2  - Journal of Test Trials
+ER  -
+`;
+
 // AD + C1 affiliation capture and registry-id extraction from AD values and the abstract.
 export const RIS_AFFILIATIONS = `TY  - JOUR
 TI  - Endobronchial valve therapy durability at 24 months: the LIBERATE follow-up

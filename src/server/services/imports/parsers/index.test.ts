@@ -3,7 +3,7 @@ import { detectFormat, parse } from "./index";
 import { BIBTEX_ZOTERO_4 } from "./__fixtures__/bibtex";
 import { CSV_5 } from "./__fixtures__/csv";
 import { NBIB_3 } from "./__fixtures__/nbib";
-import { RIS_BOM_CRLF, RIS_PUBMED_5 } from "./__fixtures__/ris";
+import { RIS_BOM_CRLF, RIS_COCHRANE_CENTRAL_3, RIS_PUBMED_5 } from "./__fixtures__/ris";
 
 describe("detectFormat", () => {
   it("detects by file extension", () => {
@@ -23,6 +23,14 @@ describe("detectFormat", () => {
 
   it("sniffs through BOM and CRLF", () => {
     expect(detectFormat("export.txt", RIS_BOM_CRLF)).toBe("RIS");
+  });
+
+  it("detects and dispatches RIS after a provider header containing commas", () => {
+    const format = detectFormat("central-export.txt", RIS_COCHRANE_CENTRAL_3);
+    expect(format).toBe("RIS");
+    const result = parse(format!, RIS_COCHRANE_CENTRAL_3);
+    expect(result.records).toHaveLength(3);
+    expect(result.errors).toEqual([]);
   });
 
   it("returns null when unsure", () => {
