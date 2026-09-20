@@ -8,6 +8,7 @@ import type { Ctx } from "@/server/auth/session";
 import { requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
+import { lockDedupProject, normalizeGroups } from "@/server/services/dedup/groups";
 import { undoMergeInTransaction } from "@/server/services/dedup";
 import {
   normalizeDoi,
@@ -530,6 +531,7 @@ async function deleteBatchInternal(
 
   return prisma.$transaction(
     async (tx) => {
+      await lockDedupProject(tx, projectId);
       // Serialize against commitBatch so a batch cannot be committed while it is deleted.
       const locked = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id"
@@ -722,19 +724,12 @@ async function deleteBatchInternal(
               where: { id: { in: groupIds }, projectId, candidates: { none: {} } },
             })
           ).count;
-          await tx.deduplicationGroup.updateMany({
-            where: {
-              id: { in: groupIds },
-              projectId,
-              candidates: { some: { status: "SUGGESTED" } },
-            },
-            data: { status: "OPEN" },
-          });
         }
       } else {
         await tx.citationSourceRecord.deleteMany({ where: { batchId: batch.id } });
       }
 
+      await normalizeGroups(tx, projectId);
       await tx.importBatch.delete({ where: { id: batch.id } });
       const result = {
         id: batch.id,

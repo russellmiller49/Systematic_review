@@ -46,6 +46,7 @@ export interface DedupCandidate {
   method: DedupMethod;
   score: number;
   reasons: PairEvidence | null;
+  metadataConflicts: string[];
   status: DedupCandidateStatus;
   decidedAt: string | null;
   decidedBy: { id: string; name: string; email: string } | null;
@@ -59,6 +60,8 @@ export interface DedupGroup {
   createdAt: string;
   updatedAt: string;
   candidates: DedupCandidate[]; // ordered by score desc
+  metadataConflicts: string[];
+  bulkExactDoiEligible: boolean;
 }
 
 export interface RunSummary {

@@ -10,8 +10,12 @@ import type { Ctx } from "@/server/auth/session";
 import { requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
-import { normalizeDoi, type AuthorName } from "@/server/services/citations/normalize";
+import type { AuthorName } from "@/server/services/citations/normalize";
 import { detectDuplicates, type CitationLite } from "./engine";
+import { connectedComponents } from "./graph";
+import { lockDedupProject, normalizeGroups } from "./groups";
+import { metadataConflicts, clusterMetadataConflicts } from "./conflicts";
+import { exactDoiEligible } from "./eligibility";
 
 export const listGroupsQuerySchema = z.object({
   status: z.enum(["OPEN", "RESOLVED"]).optional(),
@@ -30,6 +34,8 @@ type MergeAuditMetadata = {
 const bulkCanonicalCitationSelect = {
   id: true,
   status: true,
+  projectId: true,
+  normalizedTitle: true,
   title: true,
   authors: true,
   year: true,
@@ -43,7 +49,9 @@ const bulkCanonicalCitationSelect = {
   url: true,
   language: true,
   createdAt: true,
-  _count: { select: { decisions: true, identifiers: true, sourceRecords: true } },
+  _count: {
+    select: { decisions: true, identifiers: true, sourceRecords: true },
+  },
 } satisfies Prisma.CitationSelect;
 
 type BulkCanonicalCitation = Prisma.CitationGetPayload<{
@@ -88,158 +96,91 @@ function chooseBulkCanonical(citations: BulkCanonicalCitation[]): BulkCanonicalC
 export async function runDetection(ctx: Ctx, projectId: string) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
-  const citations = await prisma.citation.findMany({
-    where: { projectId, status: "ACTIVE" },
-    select: {
-      id: true,
-      normalizedTitle: true,
-      doi: true,
-      pmid: true,
-      year: true,
-      journal: true,
-      authors: true,
-    },
-  });
-  const lites: CitationLite[] = citations.map((c) => ({
-    id: c.id,
-    normalizedTitle: c.normalizedTitle,
-    doi: c.doi,
-    pmid: c.pmid,
-    year: c.year,
-    journal: c.journal,
-    authors: Array.isArray(c.authors) ? (c.authors as unknown as AuthorName[]) : [],
-  }));
-  const pairs = detectDuplicates(lites);
+  return prisma.$transaction(
+    async (tx) => {
+      await lockDedupProject(tx, projectId);
+      const citations = await tx.citation.findMany({
+        where: { projectId, status: "ACTIVE" },
+        select: {
+          id: true,
+          normalizedTitle: true,
+          doi: true,
+          pmid: true,
+          year: true,
+          journal: true,
+          authors: true,
+        },
+      });
+      const lites: CitationLite[] = citations.map((c) => ({
+        id: c.id,
+        normalizedTitle: c.normalizedTitle,
+        doi: c.doi,
+        pmid: c.pmid,
+        year: c.year,
+        journal: c.journal,
+        authors: Array.isArray(c.authors) ? (c.authors as unknown as AuthorName[]) : [],
+      }));
+      const pairs = detectDuplicates(lites);
 
-  return prisma.$transaction(async (tx) => {
-    const existing = await tx.deduplicationCandidate.findMany({ where: { projectId } });
-    const byPair = new Map(existing.map((c) => [`${c.citationAId}|${c.citationBId}`, c]));
+      const existing = await tx.deduplicationCandidate.findMany({
+        where: { projectId },
+      });
+      const byPair = new Map(existing.map((c) => [`${c.citationAId}|${c.citationBId}`, c]));
 
-    let candidatesCreated = 0;
-    let candidatesRefreshed = 0;
-    let candidatesSkippedDecided = 0;
-    for (const pair of pairs) {
-      const current = byPair.get(`${pair.aId}|${pair.bId}`);
-      if (!current) {
-        await tx.deduplicationCandidate.create({
-          data: {
-            projectId,
-            citationAId: pair.aId,
-            citationBId: pair.bId,
-            method: pair.method,
-            score: pair.score,
-            reasons: pair.reasons as unknown as Prisma.InputJsonValue,
-          },
-        });
-        candidatesCreated++;
-      } else if (current.status === "SUGGESTED") {
-        await tx.deduplicationCandidate.update({
-          where: { id: current.id },
-          data: {
-            method: pair.method,
-            score: pair.score,
-            reasons: pair.reasons as unknown as Prisma.InputJsonValue,
-          },
-        });
-        candidatesRefreshed++;
-      } else {
-        candidatesSkippedDecided++; // human already decided (MERGED/REJECTED) — never resurrect
+      let candidatesCreated = 0;
+      let candidatesRefreshed = 0;
+      let candidatesSkippedDecided = 0;
+      for (const pair of pairs) {
+        const current = byPair.get(`${pair.aId}|${pair.bId}`);
+        if (!current) {
+          await tx.deduplicationCandidate.create({
+            data: {
+              projectId,
+              citationAId: pair.aId,
+              citationBId: pair.bId,
+              method: pair.method,
+              score: pair.score,
+              reasons: pair.reasons as unknown as Prisma.InputJsonValue,
+            },
+          });
+          candidatesCreated++;
+        } else if (current.status === "SUGGESTED") {
+          await tx.deduplicationCandidate.update({
+            where: { id: current.id },
+            data: {
+              method: pair.method,
+              score: pair.score,
+              reasons: pair.reasons as unknown as Prisma.InputJsonValue,
+            },
+          });
+          candidatesRefreshed++;
+        } else {
+          candidatesSkippedDecided++; // human already decided (MERGED/REJECTED) — never resurrect
+        }
       }
-    }
 
-    // Rebuild groups: connected components over SUGGESTED pairs between ACTIVE citations.
-    const suggested = await tx.deduplicationCandidate.findMany({
-      where: {
+      const { groupsOpen } = await normalizeGroups(tx, projectId);
+
+      const summary = {
+        citationsScanned: citations.length,
+        pairsDetected: pairs.length,
+        candidatesCreated,
+        candidatesRefreshed,
+        candidatesSkippedDecided,
+        groupsOpen,
+      };
+      await audit.record(tx, {
         projectId,
-        status: "SUGGESTED",
-        citationA: { status: "ACTIVE" },
-        citationB: { status: "ACTIVE" },
-      },
-    });
-
-    const parent = new Map<string, string>();
-    const find = (x: string): string => {
-      let root = parent.get(x) ?? x;
-      while (root !== (parent.get(root) ?? root)) root = parent.get(root) ?? root;
-      parent.set(x, root);
-      return root;
-    };
-    const union = (x: string, y: string) => {
-      const rx = find(x);
-      const ry = find(y);
-      if (rx !== ry) parent.set(rx, ry);
-    };
-    for (const c of suggested) union(c.citationAId, c.citationBId);
-
-    const components = new Map<string, typeof suggested>();
-    for (const c of suggested) {
-      const root = find(c.citationAId);
-      const list = components.get(root);
-      if (list) list.push(c);
-      else components.set(root, [c]);
-    }
-
-    const usedGroupIds = new Set<string>();
-    let groupsOpen = 0;
-    for (const members of components.values()) {
-      const existingGroupIds = [
-        ...new Set(members.map((c) => c.groupId).filter((id): id is string => id !== null)),
-      ];
-      const reuseId = existingGroupIds.find((id) => !usedGroupIds.has(id));
-      let groupId: string;
-      if (reuseId) {
-        groupId = reuseId;
-        await tx.deduplicationGroup.update({ where: { id: groupId }, data: { status: "OPEN" } });
-      } else {
-        const group = await tx.deduplicationGroup.create({ data: { projectId } });
-        groupId = group.id;
-      }
-      usedGroupIds.add(groupId);
-      const stale = members.filter((c) => c.groupId !== groupId).map((c) => c.id);
-      if (stale.length > 0) {
-        await tx.deduplicationCandidate.updateMany({
-          where: { id: { in: stale } },
-          data: { groupId },
-        });
-      }
-      groupsOpen++;
-    }
-
-    // OPEN groups left without any SUGGESTED pair: resolve them (delete if fully empty —
-    // e.g. after two groups fused into one component).
-    const orphanedGroups = await tx.deduplicationGroup.findMany({
-      where: { projectId, status: "OPEN", id: { notIn: [...usedGroupIds] } },
-      include: { _count: { select: { candidates: true } } },
-    });
-    for (const group of orphanedGroups) {
-      if (group._count.candidates === 0) {
-        await tx.deduplicationGroup.delete({ where: { id: group.id } });
-      } else {
-        await tx.deduplicationGroup.update({
-          where: { id: group.id },
-          data: { status: "RESOLVED" },
-        });
-      }
-    }
-
-    const summary = {
-      citationsScanned: citations.length,
-      pairsDetected: pairs.length,
-      candidatesCreated,
-      candidatesRefreshed,
-      candidatesSkippedDecided,
-      groupsOpen,
-    };
-    await audit.record(tx, {
-      projectId,
-      userId: ctx.userId,
-      entityType: "Project",
-      entityId: projectId,
-      action: AuditActions.DEDUP_RUN,
-      metadata: summary,
-    });
-    return summary;
-  });
+        userId: ctx.userId,
+        entityType: "Project",
+        entityId: projectId,
+        action: AuditActions.DEDUP_RUN,
+        metadata: summary,
+      });
+      return summary;
+    },
+    { timeout: 60_000 },
+  );
 }
 
 // Groups with candidate pairs, evidence, and full citation payloads for side-by-side compare.
@@ -249,20 +190,53 @@ export async function listGroups(
   query: z.infer<typeof listGroupsQuerySchema> = {},
 ) {
   await requirePermission(ctx, projectId, "project.view");
-  return prisma.deduplicationGroup.findMany({
-    where: { projectId, status: query.status ?? "OPEN" },
-    orderBy: { createdAt: "asc" },
-    include: {
-      candidates: {
-        orderBy: { score: "desc" },
+  return prisma.$transaction(
+    async (tx) => {
+      await lockDedupProject(tx, projectId);
+      await normalizeGroups(tx, projectId);
+      const groups = await tx.deduplicationGroup.findMany({
+        where: { projectId, status: query.status ?? "OPEN" },
+        orderBy: { createdAt: "asc" },
         include: {
-          citationA: { include: { identifiers: true } },
-          citationB: { include: { identifiers: true } },
-          decidedBy: { select: { id: true, name: true, email: true } },
+          candidates: {
+            where: {
+              projectId,
+              citationA: { projectId },
+              citationB: { projectId },
+            },
+            orderBy: { score: "desc" },
+            include: {
+              citationA: { include: { identifiers: true } },
+              citationB: { include: { identifiers: true } },
+              decidedBy: { select: { id: true, name: true, email: true } },
+            },
+          },
         },
-      },
+      });
+      return groups.map((group) => {
+        const candidates = group.candidates.map((candidate) => ({
+          ...candidate,
+          metadataConflicts: metadataConflicts(candidate.citationA, candidate.citationB),
+        }));
+        const members = [
+          ...new Map(
+            candidates
+              .filter((c) => c.status === "SUGGESTED")
+              .flatMap((c) =>
+                [c.citationA, c.citationB].map((citation) => [citation.id, citation] as const),
+              ),
+          ).values(),
+        ];
+        return {
+          ...group,
+          candidates,
+          metadataConflicts: clusterMetadataConflicts(members),
+          bulkExactDoiEligible: exactDoiEligible(projectId, candidates),
+        };
+      });
     },
-  });
+    { timeout: 60_000 },
+  );
 }
 
 // Merge a group into a canonical citation (R8 + R17). Every other ACTIVE member becomes
@@ -276,8 +250,12 @@ export async function mergeGroup(
 ) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
-  return prisma.$transaction((tx) =>
-    mergeGroupInTransaction(tx, ctx, projectId, groupId, input),
+  return prisma.$transaction(
+    async (tx) => {
+      await lockDedupProject(tx, projectId);
+      return mergeGroupInTransaction(tx, ctx, projectId, groupId, input);
+    },
+    { timeout: 60_000 },
   );
 }
 
@@ -291,7 +269,14 @@ async function mergeGroupInTransaction(
 ) {
   const group = await tx.deduplicationGroup.findFirst({
     where: { id: groupId, projectId },
-    include: { candidates: true },
+    include: {
+      candidates: {
+        include: {
+          citationA: { select: { projectId: true, status: true } },
+          citationB: { select: { projectId: true, status: true } },
+        },
+      },
+    },
   });
   if (!group) throw notFound("Deduplication group");
   if (group.status !== "OPEN") throw invalidState("This group has already been resolved");
@@ -301,6 +286,22 @@ async function mergeGroupInTransaction(
   if (suggested.length === 0) {
     throw invalidState("This group has no suggested candidates left to merge");
   }
+  if (
+    suggested.some(
+      (edge) =>
+        edge.projectId !== projectId ||
+        edge.citationA.projectId !== projectId ||
+        edge.citationB.projectId !== projectId ||
+        edge.citationA.status !== "ACTIVE" ||
+        edge.citationB.status !== "ACTIVE" ||
+        edge.citationAId === edge.citationBId,
+    ) ||
+    connectedComponents(suggested).length !== 1
+  ) {
+    throw invalidState(
+      "Duplicate cluster membership has changed or is disconnected. Refresh to review the separate clusters before merging.",
+    );
+  }
   const memberIds = new Set<string>();
   for (const cand of suggested) {
     memberIds.add(cand.citationAId);
@@ -309,6 +310,22 @@ async function mergeGroupInTransaction(
   if (!memberIds.has(input.canonicalCitationId)) {
     throw invalidState("Canonical citation must be a member of this group");
   }
+  const outsideEdge = await tx.deduplicationCandidate.findFirst({
+    where: {
+      projectId,
+      status: "SUGGESTED",
+      citationA: { projectId, status: "ACTIVE" },
+      citationB: { projectId, status: "ACTIVE" },
+      AND: [
+        {
+          OR: [{ citationAId: { in: [...memberIds] } }, { citationBId: { in: [...memberIds] } }],
+        },
+        { OR: [{ groupId: null }, { groupId: { not: groupId } }] },
+      ],
+    },
+  });
+  if (outsideEdge)
+    throw invalidState("Duplicate cluster membership is stale. Refresh before merging.");
   const canonical = await tx.citation.findFirst({
     where: { id: input.canonicalCitationId, projectId },
   });
@@ -327,7 +344,9 @@ async function mergeGroupInTransaction(
 
   // R8 warning: both canonical and a duplicate already carry screening decisions.
   const decisionRows = await tx.screeningDecision.findMany({
-    where: { citationId: { in: [canonical.id, ...duplicates.map((d) => d.id)] } },
+    where: {
+      citationId: { in: [canonical.id, ...duplicates.map((d) => d.id)] },
+    },
     select: { citationId: true },
   });
   const citationIdsWithDecisions = new Set(decisionRows.map((d) => d.citationId));
@@ -384,7 +403,7 @@ async function mergeGroupInTransaction(
 
   const decidedAt = new Date();
   await tx.deduplicationCandidate.updateMany({
-    where: { groupId, status: "SUGGESTED" },
+    where: { projectId, groupId, status: "SUGGESTED" },
     data: { status: "MERGED", decidedById: ctx.userId, decidedAt },
   });
   const resolvedGroup = await tx.deduplicationGroup.update({
@@ -426,6 +445,8 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
 
   return prisma.$transaction(
     async (tx) => {
+      await lockDedupProject(tx, projectId);
+      await normalizeGroups(tx, projectId);
       const groups = await tx.deduplicationGroup.findMany({
         where: { projectId, status: "OPEN" },
         orderBy: { createdAt: "asc" },
@@ -448,18 +469,8 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
         ),
       );
       const eligible = groupsWithExactDoiEvidence.flatMap((group) => {
-        const suggested = group.candidates.filter(
-          (candidate) => candidate.status === "SUGGESTED",
-        );
-        if (
-          suggested.length === 0 ||
-          group.candidates.some((candidate) => candidate.status === "REJECTED") ||
-          !suggested.every(
-            (candidate) => candidate.method === "EXACT_DOI" && candidate.score === 1,
-          )
-        ) {
-          return [];
-        }
+        const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
+        if (!exactDoiEligible(projectId, group.candidates)) return [];
 
         const citations = new Map<string, BulkCanonicalCitation>();
         for (const candidate of suggested) {
@@ -467,16 +478,6 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
           citations.set(candidate.citationB.id, candidate.citationB);
         }
         const members = [...citations.values()];
-        const memberDois = members.map((citation) => normalizeDoi(citation.doi));
-        const normalizedDois = new Set(memberDois);
-        if (
-          members.length < 2 ||
-          members.some((citation) => citation.status !== "ACTIVE") ||
-          memberDois.some((doi) => doi === null) ||
-          normalizedDois.size !== 1
-        ) {
-          return [];
-        }
         return [{ groupId: group.id, canonical: chooseBulkCanonical(members) }];
       });
 
@@ -534,52 +535,57 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
   );
 }
 
-// Reject a suggested pair. When the group has no SUGGESTED pair left it is RESOLVED.
+// Reject a suggested pair and immediately repartition the remaining ACTIVE graph.
 export async function rejectCandidate(ctx: Ctx, projectId: string, candidateId: string) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
-  return prisma.$transaction(async (tx) => {
-    const candidate = await tx.deduplicationCandidate.findFirst({
-      where: { id: candidateId, projectId },
-    });
-    if (!candidate) throw notFound("Deduplication candidate");
-    if (candidate.status !== "SUGGESTED") {
-      throw invalidState("Only suggested candidates can be rejected");
-    }
-    const updated = await tx.deduplicationCandidate.update({
-      where: { id: candidate.id },
-      data: { status: "REJECTED", decidedById: ctx.userId, decidedAt: new Date() },
-    });
-    await audit.record(tx, {
-      projectId,
-      userId: ctx.userId,
-      entityType: "DeduplicationCandidate",
-      entityId: candidate.id,
-      action: AuditActions.DEDUP_REJECTED,
-      previousValue: { status: "SUGGESTED" },
-      newValue: { status: "REJECTED" },
-      metadata: {
-        groupId: candidate.groupId,
-        citationAId: candidate.citationAId,
-        citationBId: candidate.citationBId,
-      },
-    });
-
-    let groupResolved = false;
-    if (candidate.groupId) {
-      const remaining = await tx.deduplicationCandidate.count({
-        where: { groupId: candidate.groupId, status: "SUGGESTED" },
+  return prisma.$transaction(
+    async (tx) => {
+      await lockDedupProject(tx, projectId);
+      const candidate = await tx.deduplicationCandidate.findFirst({
+        where: { id: candidateId, projectId },
       });
-      if (remaining === 0) {
-        await tx.deduplicationGroup.update({
-          where: { id: candidate.groupId },
-          data: { status: "RESOLVED" },
-        });
-        groupResolved = true;
+      if (!candidate) throw notFound("Deduplication candidate");
+      if (candidate.status !== "SUGGESTED") {
+        throw invalidState("Only suggested candidates can be rejected");
       }
-    }
-    return { candidate: updated, groupResolved };
-  });
+      const updated = await tx.deduplicationCandidate.update({
+        where: { id: candidate.id },
+        data: {
+          status: "REJECTED",
+          decidedById: ctx.userId,
+          decidedAt: new Date(),
+        },
+      });
+      await audit.record(tx, {
+        projectId,
+        userId: ctx.userId,
+        entityType: "DeduplicationCandidate",
+        entityId: candidate.id,
+        action: AuditActions.DEDUP_REJECTED,
+        previousValue: { status: "SUGGESTED" },
+        newValue: { status: "REJECTED" },
+        metadata: {
+          groupId: candidate.groupId,
+          citationAId: candidate.citationAId,
+          citationBId: candidate.citationBId,
+        },
+      });
+
+      const { groupsOpen } = await normalizeGroups(tx, projectId);
+      const group = candidate.groupId
+        ? await tx.deduplicationGroup.findFirst({
+            where: { id: candidate.groupId, projectId },
+          })
+        : null;
+      return {
+        candidate: updated,
+        groupResolved: group?.status === "RESOLVED",
+        groupsOpen,
+      };
+    },
+    { timeout: 60_000 },
+  );
 }
 
 // Undo a merge for one merged citation. The restore payload comes from the audit metadata
@@ -587,7 +593,9 @@ export async function rejectCandidate(ctx: Ctx, projectId: string, candidateId: 
 export async function undoMerge(ctx: Ctx, projectId: string, citationId: string) {
   await requirePermission(ctx, projectId, "dedup.manage");
 
-  return prisma.$transaction((tx) => undoMergeInTransaction(tx, ctx, projectId, citationId));
+  return prisma.$transaction((tx) => undoMergeInTransaction(tx, ctx, projectId, citationId), {
+    timeout: 60_000,
+  });
 }
 
 // Internal form for workflows that must restore a retained citation as one step of a larger
@@ -599,7 +607,10 @@ export async function undoMergeInTransaction(
   projectId: string,
   citationId: string,
 ) {
-  const citation = await tx.citation.findFirst({ where: { id: citationId, projectId } });
+  await lockDedupProject(tx, projectId);
+  const citation = await tx.citation.findFirst({
+    where: { id: citationId, projectId },
+  });
   if (!citation) throw notFound("Citation");
   if (citation.status !== "DUPLICATE") {
     throw invalidState("Only citations merged as duplicates can be restored");
@@ -658,11 +669,9 @@ export async function undoMergeInTransaction(
       },
       data: { status: "SUGGESTED", decidedById: null, decidedAt: null },
     });
-    await tx.deduplicationGroup.updateMany({
-      where: { id: groupId, projectId },
-      data: { status: "OPEN" },
-    });
   }
+
+  await normalizeGroups(tx, projectId);
 
   await audit.record(tx, {
     projectId,
@@ -670,10 +679,18 @@ export async function undoMergeInTransaction(
     entityType: "Citation",
     entityId: citation.id,
     action: AuditActions.DEDUP_MERGE_UNDONE,
-    previousValue: { status: "DUPLICATE", duplicateOfId: citation.duplicateOfId },
+    previousValue: {
+      status: "DUPLICATE",
+      duplicateOfId: citation.duplicateOfId,
+    },
     newValue: { status: "ACTIVE", duplicateOfId: null },
     metadata: { groupId, restoredAssignmentIds, restoredConflictIds },
   });
 
-  return { citation: restored, groupId, restoredAssignmentIds, restoredConflictIds };
+  return {
+    citation: restored,
+    groupId,
+    restoredAssignmentIds,
+    restoredConflictIds,
+  };
 }
