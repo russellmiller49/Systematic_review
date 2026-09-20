@@ -13,41 +13,60 @@ export const pooledIdentitySelect = {
   createdAt: true,
 } satisfies Prisma.CitationSelect;
 
+export async function loadPooledCitationGroups(db: Tx, projectIds: string[]) {
+  return groupPooledCitationRows(
+    await db.citation.findMany({
+      where: { projectId: { in: projectIds }, status: "ACTIVE" },
+      select: pooledIdentitySelect,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+  );
+}
+
+export type PooledCitationGroups = Awaited<
+  ReturnType<typeof loadPooledCitationGroups>
+>;
+
 export async function loadPooledState(
   db: Tx,
   projectIds: string[],
   stageIds: string[],
+  selectedGroups?: PooledCitationGroups,
 ) {
-  const [citations, assignments, decisions, results, conflicts] =
-    await Promise.all([
-      db.citation.findMany({
-        where: { projectId: { in: projectIds }, status: "ACTIVE" },
-        select: pooledIdentitySelect,
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      }),
-      db.screeningAssignment.findMany({
-        where: { stageId: { in: stageIds } },
-        select: { citationId: true, reviewerId: true, status: true },
-      }),
-      db.screeningDecision.findMany({
-        where: { stageId: { in: stageIds } },
-        select: {
-          citationId: true,
-          reviewerId: true,
-          decision: true,
-          notes: true,
-          exclusionReason: { select: { label: true } },
-        },
-      }),
-      db.citationStageResult.findMany({
-        where: { stageId: { in: stageIds } },
-        select: { citationId: true, outcome: true },
-      }),
-      db.screeningConflict.findMany({
-        where: { stageId: { in: stageIds }, status: "OPEN" },
-        select: { citationId: true },
-      }),
-    ]);
+  const groups =
+    selectedGroups ?? (await loadPooledCitationGroups(db, projectIds));
+  const where = {
+    stageId: { in: stageIds },
+    ...(selectedGroups
+      ? {
+          citationId: { in: groups.flatMap((group) => group.map((c) => c.id)) },
+        }
+      : {}),
+  };
+  const [assignments, decisions, results, conflicts] = await Promise.all([
+    db.screeningAssignment.findMany({
+      where,
+      select: { citationId: true, reviewerId: true, status: true },
+    }),
+    db.screeningDecision.findMany({
+      where,
+      select: {
+        citationId: true,
+        reviewerId: true,
+        decision: true,
+        notes: true,
+        exclusionReason: { select: { label: true } },
+      },
+    }),
+    db.citationStageResult.findMany({
+      where,
+      select: { citationId: true, outcome: true },
+    }),
+    db.screeningConflict.findMany({
+      where: { ...where, status: "OPEN" },
+      select: { citationId: true },
+    }),
+  ]);
   const byCitation = <T extends { citationId: string }>(rows: T[]) => {
     const map = new Map<string, T[]>();
     for (const row of rows) {
@@ -64,7 +83,7 @@ export async function loadPooledState(
   );
   const conflictIds = new Set(conflicts.map((c) => c.citationId));
 
-  return groupPooledCitationRows(citations).map((group) => {
+  return groups.map((group) => {
     const rows = group.map((citation) => {
       const assignments = assignmentsByCitation.get(citation.id) ?? [];
       const decisions = decisionsByCitation.get(citation.id) ?? [];

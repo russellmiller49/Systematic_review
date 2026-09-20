@@ -791,6 +791,9 @@ export async function commitBatch(ctx: Ctx, projectId: string, batchId: string) 
 
   return prisma.$transaction(
     async (tx) => {
+      // Pooled decisions hold shared project guards while resolving linked identities.
+      // Imports must not introduce a new linked copy during that atomic review.
+      await lockDedupProject(tx, projectId);
       const batch = await tx.importBatch.findFirst({ where: { id: batchId, projectId } });
       if (!batch) throw notFound("Import batch");
 

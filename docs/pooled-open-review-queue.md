@@ -41,7 +41,9 @@ unfinalized decisions can be revised under ordinary screening rules. Revisions c
 and preserve an omitted note; explicit null/empty notes clear it. Target increases take
 effect on the next refresh. Reductions below completed work and zero targets never delete
 work. Historical completed fixed reviews count once per logical group, including when a
-new copy has made that group need synchronization.
+new copy has made that group need synchronization. A COMPLETED assignment without a
+matching decision receives no quota credit. This historical credit is separate from
+admin finalized/fully-reviewed counts, which exclude synchronization exceptions.
 
 ## Navigation and decisions
 
@@ -66,8 +68,13 @@ in ordinary screening. Pooled decisions operate one logical abstract at a time.
 
 ## Atomicity and concurrency
 
-Pooled writes acquire ordered project locks (compatible with deduplication's project
-lock), then all selected stage locks in a deterministic order. After waiting, they
+Pooled writes acquire shared guards on the selected project and stage rows, then an
+exclusive lock on the requesting reviewer's pooled quota row (if present), then exclusive
+locks on the selected linked citation rows. IDs are sorted within each lock class.
+Different reviewers on different abstracts can hold these guards concurrently. Imports
+and deduplication take a conflicting project guard; configuration changes take conflicting
+stage guards. The per-citation writer retains the shared guard without upgrading it.
+After waiting, writes
 recheck pool membership, current stage configuration, quota progress, exact requested
 group membership, all linked screening state, previous reviewer participation, final
 results, and independent review capacity. Screening membership is also rechecked.
@@ -109,7 +116,14 @@ Blinded navigator responses contain aggregate review counts and the requesting r
 own decision/note. Other reviewers' identities, notes, and decisions are never returned,
 even in the Owner/Admin All navigator. Existing final-outcome visibility is retained.
 
-## Validation
+## Production-readiness review
+
+The focused hardening pass found and fixed orphan-assignment quota credit, missing import
+coordination, and five-second transaction expirations under 40-reviewer contention.
+See [production-readiness evidence and decision gate](pooled-production-readiness.md)
+for current validation, exact lock scope, measurements, repair steps, and limitations.
+
+## Initial implementation validation (before hardening)
 
 - Before changes: all 14 existing pooled/quota integration tests passed.
 - Unit suite: 642 tests passed in 62 files, including pooled grouping and new query/Maybe/skip schema cases.
@@ -141,18 +155,20 @@ Synchronization repair remains an administrative task. For example, independentl
 adjudicating/reopening only one linked PICO, or importing a new matching copy after review,
 can temporarily require synchronization. Those abstracts are explicitly unavailable
 rather than accepting a partial pooled write. This change does not add a bulk repair tool
-or change existing exact grouping rules. Concurrent imports can extend the corpus; new
-copies are checked on the next request.
+or change existing exact grouping rules. Concurrent imports wait for active pooled review
+guards before extending the corpus; subsequently imported copies are classified on the
+next request and may correctly require synchronization.
 
-Locks remain deliberately coarse across the selected screening stages, and project locks
-also coordinate with deduplication. The scale test verifies corpus handling, not sustained
-multi-user load. If real traffic shows contention, finer locks and a persisted logical
-identity can be evaluated separately without changing quota semantics.
+Shared project/stage guards still let administrative or corpus mutations temporarily
+block the pool. Exclusive decision locks cover only one reviewer quota and the selected
+linked citation records. The new contention test checks 40 simultaneous local submissions;
+it does not establish sustained production throughput. Persisted logical identities and
+further query tuning remain follow-ups if corpus size or measured latency requires them.
 
 ## Changed files
 
 - Backend: `src/server/services/screening/pooled.ts`, new `pooled-state.ts`, `quotas.ts`,
-  `index.ts`, and `src/app/api/projects/[projectId]/screening/pooled/route.ts`.
+  `index.ts`, new `pooled-locks.ts`, `src/server/services/imports/index.ts`, and `src/app/api/projects/[projectId]/screening/pooled/route.ts`.
 - Shared UI: `article-navigator.tsx`, new `article-position.tsx`, `decision-controls.tsx`,
   and `use-screening-shortcuts.ts` under `src/components/screening/`.
 - Workspaces and administration in that same UI directory: `stage-queue.tsx`,
@@ -162,4 +178,7 @@ identity can be evaluated separately without changing quota semantics.
   `tests/integration/pooled-screening.test.ts`, new `tests/integration/pooled-open-queue.test.ts`,
   new `e2e/pooled-open-queue.spec.ts`, `e2e/screening-quotas.spec.ts`,
   `e2e/happy-path.spec.ts`, and `playwright.quota.config.ts`.
-- Documentation: `README.md` and this report.
+- Hardening tests: `tests/fixtures/pooled-readiness.ts`,
+  `tests/integration/pooled-readiness.test.ts`, `tests/integration/pooled-contention.test.ts`;
+  expanded `e2e/pooled-open-queue.spec.ts` also exercises independent PICO 1.
+- Documentation: `README.md`, this report, and `docs/pooled-production-readiness.md`.

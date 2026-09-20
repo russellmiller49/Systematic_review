@@ -74,7 +74,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
   page: owner,
   browser,
 }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   if (
     !process.env.TEST_DATABASE_URL ||
     process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL
@@ -344,6 +344,178 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
       ),
     ).toBe(true);
     await expectNoErrorOverlay(reviewer);
+
+    // Final history stays readable while both UI and API forbid a revision.
+    const reviewedIds = linked.map((d) => d.citationId);
+    await post(second.request, endpoint, {
+      poolId: pool.id,
+      citationIds: reviewedIds,
+      decision: "INCLUDE",
+    });
+    await reviewer.setViewportSize({ width: 1280, height: 900 });
+    await navigator
+      .getByLabel("Filter article status")
+      .selectOption("MY_REVIEWED");
+    await expect(article).toContainText("Screening decisions are locked");
+    await expect(article).toContainText("Review eligibility with the group");
+    await expect(article.getByRole("button", { name: /^Maybe/ })).toHaveCount(
+      0,
+    );
+    const locked = await reviewer.request.post(endpoint, {
+      data: { poolId: pool.id, citationIds: reviewedIds, decision: "MAYBE" },
+    });
+    expect(locked.ok()).toBe(false);
+    await navigator
+      .getByLabel("Filter article status")
+      .selectOption("AVAILABLE");
+    await choose(reviewer, "002");
+    await reviewer.keyboard.press("1");
+    await expect(progress).toContainText("Completed: 2 · Remaining: 1");
+    const quick = await db.screeningDecision.findMany({
+      where: {
+        reviewerId,
+        citation: { projectId: { in: projectIds }, title: "Open abstract 002" },
+      },
+      include: { exclusionReason: true },
+    });
+    expect(quick).toHaveLength(3);
+    expect(
+      quick.every(
+        (d) => d.decision === "EXCLUDE" && d.exclusionReason !== null,
+      ),
+    ).toBe(true);
+
+    // PICO 1 shares the navigator and controls, but keeps its own corpus and quota.
+    const pico1 = picos[0]!;
+    await importPool(owner.request, pico1.id);
+    const stages = await get(
+      owner.request,
+      `/api/projects/${pico1.id}/screening/stages`,
+    );
+    const stage = stages.find(
+      (s: { type: string }) => s.type === "TITLE_ABSTRACT",
+    );
+    const ordinary = `/api/projects/${pico1.id}/screening/stages/${stage.id}`;
+    const quotaResponse = await owner.request.put(`${ordinary}/quotas`, {
+      data: {
+        reviewers: allMembers.map((m: { user: { id: string } }) => ({
+          reviewerId: m.user.id,
+          target: 4,
+        })),
+      },
+    });
+    expect(quotaResponse.ok(), await quotaResponse.text()).toBeTruthy();
+    const ordinaryBefore = await db.auditEvent.count({
+      where: { projectId: pico1.id },
+    });
+    await reviewer.goto(`/projects/${pico1.id}/screening`);
+    await expect(progress).toContainText(
+      "Target: 4 · Completed: 0 · Remaining: 4",
+    );
+    await expect(navigator.getByRole("listitem")).toHaveCount(50);
+    await choose(reviewer, "037");
+    await reviewer.keyboard.press("ArrowRight");
+    await expect(
+      article.getByRole("heading", { name: "Open abstract 038", exact: true }),
+    ).toBeVisible();
+    await article
+      .getByRole("button", { name: "Previous article", exact: true })
+      .click();
+    await expect(
+      article.getByRole("heading", { name: "Open abstract 037", exact: true }),
+    ).toBeVisible();
+    await navigator.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(navigator.getByRole("listitem")).toHaveCount(15);
+    await choose(reviewer, "060");
+    await navigator
+      .getByLabel("Search available and reviewed articles")
+      .fill("Open abstract 065");
+    await navigator
+      .getByRole("button", { name: "Search articles", exact: true })
+      .click();
+    await expect(navigator.getByRole("listitem")).toHaveCount(1);
+    await navigator
+      .getByRole("button", { name: "Clear article search" })
+      .click();
+    await expect(navigator.getByRole("listitem")).toHaveCount(50);
+    expect(
+      await db.screeningAssignment.count({
+        where: { citation: { projectId: pico1.id } },
+      }),
+    ).toBe(0);
+    expect(await db.auditEvent.count({ where: { projectId: pico1.id } })).toBe(
+      ordinaryBefore,
+    );
+    await choose(reviewer, "037");
+    await reviewer.keyboard.press("n");
+    await article.getByLabel("Reviewer note").fill("Independent PICO 1 note");
+    await reviewer.keyboard.press("Escape");
+    await reviewer.keyboard.press("m");
+    await expect(progress).toContainText("Completed: 1 · Remaining: 3");
+    await navigator.getByLabel("Filter article status").selectOption("DECIDED");
+    await expect(article.getByLabel("Reviewer note")).toHaveValue(
+      "Independent PICO 1 note",
+    );
+    await article.getByRole("button", { name: /^Include/ }).click();
+    await expect(article).toContainText("Your decision: include");
+    await expect(progress).toContainText("Completed: 1 · Remaining: 3");
+    await navigator
+      .getByLabel("Filter article status")
+      .selectOption("UNDECIDED");
+    await choose(reviewer, "038");
+    await reviewer.keyboard.press("1");
+    await expect(progress).toContainText("Completed: 2 · Remaining: 2");
+    await choose(reviewer, "039");
+    await article.getByRole("button", { name: /^Exclude / }).click();
+    const exclusion = reviewer.getByRole("dialog");
+    await exclusion.getByLabel("Note (optional)").fill("PICO 1 reason note");
+    await exclusion
+      .getByLabel("Exclusion reason subgroup")
+      .selectOption({ index: 1 });
+    await expect(progress).toContainText("Completed: 3 · Remaining: 1");
+    const individualQueue = await get(owner.request, `${ordinary}/navigator`);
+    const shared = individualQueue.items.find(
+      (i: { citation: { title: string } }) =>
+        i.citation.title === "Open abstract 040",
+    );
+    await post(owner.request, `${ordinary}/decisions`, {
+      citationId: shared.citation.id,
+      decision: "INCLUDE",
+    });
+    await reviewer.reload();
+    await choose(reviewer, "040");
+    await expect(article).toContainText("1 of 2 required reviews submitted");
+    await reviewer.keyboard.press("i");
+    await expect(progress).toContainText("Completed: 4 · Remaining: 0");
+    const individualDecisions = await db.screeningDecision.findMany({
+      where: { reviewerId, citation: { projectId: pico1.id } },
+      include: { citation: true, exclusionReason: true },
+    });
+    expect(individualDecisions).toHaveLength(4);
+    expect(
+      individualDecisions.find((d) => d.citation.title === "Open abstract 037"),
+    ).toMatchObject({ decision: "INCLUDE", notes: "Independent PICO 1 note" });
+    expect(
+      individualDecisions.find((d) => d.citation.title === "Open abstract 039"),
+    ).toMatchObject({
+      decision: "EXCLUDE",
+      notes: "PICO 1 reason note",
+      exclusionReason: expect.any(Object),
+    });
+    expect(
+      (await get(reviewer.request, `${endpoint}?poolId=${pool.id}`)).quota
+        .completed,
+    ).toBe(2);
+    await owner.goto(`/projects/${pico1.id}/screening`);
+    await owner.getByRole("tab", { name: "Admin view", exact: true }).click();
+    await expect(owner.getByLabel("Filter screening status")).toBeVisible();
+    await owner.getByLabel("Search article titles").fill("Open abstract 040");
+    await owner.getByRole("button", { name: "Search", exact: true }).click();
+    await expect(
+      owner.getByText("Open abstract 040", { exact: true }),
+    ).toBeVisible();
+    await expectNoErrorOverlay(reviewer);
+    await expectNoErrorOverlay(owner);
   } finally {
     await reviewerContext.close();
     await secondContext.close();

@@ -10,7 +10,12 @@ import { z } from "zod";
 import { Prisma, type ScreeningStage } from "@prisma/client";
 import { quotaProgress, lockScreeningStages } from "./quotas";
 import { groupPooledCitationRows } from "./grouping";
-import { loadPooledState, pooledReviewerState } from "./pooled-state";
+import {
+  loadPooledState,
+  loadPooledCitationGroups,
+  pooledReviewerState,
+} from "./pooled-state";
+import { lockPooledDecision } from "./pooled-locks";
 import { prisma } from "@/server/db";
 import {
   forbidden,
@@ -419,8 +424,7 @@ export async function getPooledQueue(
   const required = stages[0]!.reviewersPerCitation;
   return prisma.$transaction(
     async (tx) => {
-      const [quota, states, reasons, searchMatches] = await Promise.all([
-        quotaProgress(tx, { poolId: query.poolId }, ctx.userId),
+      const [states, reasons, searchMatches] = await Promise.all([
         loadPooledState(
           tx,
           projectIds,
@@ -449,6 +453,12 @@ export async function getPooledQueue(
     `)
           : null,
       ]);
+      const quota = await quotaProgress(
+        tx,
+        { poolId: query.poolId },
+        ctx.userId,
+        states.map((s) => s.group),
+      );
       const searchIds = searchMatches
         ? new Set(searchMatches.map((c) => c.id))
         : null;
@@ -732,15 +742,14 @@ export async function createPooledDecision(
   const stages = await titleAbstractStages(orderedProjectIds);
 
   return prisma.$transaction(async (tx) => {
-    for (const projectId of [...orderedProjectIds].sort()) {
-      await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id" = ${projectId} FOR NO KEY UPDATE`;
-    }
-    await lockScreeningStages(
-      tx,
-      stages.map((stage) => stage.id),
-    );
+    const decisionLocks = await lockPooledDecision(tx, {
+      projectIds: orderedProjectIds,
+      stageIds: stages.map((s) => s.id),
+      citationIds: input.citationIds,
+      poolId: input.poolId,
+      reviewerId: ctx.userId,
+    });
     await requirePermission(ctx, guidelineId, "screening.decide", tx);
-    const quota = await quotaProgress(tx, { poolId: input.poolId }, ctx.userId);
     const currentMembers = await tx.guidelineScreeningPoolMember.findMany({
       where: { poolId: input.poolId },
     });
@@ -756,38 +765,36 @@ export async function createPooledDecision(
       where: { id: { in: stages.map((s) => s.id) } },
     });
     assertCompatibleStages(currentStages);
-    const states = await loadPooledState(
-      tx,
-      orderedProjectIds,
-      currentStages.map((s) => s.id),
-    );
+    const groups = await loadPooledCitationGroups(tx, orderedProjectIds);
     const requestedIds = new Set(input.citationIds);
-    const state = states.find((s) =>
-      s.group.some((c) => requestedIds.has(c.id)),
+    const group = groups.find((group) =>
+      group.some((c) => requestedIds.has(c.id)),
     );
     if (
-      !state ||
-      state.group.length !== requestedIds.size ||
-      state.group.some((c) => !requestedIds.has(c.id))
+      !group ||
+      group.length !== requestedIds.size ||
+      group.some((c) => !requestedIds.has(c.id))
     ) {
       throw invalidState(
         "This pooled abstract changed after it was loaded. Refresh the queue before deciding.",
       );
     }
-    const group = state.group;
+    const [state] = await loadPooledState(
+      tx,
+      orderedProjectIds,
+      currentStages.map((s) => s.id),
+      [group],
+    );
+    if (!state)
+      throw invalidState("This pooled abstract changed. Refresh the queue.");
     if (state.needsSynchronization) {
       throw invalidState(
         "This abstract needs synchronization across its linked PICOs. Choose another abstract and ask an administrator to review the linked screening state.",
       );
     }
-    const personal = pooledReviewerState(
-      state,
-      ctx.userId,
-      currentStages[0]!.reviewersPerCitation,
-      quota,
-    );
+    // Full groups reject before the corpus-wide quota count, including stale waiters.
     if (
-      !personal.hasReviewed &&
+      !state.reviewedBy.has(ctx.userId) &&
       (state.finalOutcome ||
         state.reviewedBy.size >= currentStages[0]!.reviewersPerCitation)
     ) {
@@ -795,6 +802,18 @@ export async function createPooledDecision(
         "This abstract has just received all required reviews. Choose another abstract.",
       );
     }
+    const quota = await quotaProgress(
+      tx,
+      { poolId: input.poolId },
+      ctx.userId,
+      groups,
+    );
+    const personal = pooledReviewerState(
+      state,
+      ctx.userId,
+      currentStages[0]!.reviewersPerCitation,
+      quota,
+    );
     if (state.finalOutcome)
       throw invalidState(
         "This abstract has a final stage outcome. An administrator must reopen every linked record before revision.",
@@ -862,6 +881,7 @@ export async function createPooledDecision(
           },
           metadata,
           quota !== null,
+          decisionLocks,
         ),
       );
     }

@@ -28,6 +28,7 @@ import {
   completedReviewCounts,
   lockScreeningStages,
 } from "./quotas";
+import type { PooledDecisionLocks } from "./pooled-locks";
 import * as studies from "@/server/services/studies";
 
 // ---------------------------------------------------------------------------
@@ -1460,9 +1461,22 @@ export async function createDecisionInTransaction(
   input: z.infer<typeof createDecisionSchema>,
   auditMetadata?: Record<string, unknown>,
   pooledQuotaAuthorized = false,
+  pooledLocks?: PooledDecisionLocks,
 ) {
   if (stage.projectId !== projectId) throw notFound("Screening stage");
-  await lockScreeningStages(tx, [stage.id]);
+  if (pooledLocks) {
+    if (
+      pooledLocks.poolId !== auditMetadata?.pooledScreeningPoolId ||
+      !pooledLocks.stageIds.has(stage.id) ||
+      !pooledLocks.citationIds.has(input.citationId)
+    ) {
+      throw invalidState(
+        "Pooled decision lock scope does not match this citation",
+      );
+    }
+  } else {
+    await lockScreeningStages(tx, [stage.id]);
+  }
   stage = await getStageOr404(tx, projectId, stage.id);
   await requirePermission(ctx, projectId, "screening.decide", tx);
   if (!auditMetadata?.pooledScreeningPoolId)
