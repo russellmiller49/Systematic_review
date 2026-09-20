@@ -701,8 +701,18 @@ model ImportBatch {
   source        ImportSource           @relation(fields: [sourceId], references: [id])
   createdBy     User                   @relation("ImportCreator", fields: [createdById], references: [id])
   sourceRecords CitationSourceRecord[]
+  upload        ImportBatchUpload?
 
   @@index([projectId])
+}
+
+// Original decoded upload, before parser normalization. Separate from citation rows
+// and ordinary batch reads; absent for imports created before upload preservation.
+model ImportBatchUpload {
+  batchId String @id
+  content String @db.Text
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 }
 
 // The report (article/abstract/registry entry). Never hard-deleted; dedup flips status.

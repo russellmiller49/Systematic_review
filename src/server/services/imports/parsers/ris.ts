@@ -2,7 +2,6 @@
 import { normalizeDoi, normalizePmid, parseAuthorName } from "@/server/services/citations/normalize";
 import { extractRegistryIds } from "./registry-ids";
 import {
-  emptyFileResult,
   extractYear,
   preprocess,
   type ParsedRecord,
@@ -21,26 +20,11 @@ interface OpenRecord {
 
 export function parseRis(content: string): ParseResult {
   const text = preprocess(content);
-  if (text.trim().length === 0) return emptyFileResult();
 
   const records: ParsedRecord[] = [];
   const errors: ParseRowError[] = [];
   let rowNumber = 0;
   let current: OpenRecord | null = null;
-  let stray: string[] = [];
-
-  const flushStray = () => {
-    const chunk = stray.join("\n").trim();
-    stray = [];
-    if (chunk) {
-      rowNumber += 1;
-      errors.push({
-        rowNumber,
-        message: "Content outside of a RIS record (expected a TY..ER block)",
-        rawChunk: chunk,
-      });
-    }
-  };
 
   const finishRecord = (terminated: boolean) => {
     if (!current) return;
@@ -91,16 +75,12 @@ export function parseRis(content: string): ParseResult {
         values[idx] = `${values[idx] ?? ""} ${line.trim()}`.trim();
       }
     } else if (m && m[1] === "TY") {
-      flushStray();
       current = { tags: new Map([["TY", [m[2] ?? ""]]]), lines: [line], lastTag: "TY" };
-    } else if (line.trim() === "") {
-      flushStray();
-    } else {
-      stray.push(line);
     }
+    // Only TY opens a citation. Headers, footers, and orphan tags outside a
+    // record are not citation rows; the import service preserves the full upload.
   }
   if (current) finishRecord(false);
-  flushStray();
 
   return { records, errors };
 }

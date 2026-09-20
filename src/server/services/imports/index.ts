@@ -192,10 +192,12 @@ export async function createBatch(
           parsedRecords: records.length,
           failedRecords: errors.length,
           createdById: ctx.userId,
+          upload: { create: { content: input.content } },
         },
       });
 
-      // Every row is preserved — including unparseable ones (citationId stays null).
+      // Citation rows include malformed candidates (citationId stays null).
+      // Non-citation metadata is preserved in the upload, not counted as failed rows.
       const rows: Prisma.CitationSourceRecordCreateManyInput[] = [
         ...records.map((record) => {
           const { rawChunk, rowNumber, ...parsed } = record;

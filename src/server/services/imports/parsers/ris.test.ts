@@ -3,6 +3,7 @@ import { parseRis } from "./ris";
 import {
   RIS_AFFILIATIONS,
   RIS_BOM_CRLF,
+  RIS_COCHRANE_CENTRAL_3,
   RIS_EMPTY,
   RIS_MALFORMED,
   RIS_PUBMED_5,
@@ -92,21 +93,70 @@ describe("parseRis", () => {
     expect(errors[1]!.rawChunk).toContain("This record never terminates");
   });
 
-  it("stray non-RIS content becomes an error row and later records still parse", () => {
+  it("ignores preamble text without shifting citation row numbers", () => {
     const { records, errors } = parseRis(RIS_STRAY_CONTENT);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.rowNumber).toBe(1);
-    expect(errors[0]!.rawChunk).toContain("SomeTool");
+    expect(errors).toEqual([]);
     expect(records).toHaveLength(1);
     expect(records[0]!.title).toBe("Valid record after stray header text");
-    expect(records[0]!.rowNumber).toBe(2);
+    expect(records[0]!.rowNumber).toBe(1);
   });
 
-  it("empty file produces a single error row", () => {
-    const { records, errors } = parseRis(RIS_EMPTY);
-    expect(records).toEqual([]);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.message).toMatch(/empty/i);
+  it("counts only the three citations in a CENTRAL export", () => {
+    const { records, errors } = parseRis(RIS_COCHRANE_CENTRAL_3);
+    expect(records.length + errors.length).toBe(3);
+    expect(records).toHaveLength(3);
+    expect(errors).toEqual([]);
+    expect(records.map((r) => r.rowNumber)).toEqual([1, 2, 3]);
+    for (const record of records) {
+      expect(record.rawChunk).toMatch(/^TY  - JOUR\n/);
+      expect(record.rawChunk).toMatch(/\nER  -$/);
+      expect(record.rawChunk).not.toContain("Provider:");
+    }
+    expect(records[0]!.abstract).toBe(
+      "First line of the trial abstract continued within the citation.",
+    );
+  });
+
+  const single = "TY  - JOUR\nTI  - A citation\nER  -\n";
+  const metadata = "Provider: John Wiley & Sons, Ltd.\n\nExport complete\n";
+
+  it.each([
+    ["preamble", metadata + single, 1],
+    ["trailing metadata", single + metadata, 1],
+    ["metadata between records", single + metadata + single, 2],
+    ["orphan RIS tags", "TI  - Not a citation\nER  -\n" + single, 1],
+    ["embedded boundary text", "A header mentioning TY  - JOUR and ER  -\n" + single, 1],
+    ["metadata only", metadata, 0],
+    ["empty file", RIS_EMPTY, 0],
+    ["whitespace and BOM only", "\uFEFF \r\n\t\r\n", 0],
+  ])("ignores %s outside records", (_label, content, count) => {
+    const { records, errors } = parseRis(content);
+    expect(errors).toEqual([]);
+    expect(records).toHaveLength(count);
+    expect(records.map((r) => r.rowNumber)).toEqual(
+      Array.from({ length: count }, (_, i) => i + 1),
+    );
+  });
+
+  it("normalizes mixed LF, CRLF, bare CR, and BOM without changing boundaries", () => {
+    const mixed = "\uFEFF" + RIS_COCHRANE_CENTRAL_3.split("\n")
+      .map((line, index) => line + ["\n", "\r\n", "\r"][index % 3])
+      .join("");
+    expect(parseRis(mixed)).toEqual(parseRis(RIS_COCHRANE_CENTRAL_3));
+  });
+
+  it.each([
+    ["EOF", "", []],
+    ["the next TY", single, [2]],
+  ])("reports a TY without ER at %s, ignoring preceding metadata", (_label, suffix, rows) => {
+    const malformed = "TY  - JOUR\nTI  - Missing terminator\n";
+    const { records, errors } = parseRis(metadata + malformed + suffix);
+    expect(errors).toEqual([{
+      rowNumber: 1,
+      message: "Unterminated RIS record (missing ER tag)",
+      rawChunk: malformed.trimEnd(),
+    }]);
+    expect(records.map((r) => r.rowNumber)).toEqual(rows);
   });
 });
 
