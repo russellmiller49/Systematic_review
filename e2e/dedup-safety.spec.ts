@@ -2,6 +2,120 @@ import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { signUp, expectNoErrorOverlay } from "./helpers";
 
+test("reviewer can expand abstracts and identify a conference/full-publication pair", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const db = new PrismaClient();
+  try {
+    await signUp(page, "Abstract reviewer", `abstracts-${Date.now()}@test.local`);
+    const orgRes = await page.request.post("/api/orgs", {
+      data: { name: `Abstract QA ${Date.now()}` },
+    });
+    expect(orgRes.ok()).toBeTruthy();
+    const org = (await orgRes.json()).data;
+    const projectRes = await page.request.post(`/api/orgs/${org.id}/projects`, {
+      data: {
+        title: "Abstract comparison QA",
+        reviewType: "SYSTEMATIC_REVIEW",
+      },
+    });
+    expect(projectRes.ok()).toBeTruthy();
+    const project = (await projectRes.json()).data;
+    for (const [name, format, content] of [
+      [
+        "Embase",
+        "RIS",
+        "TY  - JOUR\nTI  - Comparative trial results\nM3  - Conference Abstract\nAB  - Preliminary results: 40 participants were enrolled.\nDO  - 10.1234/abstract-qa\nER  -",
+      ],
+      [
+        "PubMed",
+        "NBIB",
+        "PMID- 12345678\nTI  - Comparative trial results\nPT  - Journal Article\nAB  - Final results: 120 participants completed follow-up.\nAID - 10.1234/abstract-qa [doi]",
+      ],
+    ]) {
+      const sourceRes = await page.request.post(`/api/projects/${project.id}/import-sources`, {
+        data: { name },
+      });
+      expect(sourceRes.ok()).toBeTruthy();
+      const source = (await sourceRes.json()).data;
+      const importRes = await page.request.post(`/api/projects/${project.id}/imports`, {
+        multipart: {
+          sourceId: source.id,
+          format: format!,
+          file: {
+            name: `test.${format!.toLowerCase()}`,
+            mimeType: "text/plain",
+            buffer: Buffer.from(content!),
+          },
+        },
+      });
+      expect(importRes.ok()).toBeTruthy();
+      const batch = (await importRes.json()).data;
+      const commit = await page.request.post(
+        `/api/projects/${project.id}/imports/${batch.id}/commit`,
+      );
+      expect(commit.ok()).toBeTruthy();
+    }
+    const detection = await page.request.post(`/api/projects/${project.id}/dedup/run`);
+    expect(detection.ok()).toBeTruthy();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`/projects/${project.id}/dedup`);
+    const card = page.getByRole("button", {
+      name: /2 citations · 1 suggested pair/,
+    });
+    await expect(card).toContainText("Possible conference / full publication");
+    await expect(card).not.toContainText("100% match");
+    await expect(page.getByRole("button", { name: /Merge exact DOI matches/ })).toBeDisabled();
+    await card.click();
+    await expect(
+      page.getByText("Possible conference abstract and full publication", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByText("Embase", { exact: true })).toBeVisible();
+    await expect(page.getByText("PubMed", { exact: true })).toBeVisible();
+    const summary = page.locator("summary", { hasText: "Compare abstracts" });
+    const preliminary = page.getByText("Preliminary results: 40 participants were enrolled.", {
+      exact: true,
+    });
+    const final = page.getByText("Final results: 120 participants completed follow-up.", {
+      exact: true,
+    });
+    await expect(preliminary).not.toBeVisible();
+    await summary.focus();
+    await page.keyboard.press("Enter");
+    await expect(preliminary).toBeVisible();
+    await expect(final).toBeVisible();
+    await page.screenshot({
+      path: "test-results/dedup-abstracts-desktop.png",
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(summary).toBeVisible();
+    await page.screenshot({
+      path: "test-results/dedup-abstracts-mobile.png",
+      fullPage: true,
+    });
+    await summary.click();
+    await expect(preliminary).not.toBeVisible();
+    await db.citation.updateMany({
+      where: { projectId: project.id, pmid: "12345678" },
+      data: { abstract: null },
+    });
+    await page.reload();
+    await card.click();
+    await summary.click();
+    await expect(preliminary).toBeVisible();
+    await expect(page.getByText("No abstract available in this imported record.")).toBeVisible();
+    await expectNoErrorOverlay(page);
+    expect(errors).toEqual([]);
+  } finally {
+    await db.$disconnect();
+  }
+});
+
 // Real API + browser regression, intentionally using a sparse graph to exercise bridge rejection.
 test("rejection splits cards, resets canonical selection, and excludes metadata conflicts from bulk merge", async ({
   page,

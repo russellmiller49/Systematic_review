@@ -71,6 +71,30 @@ metadata completeness, oldest import, then citation ID. Historical rejected pair
 exclude their retained group from bulk merge even if a split moved the other endpoint away.
 Manual review/merge remains possible for conflicting records; no metadata is silently changed.
 
+## Abstract and publication-type comparison
+
+Each pair has a keyboard-accessible **Compare abstracts** disclosure showing both complete
+imported abstracts side by side. Empty abstracts are explicitly labeled as unavailable.
+
+Publication type and import source appear in the comparison. Publication types are preserved
+in source-record parsed JSON from RIS TY/M3/PT, NBIB PT, BibTeX entry/type fields, and CSV
+publication/document/reference-type columns. Existing RIS, NBIB, and BibTeX records are
+interpreted from their preserved raw record when parsed type metadata is absent. Legacy CSV
+rows do not contain their headers, so their type remains unknown until reimported with a
+supported type column. No database migration is required.
+
+A conference type paired with an explicit journal article type produces a **possible conference
+abstract and full publication** notice. Conference metadata takes precedence over generic JOUR
+tags. Abstract length, PMID presence, and words in the title/abstract are not publication-type
+evidence. Sources are displayed using the original import-source names, including PubMed and
+Embase when those are the selected sources. This compares imported records only; it neither
+searches external databases nor verifies full-text availability or study identity. Reviewers can
+retain separate reports using **Not a duplicate**.
+
+Any connected group containing both conference and journal types is excluded from bulk exact
+DOI merging, including when those members are not adjacent in the candidate graph. Eligibility
+is recalculated server-side at execution; manual review remains available.
+
 ## Limits requiring reviewer judgment
 
 A false relationship that remains SUGGESTED can still connect distinct publications. Reject

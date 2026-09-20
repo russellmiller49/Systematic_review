@@ -171,7 +171,7 @@ export function DedupClient({ projectId }: { projectId: string }) {
       }
       if (result.groupsSkippedForReview > 0) {
         notices.push(
-          `${result.groupsSkippedForReview} group${result.groupsSkippedForReview === 1 ? " was" : "s were"} left open because it also contained non-DOI evidence, rejected pairs, metadata conflicts, or stale citation data.`,
+          `${result.groupsSkippedForReview} group${result.groupsSkippedForReview === 1 ? " was" : "s were"} left open because it also contained non-DOI evidence, rejected pairs, metadata conflicts, possible conference/full-publication pairs, or stale citation data.`,
         );
       }
       setBulkNotice(notices.length > 0 ? notices.join(" ") : null);
@@ -485,8 +485,9 @@ export function DedupClient({ projectId }: { projectId: string }) {
               {exactDoiCitationCount === 1 ? "" : "s"}?
             </DialogTitle>
             <DialogDescription>
-              Groups with identifier or metadata conflicts require manual review and are excluded.
-              This will resolve {exactDoiGroups.length} group
+              Groups with identifier or metadata conflicts or possible conference/full-publication
+              pairs require manual review and are excluded. This will resolve{" "}
+              {exactDoiGroups.length} group
               {exactDoiGroups.length === 1 ? "" : "s"} whose suggested pairs all share the same DOI.
               Each merge can still be undone from the Merged citations tab.
             </DialogDescription>

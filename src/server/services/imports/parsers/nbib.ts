@@ -105,6 +105,7 @@ export function parseNbib(content: string): ParseResult {
       doi: extractDoi(tags) ?? undefined,
       pmid: normalizePmid(first(tags, "PMID") ?? null) ?? undefined,
       language: first(tags, "LA"),
+      publicationTypes: uniqueValues(tags, "PT"),
       affiliations,
       registryIds: extractRegistryIds(...secondaryIds, ...affiliations, title, abstract),
       rawChunk: chunk,
