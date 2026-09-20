@@ -1,10 +1,14 @@
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
 import type { Ctx } from "@/server/auth/session";
 import { can, requirePermission } from "@/server/permissions";
 import { invalidState, notFound, validationError } from "@/server/errors";
 import * as audit from "@/server/services/audit";
-import { groupPooledCitationRows } from "./grouping";
+import {
+  loadPooledCitationGroups,
+  type PooledCitationGroups,
+} from "./pooled-state";
 
 export const saveQuotasSchema = z.object({
   reviewers: z
@@ -38,60 +42,58 @@ async function completedByReviewer(
   db: Tx,
   scope: QuotaScope,
   reviewerId?: string,
+  pooledGroups?: PooledCitationGroups,
 ) {
-  if (scope.stageId) {
-    const rows = await db.screeningAssignment.groupBy({
-      by: ["reviewerId"],
-      where: {
-        stageId: scope.stageId,
-        reviewerId,
-        status: "COMPLETED",
-        citation: { status: "ACTIVE" },
-      },
-      _count: { _all: true },
-    });
-    return new Map(rows.map((row) => [row.reviewerId, row._count._all]));
-  }
-  const members = await db.guidelineScreeningPoolMember.findMany({
-    where: { poolId: scope.poolId },
-  });
-  const rows = await db.citation.findMany({
-    where: {
-      projectId: { in: members.map((m) => m.projectId) },
-      status: "ACTIVE",
-    },
-    select: {
-      id: true,
-      projectId: true,
-      doi: true,
-      pmid: true,
-      normalizedTitle: true,
-      createdAt: true,
-      assignments: {
-        where: {
-          reviewerId,
-          status: "COMPLETED",
-          stage: { type: "TITLE_ABSTRACT" },
-        },
-        select: { reviewerId: true },
-      },
-    },
-  });
-  const counts = new Map<string, number>();
-  // One abstract counts once, even when the pooled decision wrote to several PICOs.
-  for (const group of groupPooledCitationRows(rows)) {
-    for (const assignment of group[0]!.assignments) {
-      if (
-        group.every((c) =>
-          c.assignments.some((a) => a.reviewerId === assignment.reviewerId),
-        )
-      ) {
-        counts.set(
-          assignment.reviewerId,
-          (counts.get(assignment.reviewerId) ?? 0) + 1,
-        );
-      }
+  // Legacy COMPLETED markers alone are not proof of a human review. The decision
+  // must belong to the same reviewer, citation and stage; orphan rows get no credit.
+  const rows = await db.$queryRaw<
+    { citationId: string; reviewerId: string }[]
+  >(Prisma.sql`
+    SELECT a."citationId", a."reviewerId" FROM "ScreeningAssignment" a
+    JOIN "ScreeningDecision" d ON d."stageId" = a."stageId"
+      AND d."citationId" = a."citationId" AND d."reviewerId" = a."reviewerId"
+    JOIN "Citation" c ON c."id" = a."citationId"
+    JOIN "ScreeningStage" s ON s."id" = a."stageId"
+    WHERE a."status" = 'COMPLETED' AND c."status" = 'ACTIVE'
+    AND ${
+      scope.stageId
+        ? Prisma.sql`a."stageId" = ${scope.stageId}`
+        : Prisma.sql`
+      s."type" = 'TITLE_ABSTRACT' AND s."projectId" IN (
+        SELECT "projectId" FROM "GuidelineScreeningPoolMember" WHERE "poolId" = ${scope.poolId}
+      )`
     }
+    ${reviewerId ? Prisma.sql`AND a."reviewerId" = ${reviewerId}` : Prisma.empty}
+  `);
+  const counts = new Map<string, number>();
+  if (scope.stageId) {
+    for (const row of rows)
+      counts.set(row.reviewerId, (counts.get(row.reviewerId) ?? 0) + 1);
+    return counts;
+  }
+  if (!pooledGroups) {
+    const members = await db.guidelineScreeningPoolMember.findMany({
+      where: { poolId: scope.poolId },
+    });
+    pooledGroups = await loadPooledCitationGroups(
+      db,
+      members.map((m) => m.projectId),
+    );
+  }
+  const reviewersByCitation = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const reviewers =
+      reviewersByCitation.get(row.citationId) ?? new Set<string>();
+    reviewers.add(row.reviewerId);
+    reviewersByCitation.set(row.citationId, reviewers);
+  }
+  // Historical real work keeps its credit when a newly imported copy needs repair.
+  // Grouping all current identities keeps transitive DOI/PMID/title overlap exact.
+  for (const group of pooledGroups) {
+    const reviewers = new Set(
+      group.flatMap((c) => [...(reviewersByCitation.get(c.id) ?? [])]),
+    );
+    for (const id of reviewers) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
   return counts;
 }
@@ -100,13 +102,16 @@ export async function quotaProgress(
   db: Tx,
   scope: QuotaScope,
   reviewerId: string,
+  pooledGroups?: PooledCitationGroups,
 ) {
   const quota = await db.screeningQuota.findFirst({
     where: { ...scope, reviewerId },
   });
   if (!quota) return null;
   const completed =
-    (await completedByReviewer(db, scope, reviewerId)).get(reviewerId) ?? 0;
+    (await completedByReviewer(db, scope, reviewerId, pooledGroups)).get(
+      reviewerId,
+    ) ?? 0;
   return {
     target: quota.target,
     completed,
@@ -234,6 +239,19 @@ export async function saveQuotas(
       tx,
       stages.map((s) => s.id),
     );
+    if (scope.poolId) {
+      const members = await tx.guidelineScreeningPoolMember.findMany({
+        where: { poolId: scope.poolId },
+      });
+      if (
+        members.length !== stages.length ||
+        members.some((m) => !stages.some((s) => s.projectId === m.projectId))
+      ) {
+        throw invalidState(
+          "The screening pool changed. Reload reviewer quotas before saving.",
+        );
+      }
+    }
     const currentStages = await tx.screeningStage.findMany({
       where: { id: { in: stages.map((s) => s.id) } },
     });

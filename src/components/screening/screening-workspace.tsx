@@ -7,7 +7,13 @@ import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, EmptyState, Skeleton } from "@/components/ui/misc";
 import { PageHeader } from "@/components/layout/page-header";
@@ -129,8 +135,9 @@ function GuidelineScreeningWorkspace({
     }[];
   };
 }) {
-  const [configuration, setConfiguration] =
-    useState<GuidelineScreeningConfiguration | null | undefined>(undefined);
+  const [configuration, setConfiguration] = useState<
+    GuidelineScreeningConfiguration | null | undefined
+  >(undefined);
   const [activeQueue, setActiveQueue] = useState<string | null>(null);
   const canConfigure = guideline.capabilities.includes("screening.configure");
 
@@ -177,20 +184,26 @@ function GuidelineScreeningWorkspace({
       {configuration === undefined ? (
         <Skeleton className="h-36 w-full" />
       ) : configuration === null ? (
-        <Alert variant="error">The guideline screening configuration could not be loaded.</Alert>
+        <Alert variant="error">
+          The guideline screening configuration could not be loaded.
+        </Alert>
       ) : configuration.pool || configuration.unpooledPicos.length > 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Screening assignments</CardTitle>
+            <CardTitle className="text-base">Screening queues</CardTitle>
             <CardDescription>
-              Pool membership is set by an Owner or Admin. Selecting a queue here never changes
-              which PICOs are combined.
+              Pool membership is set by an Owner or Admin. Selecting a queue
+              here never changes which PICOs are combined.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             {configuration.pool && (
               <Button
-                variant={activeQueue === `pool:${configuration.pool.id}` ? "default" : "outline"}
+                variant={
+                  activeQueue === `pool:${configuration.pool.id}`
+                    ? "default"
+                    : "outline"
+                }
                 onClick={() => setActiveQueue(`pool:${configuration.pool!.id}`)}
               >
                 <Layers3 /> {configuration.pool.name}
@@ -200,7 +213,9 @@ function GuidelineScreeningWorkspace({
             {configuration.unpooledPicos.map((pico) => (
               <Button
                 key={pico.id}
-                variant={activeQueue === `pico:${pico.id}` ? "default" : "outline"}
+                variant={
+                  activeQueue === `pico:${pico.id}` ? "default" : "outline"
+                }
                 onClick={() => setActiveQueue(`pico:${pico.id}`)}
               >
                 PICO {pico.picoNumber} · {pico.title}
@@ -219,21 +234,25 @@ function GuidelineScreeningWorkspace({
       {configuration && !configuration.pool && canConfigure && (
         <Alert>
           No combined pool is configured. Create and name one in{" "}
-          <Link className="font-medium underline" href={`/projects/${guidelineId}/settings`}>
+          <Link
+            className="font-medium underline"
+            href={`/projects/${guidelineId}/settings`}
+          >
             guideline Settings
           </Link>
           , or keep every PICO as an individual queue.
         </Alert>
       )}
 
-      {configuration?.pool && activeQueue === `pool:${configuration.pool.id}` && (
-        <PooledScreeningWorkspace
-          guidelineId={guidelineId}
-          guideline={guideline}
-          pool={configuration.pool}
-          showHeader={false}
-        />
-      )}
+      {configuration?.pool &&
+        activeQueue === `pool:${configuration.pool.id}` && (
+          <PooledScreeningWorkspace
+            guidelineId={guidelineId}
+            guideline={guideline}
+            pool={configuration.pool}
+            showHeader={false}
+          />
+        )}
       {selectedPico && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
@@ -242,7 +261,10 @@ function GuidelineScreeningWorkspace({
               PICO {selectedPico.picoNumber} · {selectedPico.title}
             </span>
           </div>
-          <ProjectScreeningWorkspace projectId={selectedPico.id} showHeader={false} />
+          <ProjectScreeningWorkspace
+            projectId={selectedPico.id}
+            showHeader={false}
+          />
         </div>
       )}
       {configuration && canConfigure && (
@@ -305,7 +327,11 @@ function ProjectScreeningWorkspace({
       })
       .catch((err) => {
         if (cancelled) return;
-        toast.error(err instanceof ApiError ? err.message : "Failed to load screening stages");
+        toast.error(
+          err instanceof ApiError
+            ? err.message
+            : "Failed to load screening stages",
+        );
         setStages([]);
       });
     return () => {
@@ -315,7 +341,9 @@ function ProjectScreeningWorkspace({
 
   useEffect(() => {
     void loadKeywords();
-    const saved = window.localStorage.getItem(`synthesis:keyword-highlights:${projectId}`);
+    const saved = window.localStorage.getItem(
+      `synthesis:keyword-highlights:${projectId}`,
+    );
     if (saved !== null) setHighlightsEnabled(saved !== "false");
   }, [loadKeywords, projectId]);
 
@@ -353,7 +381,7 @@ function ProjectScreeningWorkspace({
       {showHeader && (
         <PageHeader
           title="Screening"
-          description="Work through your assigned citations — keyboard-first: press ? for shortcuts."
+          description="Choose from your available articles — press ? for keyboard shortcuts."
         />
       )}
 
@@ -386,20 +414,24 @@ function ProjectScreeningWorkspace({
                 canConfigure={canConfigure}
                 onAssignmentsChanged={refreshAssignments}
               />
-              {stage.type === "TITLE_ABSTRACT" && canConfigure && ai?.enabled && (
-                <PrescreenPanel
-                  projectId={projectId}
-                  stage={stage}
-                  ai={ai}
-                  onStageChanged={(patch) =>
-                    setStages(
-                      (prev) =>
-                        prev?.map((s) => (s.id === stage.id ? { ...s, ...patch } : s)) ?? prev,
-                    )
-                  }
-                  onSuggestionsChanged={() => setReloadKey((k) => k + 1)}
-                />
-              )}
+              {stage.type === "TITLE_ABSTRACT" &&
+                canConfigure &&
+                ai?.enabled && (
+                  <PrescreenPanel
+                    projectId={projectId}
+                    stage={stage}
+                    ai={ai}
+                    onStageChanged={(patch) =>
+                      setStages(
+                        (prev) =>
+                          prev?.map((s) =>
+                            s.id === stage.id ? { ...s, ...patch } : s,
+                          ) ?? prev,
+                      )
+                    }
+                    onSuggestionsChanged={() => setReloadKey((k) => k + 1)}
+                  />
+                )}
               <KeywordToolbar
                 projectId={projectId}
                 keywords={keywords}
@@ -413,7 +445,9 @@ function ProjectScreeningWorkspace({
               <Tabs defaultValue="my-screening">
                 <TabsList>
                   <TabsTrigger value="my-screening">My screening</TabsTrigger>
-                  {canConfigure && <TabsTrigger value="admin-view">Admin view</TabsTrigger>}
+                  {canConfigure && (
+                    <TabsTrigger value="admin-view">Admin view</TabsTrigger>
+                  )}
                 </TabsList>
                 <TabsContent value="my-screening" className="pt-3">
                   <StageQueue
@@ -470,12 +504,14 @@ function StageStrip({
         <Badge variant={stage.blinded ? "default" : "muted"}>
           {stage.blinded ? "Blinded" : "Unblinded"}
         </Badge>
-        {stage.maybeGeneratesConflict && <Badge variant="maybe">Maybe raises conflicts</Badge>}
+        {stage.maybeGeneratesConflict && (
+          <Badge variant="maybe">Maybe raises conflicts</Badge>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <p className="text-xs text-muted-foreground">
-          Team: {p.decidedCitations} of {p.assignedCitations} citations decided ·{" "}
-          {p.results.included} included · {p.results.excluded} excluded ·{" "}
+          Team: {p.decidedCitations} of {p.assignedCitations} citations decided
+          · {p.results.included} included · {p.results.excluded} excluded ·{" "}
           {p.openConflicts > 0 ? (
             <Link
               href={`/projects/${projectId}/conflicts`}
@@ -489,20 +525,30 @@ function StageStrip({
         </p>
         {canConfigure && (
           <div className="flex flex-wrap gap-2">
-            {stage.type === "TITLE_ABSTRACT" && stage.reviewersPerCitation === 2 && <QuotaAssignmentsDialog
-              endpoint={`/api/projects/${projectId}/screening/stages/${stage.id}/quotas`}
-              onSaved={onAssignmentsChanged}
-            />}
-            <ManageAssignmentsDialog
-              projectId={projectId}
-              stage={stage}
-              onAssignmentsChanged={onAssignmentsChanged}
-            />
-            <AssignReviewersDialog
-              projectId={projectId}
-              stage={stage}
-              onAssigned={onAssignmentsChanged}
-            />
+            {stage.type === "TITLE_ABSTRACT" &&
+              stage.reviewersPerCitation === 2 && (
+                <QuotaAssignmentsDialog
+                  endpoint={`/api/projects/${projectId}/screening/stages/${stage.id}/quotas`}
+                  onSaved={onAssignmentsChanged}
+                />
+              )}
+            <details className="relative">
+              <summary className="cursor-pointer rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">
+                Fixed assignments
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <ManageAssignmentsDialog
+                  projectId={projectId}
+                  stage={stage}
+                  onAssignmentsChanged={onAssignmentsChanged}
+                />
+                <AssignReviewersDialog
+                  projectId={projectId}
+                  stage={stage}
+                  onAssigned={onAssignmentsChanged}
+                />
+              </div>
+            </details>
           </div>
         )}
       </div>

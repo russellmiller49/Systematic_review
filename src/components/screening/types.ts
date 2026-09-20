@@ -70,7 +70,12 @@ export interface ProjectAiStatus {
   extractionModel: string;
 }
 
-export type PrescreenRunStatus = "PENDING" | "SUBMITTED" | "COMPLETED" | "FAILED" | "CANCELED";
+export type PrescreenRunStatus =
+  | "PENDING"
+  | "SUBMITTED"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELED";
 
 export interface PrescreenRun {
   id: string;
@@ -243,6 +248,13 @@ export interface PooledPico {
 }
 
 export interface PooledQueueItem {
+  id: string;
+  completedReviews: number;
+  requiredReviews: number;
+  myDecision: { decision: DecisionValue; notes: string | null } | null;
+  finalOutcome: "INCLUDE" | "EXCLUDE" | null;
+  canDecide: boolean;
+  needsSynchronization: boolean;
   citationIds: string[];
   citation: QueueCitation;
   picos: (PooledPico & { citationIds: string[] })[];
@@ -271,18 +283,27 @@ export interface PooledQueueResponse {
     reviewersPerCitation: number;
     blinded: boolean;
   };
-  summary: {
+  summary: { available: number; myReviewed: number };
+  adminSummary: {
     pooledAbstracts: number;
     linkedCitationRecords: number;
     overlaps: number;
-    ready: number;
-    awaitingOtherReviewers: number;
-    needsAssignment: number;
-    settledOrOutOfSync: number;
-  };
+    finalized: number;
+    fullyReviewed: number;
+    needsAdditionalReviews: number;
+    unreviewed: number;
+    needsSynchronization: number;
+  } | null;
+  pagination: ScreeningNavigatorResponse["pagination"];
   total: number;
   reasons: { label: string }[];
   items: PooledQueueItem[];
 }
 
-export interface ReviewerQuota { target: number; completed: number; remaining: number }
+export interface ReviewerQuota {
+  target: number;
+  completed: number;
+  remaining: number;
+}
+
+export type PooledNavigatorFilter = "AVAILABLE" | "MY_REVIEWED" | "ALL";

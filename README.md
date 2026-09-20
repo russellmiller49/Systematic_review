@@ -84,8 +84,8 @@ Open http://localhost:3000 and sign in with a demo account.
 
 ## Demo accounts
 
-`npm run db:seed` builds a complete, realistic review — *"Endobronchial valves for severe
-emphysema: a systematic review and meta-analysis"* — entirely through the service layer, so the
+`npm run db:seed` builds a complete, realistic review — _"Endobronchial valves for severe
+emphysema: a systematic review and meta-analysis"_ — entirely through the service layer, so the
 audit trail is authentic. It contains 20 imported citations across two sources (PubMed RIS +
 Embase CSV), 3 duplicate pairs (DOI-exact, PMID-exact, fuzzy-title) already resolved, blinded
 dual title/abstract screening with three conflicts (two adjudicated, one still open), five
@@ -93,12 +93,12 @@ citations advanced to full text (three included, two excluded with reasons), dua
 with an adjudicated field conflict, dual risk-of-bias assessment with an adjudicated domain
 conflict, and a PRISMA snapshot.
 
-| Email | Password | Role in the demo project |
-|---|---|---|
-| `owner@demo.test` | `demo-password-123` | Owner / administrator |
-| `reviewer1@demo.test` | `demo-password-123` | Reviewer + extractor |
-| `reviewer2@demo.test` | `demo-password-123` | Reviewer + extractor |
-| `adjudicator@demo.test` | `demo-password-123` | Adjudicator |
+| Email                   | Password            | Role in the demo project |
+| ----------------------- | ------------------- | ------------------------ |
+| `owner@demo.test`       | `demo-password-123` | Owner / administrator    |
+| `reviewer1@demo.test`   | `demo-password-123` | Reviewer + extractor     |
+| `reviewer2@demo.test`   | `demo-password-123` | Reviewer + extractor     |
+| `adjudicator@demo.test` | `demo-password-123` | Adjudicator              |
 
 Sign in as different users to see blinding in action: as a reviewer you see only your own
 screening decisions and the audit events you're entitled to; as the adjudicator or owner you see
@@ -143,15 +143,15 @@ e2e/                   Playwright specs
 
 ## Configuration
 
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | PostgreSQL connection for the app (dev: `srb_dev`) |
-| `TEST_DATABASE_URL` | PostgreSQL connection for integration tests (`srb_test`) |
-| `AUTH_SECRET` | Auth.js JWT secret — generate with `openssl rand -base64 32` |
-| `AUTH_TRUST_HOST` | `true` for local development |
-| `STORAGE_DIR` | Local directory for uploaded full-text PDFs |
-| `PILOT_EMAIL_ALLOWLIST` | Optional comma-separated signup allowlist; active organization or project invitations are also accepted |
-| `AI_PROVIDER` + provider key | Optional AI prescreening/extraction provider; no key disables AI features |
+| Variable                     | Purpose                                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`               | PostgreSQL connection for the app (dev: `srb_dev`)                                                      |
+| `TEST_DATABASE_URL`          | PostgreSQL connection for integration tests (`srb_test`)                                                |
+| `AUTH_SECRET`                | Auth.js JWT secret — generate with `openssl rand -base64 32`                                            |
+| `AUTH_TRUST_HOST`            | `true` for local development                                                                            |
+| `STORAGE_DIR`                | Local directory for uploaded full-text PDFs                                                             |
+| `PILOT_EMAIL_ALLOWLIST`      | Optional comma-separated signup allowlist; active organization or project invitations are also accepted |
+| `AI_PROVIDER` + provider key | Optional AI prescreening/extraction provider; no key disables AI features                               |
 
 ## Pilot deployment
 
@@ -206,7 +206,7 @@ verify that the new password works, the old password fails, and the link cannot 
 
 ### Shared reviewer quotas
 
-In **Screening → Shared reviewer quotas**, an Owner/Admin can select a group of reviewers and
+In **Screening → Reviewer quotas**, an Owner/Admin can select a group of reviewers and
 set a target for each. For example, 1,000 abstracts requiring two reviews need 2,000 reviews:
 10 reviewers can each receive a target of 200. This works for individual PICOs and saved
 combined pools configured for two title/abstract reviewers.
@@ -219,6 +219,17 @@ targets at any time; a target of zero pauses new reviews and preserves completed
 
 If no eligible abstracts remain before a target is met, the reviewer sees that the queue is
 empty and the target is unchanged. Managers can revise targets or import more abstracts.
+
+Both individual and combined queues provide a searchable article navigator. In a combined
+pool, **Available** shows every eligible logical abstract while quota remains; **My reviewed**
+keeps your decisions and notes accessible. Click any article or use J/arrow keys to move on.
+Browsing and skipping never reserve work or create assignments. A pooled Include, Exclude,
+or Maybe decision writes atomically to every linked PICO and counts once toward the target.
+Fixed assignments remain available as an explicit advanced workflow.
+
+Owner/Admin pool health separates finalized abstracts from **Needs synchronization**, and
+is independent of the Owner's own assignments. See [pooled open-queue architecture and
+validation](docs/pooled-open-review-queue.md) for eligibility, concurrency, and compatibility.
 
 Feature browser test, using `TEST_DATABASE_URL` without reseeding the development database:
 `npx playwright test --config playwright.quota.config.ts`.

@@ -9,7 +9,11 @@ process.env.PILOT_EMAIL_ALLOWLIST = "";
 const port = Number(process.env.E2E_PORT ?? 3107);
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "screening-quotas.spec.ts",
+  testMatch: [
+    "screening-quotas.spec.ts",
+    "pooled-open-queue.spec.ts",
+    "happy-path.spec.ts",
+  ],
   workers: 1,
   use: { baseURL: `http://localhost:${port}`, trace: "retain-on-failure" },
   webServer: {

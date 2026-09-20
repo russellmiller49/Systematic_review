@@ -18,7 +18,13 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/misc";
 
-const SCREENING_ROLES = new Set(["OWNER", "ADMIN", "REVIEWER", "ADJUDICATOR", "TRAINEE"]);
+const SCREENING_ROLES = new Set([
+  "OWNER",
+  "ADMIN",
+  "REVIEWER",
+  "ADJUDICATOR",
+  "TRAINEE",
+]);
 
 interface MemberRow {
   id: string;
@@ -76,7 +82,9 @@ export function PooledAssignDialog({
       return;
     }
     if (strategy === "split" && reviewerIds.size < reviewersPerCitation) {
-      toast.error(`Split assignment needs at least ${reviewersPerCitation} reviewers`);
+      toast.error(
+        `Split assignment needs at least ${reviewersPerCitation} reviewers`,
+      );
       return;
     }
     setBusy(true);
@@ -104,7 +112,11 @@ export function PooledAssignDialog({
       setReviewerIds(new Set());
       onAssigned();
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Failed to assign pooled screening");
+      toast.error(
+        error instanceof ApiError
+          ? error.message
+          : "Failed to assign pooled screening",
+      );
     } finally {
       setBusy(false);
     }
@@ -114,16 +126,16 @@ export function PooledAssignDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
-          <Users /> Assign pooled reviewers
+          <Users /> Assign fixed pooled reviews
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Assign “{poolName}”</DialogTitle>
+          <DialogTitle>Fixed assignments: “{poolName}”</DialogTitle>
           <DialogDescription>
-            The same reviewer set is assigned to every copy of an abstract across the selected
-            PICOs in this saved pool. This keeps one combined decision synchronized across the
-            guideline family.
+            The same reviewer set is assigned to every copy of an abstract
+            across the selected PICOs in this saved pool. This keeps one
+            combined decision synchronized across the guideline family.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
@@ -132,11 +144,16 @@ export function PooledAssignDialog({
             <Select
               id="pooled-assign-strategy"
               value={strategy}
-              onChange={(event) => setStrategy(event.target.value as "all" | "split")}
+              onChange={(event) =>
+                setStrategy(event.target.value as "all" | "split")
+              }
             >
-              <option value="all">Everyone screens every pooled abstract</option>
+              <option value="all">
+                Everyone screens every pooled abstract
+              </option>
               <option value="split">
-                Split — {reviewersPerCitation} reviewer(s) per abstract, round-robin
+                Split — {reviewersPerCitation} reviewer(s) per abstract,
+                round-robin
               </option>
             </Select>
           </div>
@@ -168,7 +185,9 @@ export function PooledAssignDialog({
                       className="h-4 w-4 accent-primary"
                       checked={reviewerIds.has(member.user.id)}
                       onChange={() =>
-                        setReviewerIds((current) => toggle(current, member.user.id))
+                        setReviewerIds((current) =>
+                          toggle(current, member.user.id),
+                        )
                       }
                     />
                     <span className="truncate">{member.user.name}</span>

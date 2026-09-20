@@ -79,7 +79,7 @@ export function QuotaAssignmentsDialog({
           target: Number(targets[reviewerId]),
         })),
       });
-      toast.success("Shared review quotas saved");
+      toast.success("Reviewer quotas saved");
       setOpen(false);
       onSaved();
     } catch (err) {
@@ -93,12 +93,12 @@ export function QuotaAssignmentsDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
-          Shared reviewer quotas
+          Reviewer quotas
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Shared reviewer quotas</DialogTitle>
+          <DialogTitle>Reviewer quotas</DialogTitle>
           <DialogDescription>
             Assign a target number of abstracts to each reviewer. Reviewers can
             choose any available abstract; each abstract accepts two independent
@@ -108,7 +108,7 @@ export function QuotaAssignmentsDialog({
         <p className="text-sm text-muted-foreground">
           Existing completed reviews count toward the target. Each combined-pool
           abstract counts once. Set a target to 0 to pause new reviews.
-          Unselected reviewers keep their current assignments.
+          Unselected reviewers keep their current targets.
         </p>
         {error && <Alert variant="error">{error}</Alert>}
         {!reviewers ? (
@@ -245,20 +245,21 @@ export function QuotaProgress({
   return (
     <div
       className="mb-4 rounded-lg border border-border bg-card p-4"
-      aria-label="Your review assignment"
+      aria-label="Your reviewer quota"
       aria-live="polite"
     >
-      <p className="font-medium">Your review assignment</p>
+      <p className="font-medium">Your target</p>
       <p className="mt-1 text-sm">
         Target: <strong>{quota.target.toLocaleString()}</strong> · Completed:{" "}
         <strong>{quota.completed.toLocaleString()}</strong> · Remaining:{" "}
-        <strong>{quota.remaining.toLocaleString()}</strong>
+        <strong>{quota.remaining.toLocaleString()}</strong> · Available to
+        review: <strong>{available.toLocaleString()}</strong>
       </p>
       <p className="mt-1 text-sm text-muted-foreground">
         {quota.target === 0
           ? "New reviews are paused. Your completed reviews remain saved."
           : quota.remaining === 0
-            ? "Assignment complete. Your completed reviews remain saved."
+            ? "Target reached. Your completed reviews remain saved."
             : available === 0
               ? "No abstracts are currently available. Your remaining target is unchanged; an administrator can adjust it or add more abstracts."
               : `Choose any available abstract. ${available.toLocaleString()} currently need your review.`}
