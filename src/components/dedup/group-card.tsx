@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/misc";
 import { PairCompare } from "./pair-compare";
+import { hasConferencePublicationPair } from "@/lib/dedup-publication";
 import type { DedupCandidate, DedupGroup, MergeResult, MergeWarning, RejectResult } from "./types";
 import { METHOD_LABELS, scorePercent } from "./types";
 
@@ -51,6 +52,9 @@ export function GroupCard({
   const leadTitle = suggested[0]?.citationA.title ?? group.candidates[0]?.citationA.title ?? "";
 
   const hasConflict = group.metadataConflicts.length > 0;
+  const hasPublicationPair = hasConferencePublicationPair(
+    suggested.flatMap((candidate) => [candidate.citationA, candidate.citationB]),
+  );
   const canonicalIsMember = suggested.some(
     (c) => c.citationAId === canonicalId || c.citationBId === canonicalId,
   );
@@ -129,10 +133,15 @@ export function GroupCard({
           ))}
           {hasConflict ? (
             <Badge variant="maybe">Identifier / metadata conflict — manual review required</Badge>
+          ) : hasPublicationPair ? (
+            <Badge variant="maybe">Possible conference / full publication — review reports</Badge>
           ) : (
             suggested.length > 0 && (
               <Badge variant={scoreVariant(topScore)}>{scorePercent(topScore)} match</Badge>
             )
+          )}
+          {hasPublicationPair && hasConflict && (
+            <Badge variant="maybe">Possible conference / full publication — review reports</Badge>
           )}
         </div>
       </button>
@@ -176,10 +185,14 @@ export function GroupCard({
                   <Badge variant="outline">{METHOD_LABELS[candidate.method]}</Badge>
                   <Badge
                     variant={
-                      candidate.metadataConflicts.length ? "maybe" : scoreVariant(candidate.score)
+                      candidate.metadataConflicts.length ||
+                      hasConferencePublicationPair([candidate.citationA, candidate.citationB])
+                        ? "maybe"
+                        : scoreVariant(candidate.score)
                     }
                   >
-                    {candidate.metadataConflicts.length
+                    {candidate.metadataConflicts.length ||
+                    hasConferencePublicationPair([candidate.citationA, candidate.citationB])
                       ? "Manual review required"
                       : scorePercent(candidate.score)}
                   </Badge>

@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { hasConferencePublicationPair } from "@/lib/dedup-publication";
 import type { DedupAuthor, DedupCitation, PairEvidence } from "./types";
 
 type FieldState = "match" | "differ" | "neutral";
@@ -52,6 +53,18 @@ function buildFields(
 
   return [
     {
+      label: "Record type",
+      a: publicationLabel(a),
+      b: publicationLabel(b),
+      state: "neutral",
+    },
+    {
+      label: "Source",
+      a: a.publication?.sources.join(", ") || null,
+      b: b.publication?.sources.join(", ") || null,
+      state: "neutral",
+    },
+    {
       label: "Title",
       a: a.title,
       b: b.title,
@@ -100,6 +113,17 @@ const STATE_CLASS: Record<FieldState, string> = {
   differ: "bg-maybe-muted",
   neutral: "",
 };
+
+function publicationLabel(citation: DedupCitation): string {
+  const publication = citation.publication;
+  const label =
+    publication?.kind === "conference"
+      ? "Conference abstract / report"
+      : publication?.kind === "journal"
+        ? "Journal article (possible full publication)"
+        : "Publication type unknown";
+  return publication?.types.length ? `${label} · ${publication.types.join(", ")}` : label;
+}
 
 // Side-by-side field comparison for a candidate duplicate pair. Matching fields get a
 // green tint, differing fields amber, missing-on-either-side fields stay neutral.
@@ -150,6 +174,22 @@ export function PairCompare({
 
   return (
     <div className="overflow-x-auto rounded-md border border-border">
+      {hasConferencePublicationPair([a, b]) && (
+        <div
+          role="note"
+          className="space-y-1 border-b border-border bg-maybe-muted px-3 py-3 text-sm"
+        >
+          <p className="font-medium">Possible conference abstract and full publication</p>
+          <p>
+            These may be separate reports of the same study. Compare their abstracts before deciding
+            whether they are duplicates; use “Not a duplicate” to retain both reports.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Based on imported publication types. Full-text availability and the relationship between
+            these reports have not been verified.
+          </p>
+        </div>
+      )}
       <div className="min-w-[36rem]">
         <div className="grid grid-cols-[6.5rem_1fr_1fr] border-b border-border bg-muted/50">
           <div />
@@ -193,6 +233,32 @@ export function PairCompare({
             </div>
           </div>
         ))}
+        <details className="group border-t border-border">
+          <summary className="cursor-pointer px-3 py-3 text-sm font-medium text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+            Compare abstracts
+          </summary>
+          <div className="grid grid-cols-[6.5rem_1fr_1fr] border-t border-border text-sm">
+            <div className="px-3 py-3 text-xs font-medium text-muted-foreground">Abstract</div>
+            {[a, b].map((citation, index) => (
+              <section
+                key={citation.id}
+                aria-label={`Abstract for citation ${index === 0 ? "A" : "B"}: ${citation.title}`}
+                className="min-w-0 whitespace-pre-wrap break-words border-l border-border px-3 py-3 leading-relaxed"
+              >
+                <p className="mb-2 text-xs font-medium text-muted-foreground">
+                  Citation {index === 0 ? "A" : "B"}
+                </p>
+                {citation.abstract?.trim() ? (
+                  <p>{citation.abstract}</p>
+                ) : (
+                  <span className="text-muted-foreground">
+                    No abstract available in this imported record.
+                  </span>
+                )}
+              </section>
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   );

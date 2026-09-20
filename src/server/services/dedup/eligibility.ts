@@ -1,11 +1,13 @@
 import { normalizeDoi } from "@/server/services/citations/normalize";
 import { clusterMetadataConflicts, type ConflictCitation } from "./conflicts";
 import { connectedComponents } from "./graph";
+import { hasConferencePublicationPair, type DedupPublication } from "@/lib/dedup-publication";
 
 type Member = ConflictCitation & {
   id: string;
   projectId: string;
   status: string;
+  publication?: DedupPublication;
 };
 type Candidate = {
   projectId: string;
@@ -46,6 +48,7 @@ export function exactDoiEligible(projectId: string, candidates: Candidate[]): bo
     members.every((citation) => citation.status === "ACTIVE" && citation.projectId === projectId) &&
     dois.every((doi) => doi !== null) &&
     new Set(dois).size === 1 &&
+    !hasConferencePublicationPair(members) &&
     clusterMetadataConflicts(members).length === 0
   );
 }

@@ -16,6 +16,7 @@ import { connectedComponents } from "./graph";
 import { lockDedupProject, normalizeGroups } from "./groups";
 import { metadataConflicts, clusterMetadataConflicts } from "./conflicts";
 import { exactDoiEligible } from "./eligibility";
+import { publicationInfo, publicationSourceSelect } from "./publication";
 
 export const listGroupsQuerySchema = z.object({
   status: z.enum(["OPEN", "RESOLVED"]).optional(),
@@ -49,6 +50,7 @@ const bulkCanonicalCitationSelect = {
   url: true,
   language: true,
   createdAt: true,
+  sourceRecords: { select: publicationSourceSelect },
   _count: {
     select: { decisions: true, identifiers: true, sourceRecords: true },
   },
@@ -183,6 +185,14 @@ export async function runDetection(ctx: Ctx, projectId: string) {
   );
 }
 
+// Keep raw import text server-side; send only the compact provenance/type summary.
+function withPublication<T extends { sourceRecords: Parameters<typeof publicationInfo>[0] }>(
+  citation: T,
+) {
+  const { sourceRecords, ...fields } = citation;
+  return { ...fields, publication: publicationInfo(sourceRecords) };
+}
+
 // Groups with candidate pairs, evidence, and full citation payloads for side-by-side compare.
 export async function listGroups(
   ctx: Ctx,
@@ -206,8 +216,18 @@ export async function listGroups(
             },
             orderBy: { score: "desc" },
             include: {
-              citationA: { include: { identifiers: true } },
-              citationB: { include: { identifiers: true } },
+              citationA: {
+                include: {
+                  identifiers: true,
+                  sourceRecords: { select: publicationSourceSelect },
+                },
+              },
+              citationB: {
+                include: {
+                  identifiers: true,
+                  sourceRecords: { select: publicationSourceSelect },
+                },
+              },
               decidedBy: { select: { id: true, name: true, email: true } },
             },
           },
@@ -216,6 +236,8 @@ export async function listGroups(
       return groups.map((group) => {
         const candidates = group.candidates.map((candidate) => ({
           ...candidate,
+          citationA: withPublication(candidate.citationA),
+          citationB: withPublication(candidate.citationB),
           metadataConflicts: metadataConflicts(candidate.citationA, candidate.citationB),
         }));
         const members = [
@@ -470,7 +492,12 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
       );
       const eligible = groupsWithExactDoiEvidence.flatMap((group) => {
         const suggested = group.candidates.filter((candidate) => candidate.status === "SUGGESTED");
-        if (!exactDoiEligible(projectId, group.candidates)) return [];
+        const candidates = group.candidates.map((candidate) => ({
+          ...candidate,
+          citationA: withPublication(candidate.citationA),
+          citationB: withPublication(candidate.citationB),
+        }));
+        if (!exactDoiEligible(projectId, candidates)) return [];
 
         const citations = new Map<string, BulkCanonicalCitation>();
         for (const candidate of suggested) {

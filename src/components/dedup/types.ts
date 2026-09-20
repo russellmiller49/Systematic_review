@@ -1,4 +1,5 @@
 // Client-side interfaces for the dedup API payloads (only the fields the UI consumes).
+import type { DedupPublication } from "@/lib/dedup-publication";
 
 export type DedupMethod = "EXACT_DOI" | "EXACT_PMID" | "NORMALIZED_TITLE" | "FUZZY";
 export type DedupCandidateStatus = "SUGGESTED" | "MERGED" | "REJECTED";
@@ -28,6 +29,7 @@ export interface DedupCitation {
   pmid: string | null;
   url: string | null;
   identifiers: { id: string; type: string; value: string }[];
+  publication?: DedupPublication;
 }
 
 // Evidence persisted to DeduplicationCandidate.reasons by the detection engine.
