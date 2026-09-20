@@ -121,6 +121,7 @@ export function ArticleNavigator({
   onClearSearch: () => void;
   onPageChange: (page: number) => void;
 }) {
+  const filterLabel = (value: ScreeningNavigatorFilter) => data.quota && value === "ALL" ? "Available and reviewed articles" : FILTER_LABELS[value];
   const firstShown =
     data.pagination.total === 0
       ? 0
@@ -161,7 +162,7 @@ export function ArticleNavigator({
           >
             {FILTER_ORDER.map((option) => (
               <option key={option} value={option}>
-                {FILTER_LABELS[option]} ({filterCount(data, option).toLocaleString()})
+                {filterLabel(option)} ({filterCount(data, option).toLocaleString()})
               </option>
             ))}
           </Select>
@@ -176,7 +177,7 @@ export function ArticleNavigator({
         >
           <Input
             type="search"
-            aria-label="Search assigned articles"
+            aria-label={data.quota ? "Search available and reviewed articles" : "Search assigned articles"}
             value={searchDraft}
             onChange={(event) => onSearchDraftChange(event.target.value)}
             placeholder="Search titles or abstracts"
@@ -199,7 +200,7 @@ export function ArticleNavigator({
 
         <p className="text-xs text-muted-foreground" aria-live="polite">
           Showing {firstShown.toLocaleString()}–{lastShown.toLocaleString()} of{" "}
-          {data.pagination.total.toLocaleString()} {FILTER_LABELS[filter].toLowerCase()}
+          {data.pagination.total.toLocaleString()} {filterLabel(filter).toLowerCase()}
         </p>
 
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
@@ -231,7 +232,7 @@ export function ArticleNavigator({
 
       <div
         role="list"
-        aria-label={`${FILTER_LABELS[filter]} articles`}
+        aria-label={`${filterLabel(filter)} articles`}
         aria-busy={loading}
         className={cn(
           "min-h-0 flex-1 divide-y divide-border overflow-y-auto",

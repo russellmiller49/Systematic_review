@@ -26,6 +26,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, EmptyState, Progress, Skeleton, Spinner } from "@/components/ui/misc";
 import { CitationCard } from "@/components/citations/citation-card";
+import { QuotaProgress } from "./quota-assignments-dialog";
 import { ArticleNavigator } from "./article-navigator";
 import { BatchExcludeDialog, ExcludeDialog } from "./exclude-dialog";
 import { ShortcutsDialog } from "./shortcuts-dialog";
@@ -124,7 +125,7 @@ export function StageQueue({
 
   useEffect(() => {
     const generation = ++loadGenerationRef.current;
-    setLoading(true);
+    if (data === null) setLoading(true);
     setNavigatorError(null);
     const params = new URLSearchParams({
       status: filter,
@@ -171,6 +172,12 @@ export function StageQueue({
     // `reloadKey` deliberately forces a refresh after a decision or explicit retry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, keywordGroup, page, projectId, query, reloadKey, stage.id]);
+
+  useEffect(() => {
+    if (inFlight || batchBusy || abstractEditing || excludeOpen || batchExcludeOpen) return;
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") setReloadKey(key => key + 1); }, 15000);
+    return () => window.clearInterval(timer);
+  }, [inFlight, batchBusy, abstractEditing, excludeOpen, batchExcludeOpen]);
 
   function chooseFilter(next: ScreeningNavigatorFilter) {
     setFilter(next);
@@ -624,6 +631,7 @@ export function StageQueue({
 
   return (
     <>
+      <QuotaProgress quota={data.quota} available={data.summary.undecided} />
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)]">
         <ArticleNavigator
           data={data}
@@ -1013,7 +1021,7 @@ export function StageQueue({
                 <div className="flex items-center gap-2">
                   {filter !== "ALL" && (
                     <Button variant="outline" size="sm" onClick={() => chooseFilter("ALL")}>
-                      Show all assigned
+                      {data.quota ? "Show available and reviewed" : "Show all assigned"}
                     </Button>
                   )}
                   <Link

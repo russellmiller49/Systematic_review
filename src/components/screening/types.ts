@@ -116,7 +116,7 @@ export interface QueueCitation {
 }
 
 export interface QueueItem {
-  assignmentId: string;
+  assignmentId: string | null;
   citation: QueueCitation;
   // Present only in rare states (e.g. after a reopen) — the queue is my PENDING work.
   myDecision: { decision: DecisionValue } | null;
@@ -140,7 +140,7 @@ export type ScreeningNavigatorFilter =
   | "EXCLUDED";
 
 export interface ScreeningNavigatorItem {
-  assignmentId: string;
+  assignmentId: string | null;
   assignmentStatus: "PENDING" | "COMPLETED";
   citation: QueueCitation;
   myDecision: { decision: DecisionValue; notes: string | null } | null;
@@ -152,6 +152,7 @@ export interface ScreeningNavigatorItem {
 }
 
 export interface ScreeningNavigatorResponse {
+  quota: ReviewerQuota | null;
   stage: {
     id: string;
     type: StageType;
@@ -262,6 +263,7 @@ export interface GuidelineScreeningConfiguration {
 
 // GET /api/projects/:guidelineId/screening/pooled?poolId=...
 export interface PooledQueueResponse {
+  quota: ReviewerQuota | null;
   guideline: { id: string; title: string };
   pool: { id: string; name: string };
   picos: PooledPico[];
@@ -282,3 +284,5 @@ export interface PooledQueueResponse {
   reasons: { label: string }[];
   items: PooledQueueItem[];
 }
+
+export interface ReviewerQuota { target: number; completed: number; remaining: number }

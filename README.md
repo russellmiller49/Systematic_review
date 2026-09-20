@@ -203,3 +203,22 @@ event without storing passwords or tokens. Users sign in again after resetting.
 
 Before enabling in production, use a test account to request an email, follow its link, and
 verify that the new password works, the old password fails, and the link cannot be reused.
+
+### Shared reviewer quotas
+
+In **Screening → Shared reviewer quotas**, an Owner/Admin can select a group of reviewers and
+set a target for each. For example, 1,000 abstracts requiring two reviews need 2,000 reviews:
+10 reviewers can each receive a target of 200. This works for individual PICOs and saved
+combined pools configured for two title/abstract reviewers.
+
+Reviewers choose from the available abstracts and see **Target**, **Completed**, and
+**Remaining**. Existing reviews count toward the target; each combined-pool abstract counts
+once. After two independent reviews, an abstract is unavailable to other reviewers even if
+the decisions disagree (the conflict proceeds to adjudication). An administrator can adjust
+targets at any time; a target of zero pauses new reviews and preserves completed work.
+
+If no eligible abstracts remain before a target is met, the reviewer sees that the queue is
+empty and the target is unchanged. Managers can revise targets or import more abstracts.
+
+Feature browser test, using `TEST_DATABASE_URL` without reseeding the development database:
+`npx playwright test --config playwright.quota.config.ts`.

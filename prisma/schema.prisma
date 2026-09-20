@@ -296,6 +296,7 @@ model User {
   importBatches           ImportBatch[]                 @relation("ImportCreator")
   dedupDecisions          DeduplicationCandidate[]      @relation("DedupDecider")
   createdStudies          Study[]                       @relation("StudyCreator")
+  screeningQuotas         ScreeningQuota[]
   screeningAssignments    ScreeningAssignment[]         @relation("AssignmentReviewer")
   screeningDecisions      ScreeningDecision[]           @relation("DecisionReviewer")
   adjudications           ScreeningAdjudication[]       @relation("Adjudicator")
@@ -936,6 +937,7 @@ model GuidelineScreeningPool {
   guideline Project                        @relation("GuidelineScreeningPoolGuideline", fields: [guidelineId], references: [id])
   createdBy User                           @relation("GuidelineScreeningPoolCreator", fields: [createdById], references: [id])
   members   GuidelineScreeningPoolMember[]
+  quotas    ScreeningQuota[]
 }
 
 model GuidelineScreeningPoolMember {
@@ -967,6 +969,7 @@ model ScreeningStage {
   updatedAt              DateTime  @updatedAt
 
   project       Project               @relation(fields: [projectId], references: [id])
+  quotas        ScreeningQuota[]
   assignments   ScreeningAssignment[]
   decisions     ScreeningDecision[]
   conflicts     ScreeningConflict[]
@@ -2269,4 +2272,22 @@ model Notification {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, readAt])
+}
+
+// A target over a shared corpus, never a reservation of specific articles.
+model ScreeningQuota {
+  id         String   @id @default(cuid())
+  stageId    String?
+  poolId     String?
+  reviewerId String
+  target     Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  stage    ScreeningStage?         @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  pool     GuidelineScreeningPool? @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  reviewer User                   @relation(fields: [reviewerId], references: [id])
+
+  @@unique([stageId, reviewerId])
+  @@unique([poolId, reviewerId])
 }

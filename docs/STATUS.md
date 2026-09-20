@@ -4,6 +4,34 @@
 > then docs/09-design-review-resolutions.md (the implementation contract), then docs/01–08.
 > There is a continuation skill: `.agents/skills/continue-build/SKILL.md`.
 
+## Current state (2026-09-20) — shared abstract reviewer quotas — DONE
+
+Owners/Admins can now assign reviewer targets over an individual PICO or the saved combined
+pool using **Shared reviewer quotas** in Screening. No specific abstracts are reserved.
+
+- **Personal and manager progress:** targets, completed reviews, and remaining reviews persist
+  across sessions. Existing completed work counts; a combined abstract counts once even when
+  its decision is propagated to several PICO records. Targets can be raised or lowered; zero
+  pauses new reviews without deleting history.
+- **Shared availability:** quota reviewers can screen any active abstract still needing a
+  review. Article assignments are materialized only when a decision is submitted. New imports
+  enter the shared corpus automatically. Reviewer queues refresh every 15 seconds while visible.
+- **Two-review limit:** reaching two independent reviews removes an abstract from everyone
+  else's available queue, including disagreements awaiting adjudication. Sorted stage-row locks
+  serialize writes, protecting both article capacity and reviewer quotas against concurrent
+  submissions. Revisions do not earn extra credit; R1 blinding and R3/R5/R6/R7 remain enforced.
+- **Lifecycle:** batch exclusions are atomic against quota/capacity limits; completed reviews
+  on merged duplicates stop counting. Shared reviewers can fill missing abstracts. Fixed
+  assignment workflows remain available, with the same review-capacity protection.
+- **Persistence/API:** migration `20260920120000_screening_quotas` adds scoped quota records
+  with database checks and audited target changes. Stage and pooled quota APIs are restricted
+  to screening managers and validate active workspace/project membership.
+- **Verification:** **621 unit** and **349 integration** tests plus the production build passed;
+  dedicated tests cover simultaneous submissions, quota limits, prior work, permissions, pooled counting,
+  conflict exclusion, and batch rollback. Browser QA covers both PICO and pool assignment,
+  progress persistence, target changes, and desktop/mobile rendering. Run isolated feature QA
+  with `npx playwright test --config playwright.quota.config.ts` (uses the test database).
+
 ## Current state (2026-09-04) — dedup-aware owner import rollback — DONE
 
 The owner override now distinguishes reversible deduplication work from true downstream review

@@ -6,6 +6,7 @@ import { prisma } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { can, requirePermission } from "@/server/permissions";
+import { quotaProgress } from "@/server/services/screening/quotas";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 
@@ -129,7 +130,14 @@ export async function addCitationAbstract(
         select: { id: true },
       });
       if (!assignment) {
-        throw forbidden("You can add an abstract only to a citation assigned to you");
+        const stage = await tx.screeningStage.findUnique({ where: { projectId_type: { projectId, type: "TITLE_ABSTRACT" } } });
+        const pool = await tx.guidelineScreeningPoolMember.findUnique({ where: { projectId } });
+        const quota = stage ? await quotaProgress(tx, pool ? { poolId: pool.poolId } : { stageId: stage.id }, ctx.userId) : null;
+        const completed = stage ? await tx.screeningAssignment.count({ where: { stageId: stage.id, citationId, status: "COMPLETED" } }) : 0;
+        const result = stage ? await tx.citationStageResult.findUnique({ where: { stageId_citationId: { stageId: stage.id, citationId } } }) : null;
+        if (!stage || !quota || quota.remaining === 0 || completed >= stage.reviewersPerCitation || result) {
+          throw forbidden("You can add an abstract only to a citation assigned or available to you");
+        }
       }
     }
 
