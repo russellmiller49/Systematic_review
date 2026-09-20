@@ -13,6 +13,7 @@ import { Alert, EmptyState, Skeleton } from "@/components/ui/misc";
 import { PageHeader } from "@/components/layout/page-header";
 import { StageQueue } from "./stage-queue";
 import { AssignReviewersDialog } from "./assign-dialog";
+import { QuotaAssignmentsDialog } from "./quota-assignments-dialog";
 import { ManageAssignmentsDialog } from "./manage-assignments-dialog";
 import { AdminScreeningOverview } from "./admin-screening-overview";
 import { PrescreenPanel } from "./prescreen-panel";
@@ -488,6 +489,10 @@ function StageStrip({
         </p>
         {canConfigure && (
           <div className="flex flex-wrap gap-2">
+            {stage.type === "TITLE_ABSTRACT" && stage.reviewersPerCitation === 2 && <QuotaAssignmentsDialog
+              endpoint={`/api/projects/${projectId}/screening/stages/${stage.id}/quotas`}
+              onSaved={onAssignmentsChanged}
+            />}
             <ManageAssignmentsDialog
               projectId={projectId}
               stage={stage}

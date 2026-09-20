@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, EmptyState, Skeleton, Spinner } from "@/components/ui/misc";
+import { QuotaAssignmentsDialog, QuotaProgress } from "./quota-assignments-dialog";
 import { PooledAssignDialog } from "./pooled-assign-dialog";
 import type { PooledPico, PooledQueueItem, PooledQueueResponse } from "./types";
 
@@ -62,14 +63,14 @@ export function PooledScreeningWorkspace({
   const canConfigure = guideline.capabilities.includes("screening.configure");
   const canScreen = guideline.capabilities.includes("screening.decide");
 
-  const loadQueue = useCallback(async () => {
+  const loadQueue = useCallback(async (quiet = false) => {
     if (!canScreen) {
       setQueue(null);
       setError(null);
       return;
     }
     const generation = ++requestGeneration.current;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     try {
       const response = await api<PooledQueueResponse>(
         buildQueuePath(guidelineId, pool.id),
@@ -89,6 +90,12 @@ export function PooledScreeningWorkspace({
   useEffect(() => {
     void loadQueue();
   }, [loadQueue]);
+
+  useEffect(() => {
+    if (busy || excludeOpen) return;
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void loadQueue(true); }, 15000);
+    return () => window.clearInterval(timer);
+  }, [busy, excludeOpen, loadQueue]);
 
   const current = queue?.items[0] ?? null;
   const canExclude = (queue?.reasons.length ?? 0) > 0;
@@ -128,6 +135,7 @@ export function PooledScreeningWorkspace({
         await loadQueue();
       } catch (caught) {
         toast.error(caught instanceof ApiError ? caught.message : "Failed to save the pooled decision");
+        if (caught instanceof ApiError && caught.code === "INVALID_STATE") await loadQueue();
       } finally {
         setBusy(false);
       }
@@ -179,6 +187,10 @@ export function PooledScreeningWorkspace({
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
+            {canConfigure && queue?.configuration.reviewersPerCitation === 2 && <QuotaAssignmentsDialog
+              endpoint={`/api/projects/${guidelineId}/screening/pooled/quotas?poolId=${encodeURIComponent(pool.id)}`}
+              onSaved={loadQueue}
+            />}
             {canConfigure && queue && (
               <PooledAssignDialog
                 guidelineId={guidelineId}
@@ -219,6 +231,7 @@ export function PooledScreeningWorkspace({
       )}
       {error && <Alert variant="error">{error}</Alert>}
 
+      <QuotaProgress quota={queue?.quota} available={queue?.total ?? 0} />
       {loading ? (
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -247,9 +260,9 @@ export function PooledScreeningWorkspace({
               hint={`${queue.summary.awaitingOtherReviewers} awaiting other reviewers`}
             />
             <StatCard
-              label="Needs pooled assignment"
-              value={queue.summary.needsAssignment}
-              hint={`${queue.summary.settledOrOutOfSync} settled or out of sync`}
+              label={queue.quota ? "Your reviews remaining" : "Needs pooled assignment"}
+              value={queue.quota?.remaining ?? queue.summary.needsAssignment}
+              hint={queue.quota ? `${queue.quota.completed} completed of ${queue.quota.target} target` : `${queue.summary.settledOrOutOfSync} settled or out of sync`}
             />
           </div>
 
@@ -258,7 +271,7 @@ export function PooledScreeningWorkspace({
             reviewer decision and note are written to every PICO tag shown on the abstract.
           </Alert>
 
-          {queue.summary.needsAssignment > 0 && canConfigure && (
+          {!queue.quota && queue.summary.needsAssignment > 0 && canConfigure && (
             <Alert variant="warning">
               {queue.summary.needsAssignment} pooled abstract
               {queue.summary.needsAssignment === 1 ? " is" : "s are"} not consistently assigned

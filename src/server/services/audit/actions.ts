@@ -52,6 +52,7 @@ export const AuditActions = {
   DEDUP_MERGE_UNDONE: "dedup.merge_undone",
 
   // screening
+  SCREENING_QUOTA_UPDATED: "screening.quota.updated",
   SCREENING_ASSIGNED: "screening.assigned",
   SCREENING_ASSIGNMENTS_RESET: "screening.assignments.reset",
   SCREENING_DECISION_CREATED: "screening.decision.created",
