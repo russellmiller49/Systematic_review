@@ -45,7 +45,10 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   await page.getByRole("button", { name: /create source/i }).click();
   await expect(page.getByText(/Source created/i)).toBeVisible();
 
-  await page.getByRole("button", { name: /new import/i }).first().click();
+  await page
+    .getByRole("button", { name: /new import/i })
+    .first()
+    .click();
   await page.selectOption("#imp-format", "RIS");
   await page.setInputFiles("#imp-file", {
     name: "demo.ris",
@@ -58,33 +61,50 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   const commitBtn = page.getByRole("button", { name: /commit \d+ record/i });
   await expect(commitBtn).toBeVisible({ timeout: 30_000 });
   await commitBtn.click();
-  await expect(page.getByText(/3 citations created/i).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/3 citations created/i).first()).toBeVisible({
+    timeout: 30_000,
+  });
 
   // 5. Assign myself and screen every citation.
   await page.getByRole("link", { name: "Screening", exact: true }).click();
   await page.waitForURL(new RegExp(`/projects/${projectId}/screening`));
+  await page.getByText("Fixed assignments", { exact: true }).click();
   await page.getByRole("button", { name: /assign reviewers/i }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("checkbox").first().check();
   await dialog.getByRole("button", { name: /^assign$/i }).click();
-  await expect(page.getByText(/assignments? created/i)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/assignments? created/i)).toBeVisible({
+    timeout: 30_000,
+  });
 
   // Add a shared highlight word, verify that it highlights + groups the queue, then return
   // to all papers for the decision flow.
-  await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({ timeout: 15_000 });
-  const articleNavigator = page.getByRole("complementary", { name: "Article navigator" });
+  await expect(page.getByText(/Citation \d+ of/i)).toBeVisible({
+    timeout: 15_000,
+  });
+  const articleNavigator = page.getByRole("complementary", {
+    name: "Article navigator",
+  });
 
   // Imported records can omit abstracts. An assigned screener can add the missing shared
   // metadata directly instead of trying to preserve it in a private decision note.
   await articleNavigator
-    .getByRole("button", { name: /Gamma narrative review of lung volume reduction/i })
+    .getByRole("button", {
+      name: /Gamma narrative review of lung volume reduction/i,
+    })
     .click();
-  await expect(page.getByText("No abstract available.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("No abstract available.", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Add abstract", exact: true }).click();
   await page
     .getByLabel("Add abstract", { exact: true })
-    .fill("A manually recovered narrative-review abstract for the shared citation record.");
-  await page.getByRole("button", { name: "Save abstract", exact: true }).click();
+    .fill(
+      "A manually recovered narrative-review abstract for the shared citation record.",
+    );
+  await page
+    .getByRole("button", { name: "Save abstract", exact: true })
+    .click();
   await expect(page.getByText("Abstract added", { exact: true })).toBeVisible();
   await expect(
     page.getByText(
@@ -100,19 +120,27 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   await expect(page.getByText("1 screening keyword added")).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await page.getByLabel("Group papers by keyword").selectOption({ label: "Include — randomized" });
+  await page
+    .getByLabel("Group papers by keyword")
+    .selectOption({ label: "Include — randomized" });
   await expect(page.getByText("Citation 1 of 1", { exact: true })).toBeVisible({
     timeout: 15_000,
   });
-  await expect(page.locator('mark[data-keyword-term="randomized"]').first()).toBeVisible();
-  await page.getByLabel("Group papers by keyword").selectOption({ label: "All papers" });
+  await expect(
+    page.locator('mark[data-keyword-term="randomized"]').first(),
+  ).toBeVisible();
+  await page
+    .getByLabel("Group papers by keyword")
+    .selectOption({ label: "All papers" });
   await expect(page.getByText("Citation 1 of 3", { exact: true })).toBeVisible({
     timeout: 15_000,
   });
 
   // The left navigator exposes the requested status filters and searches the assigned corpus.
   await expect(articleNavigator).toBeVisible();
-  await expect(articleNavigator.getByLabel("Filter article status").locator("option")).toHaveText([
+  await expect(
+    articleNavigator.getByLabel("Filter article status").locator("option"),
+  ).toHaveText([
     "Undecided (3)",
     "One screener reviewed (0)",
     "Decided by me (0)",
@@ -120,21 +148,29 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
     "Excluded (0)",
     "All assigned articles (3)",
   ]);
-  await articleNavigator.getByLabel("Search assigned articles").fill("Beta observational");
+  await articleNavigator
+    .getByLabel("Search assigned articles")
+    .fill("Beta observational");
   await articleNavigator.getByLabel("Search assigned articles").press("Enter");
   await expect(page.getByText("Citation 1 of 1", { exact: true })).toBeVisible({
     timeout: 15_000,
   });
-  await articleNavigator.getByRole("button", { name: "Clear article search" }).click();
+  await articleNavigator
+    .getByRole("button", { name: "Clear article search" })
+    .click();
   await expect(page.getByText("Citation 1 of 3", { exact: true })).toBeVisible({
     timeout: 15_000,
   });
 
   // A note is saved with the decision, and selecting an exclusion reason submits
   // immediately without requiring a second Exclude click.
-  const quickReasons = page.getByRole("group", { name: "Quick exclusion reasons" });
+  const quickReasons = page.getByRole("group", {
+    name: "Quick exclusion reasons",
+  });
   await expect(
-    quickReasons.getByRole("button", { name: /Exclude: Wrong population \(shortcut 1\)/i }),
+    quickReasons.getByRole("button", {
+      name: /Exclude: Wrong population \(shortcut 1\)/i,
+    }),
   ).toBeVisible();
   await expect(
     quickReasons.getByRole("button", {
@@ -143,7 +179,8 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   ).toBeVisible();
   await page.locator('mark[data-keyword-term="randomized"]').first().click();
   await page.getByRole("button", { name: /^Note/ }).click();
-  const savedNote = "Narrative publication; exclude from primary-study screening.";
+  const savedNote =
+    "Narrative publication; exclude from primary-study screening.";
   await page
     .getByPlaceholder(/Optional note, saved with your next decision/i)
     .fill(savedNote);
@@ -152,20 +189,30 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
     .getByRole("button", { name: /^Exclude/ })
     .first()
     .click();
-  const exclusionDialog = page.getByRole("dialog", { name: /Exclude at title & abstract/i });
-  await expect(exclusionDialog.getByLabel("Note (optional)")).toHaveValue(savedNote);
+  const exclusionDialog = page.getByRole("dialog", {
+    name: /Exclude at title & abstract/i,
+  });
+  await expect(exclusionDialog.getByLabel("Note (optional)")).toHaveValue(
+    savedNote,
+  );
   await exclusionDialog
     .getByLabel("Exclusion reason subgroup")
     .selectOption({ label: "3 · Wrong publication type" });
-  await expect(page.getByText("Excluded — Wrong publication type")).toBeVisible();
-  await articleNavigator.getByLabel("Filter article status").selectOption("EXCLUDED");
+  await expect(
+    page.getByText("Excluded — Wrong publication type"),
+  ).toBeVisible();
+  await articleNavigator
+    .getByLabel("Filter article status")
+    .selectOption("EXCLUDED");
   const excludedArticle = articleNavigator.getByRole("button", {
     name: /Alpha randomized trial of endobronchial valves/i,
   });
   await expect(excludedArticle).toBeVisible({ timeout: 15_000 });
   await excludedArticle.click();
   await expect(page.getByText(savedNote, { exact: true })).toBeVisible();
-  await articleNavigator.getByLabel("Filter article status").selectOption("UNDECIDED");
+  await articleNavigator
+    .getByLabel("Filter article status")
+    .selectOption("UNDECIDED");
 
   // Select every remaining undecided article and apply one shared reason in one batch.
   await expect(page.getByText("Citation 1 of 2", { exact: true })).toBeVisible({
@@ -174,21 +221,31 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
   await articleNavigator
     .getByLabel("Select all undecided articles on this page")
     .check();
-  await articleNavigator.getByRole("button", { name: "Exclude selected (2)" }).click();
-  const batchDialog = page.getByRole("dialog", { name: /Exclude 2 selected articles/i });
+  await articleNavigator
+    .getByRole("button", { name: "Exclude selected (2)" })
+    .click();
+  const batchDialog = page.getByRole("dialog", {
+    name: /Exclude 2 selected articles/i,
+  });
   await batchDialog
     .getByLabel("Common exclusion reason")
     .selectOption({ label: "Wrong population" });
-  await expect(page.getByText("Excluded 2 articles", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Excluded 2 articles", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/Queue clear/i)).toBeVisible({ timeout: 15_000 });
   await expect(
-    articleNavigator.getByLabel("Filter article status").locator('option[value="EXCLUDED"]'),
+    articleNavigator
+      .getByLabel("Filter article status")
+      .locator('option[value="EXCLUDED"]'),
   ).toHaveText("Excluded (3)");
 
   // 6. PRISMA reflects the imported + screened counts.
   await page.getByRole("link", { name: "PRISMA", exact: true }).click();
   await page.waitForURL(new RegExp(`/projects/${projectId}/prisma`));
-  await expect(page.getByText("Records identified")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Records identified")).toBeVisible({
+    timeout: 30_000,
+  });
   const identifiedBox = page
     .getByText("Records identified", { exact: true })
     .locator("xpath=ancestor::div[1]");
@@ -197,8 +254,12 @@ test("sign-up to export, entirely through the UI", async ({ page }) => {
 
   // 7. Create an export and confirm it becomes downloadable.
   await page.getByRole("button", { name: /create export/i }).click();
-  await expect(page.getByText(/Export ready/i)).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("link", { name: /download/i }).first()).toBeVisible();
+  await expect(page.getByText(/Export ready/i)).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(
+    page.getByRole("link", { name: /download/i }).first(),
+  ).toBeVisible();
 
   await expectNoErrorOverlay(page);
 });

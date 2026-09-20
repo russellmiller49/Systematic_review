@@ -80,19 +80,14 @@ async function completedByReviewer(
   const counts = new Map<string, number>();
   // One abstract counts once, even when the pooled decision wrote to several PICOs.
   for (const group of groupPooledCitationRows(rows)) {
-    for (const assignment of group[0]!.assignments) {
-      if (
-        group.every((c) =>
-          c.assignments.some((a) => a.reviewerId === assignment.reviewerId),
-        )
-      ) {
-        counts.set(
-          assignment.reviewerId,
-          (counts.get(assignment.reviewerId) ?? 0) + 1,
-        );
-      }
+    // Credit historical work even when a newly imported copy needs synchronization.
+    for (const id of new Set(
+      group.flatMap((c) => c.assignments.map((a) => a.reviewerId)),
+    )) {
+      counts.set(id, (counts.get(id) ?? 0) + 1);
     }
   }
+
   return counts;
 }
 
@@ -234,6 +229,19 @@ export async function saveQuotas(
       tx,
       stages.map((s) => s.id),
     );
+    if (scope.poolId) {
+      const members = await tx.guidelineScreeningPoolMember.findMany({
+        where: { poolId: scope.poolId },
+      });
+      if (
+        members.length !== stages.length ||
+        members.some((m) => !stages.some((s) => s.projectId === m.projectId))
+      ) {
+        throw invalidState(
+          "The screening pool changed. Reload reviewer quotas before saving.",
+        );
+      }
+    }
     const currentStages = await tx.screeningStage.findMany({
       where: { id: { in: stages.map((s) => s.id) } },
     });

@@ -56,7 +56,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
   await importAbstracts(page.request, project.id);
   await page.goto(`/projects/${project.id}/screening`);
   await page
-    .getByRole("button", { name: "Shared reviewer quotas", exact: true })
+    .getByRole("button", { name: "Reviewer quotas", exact: true })
     .click();
   let dialog = page.getByRole("dialog");
   await dialog.getByRole("checkbox").check();
@@ -64,7 +64,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .getByRole("spinbutton", { name: `Target for ${name}`, exact: true })
     .fill("1");
   await dialog.getByRole("button", { name: "Save quotas" }).click();
-  const progress = page.getByLabel("Your review assignment");
+  const progress = page.getByLabel("Your reviewer quota");
   await expect(progress).toContainText(
     "Target: 1 · Completed: 0 · Remaining: 1",
   );
@@ -79,9 +79,9 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     "Target: 1 · Completed: 1 · Remaining: 0",
   );
   await page.reload();
-  await expect(progress).toContainText("Assignment complete");
+  await expect(progress).toContainText("Target reached");
   await page
-    .getByRole("button", { name: "Shared reviewer quotas", exact: true })
+    .getByRole("button", { name: "Reviewer quotas", exact: true })
     .click();
   dialog = page.getByRole("dialog");
   const reviewerRow = dialog.getByRole("row").filter({ hasText: name });
@@ -131,7 +131,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/projects/${guideline.id}/screening`);
   await page
-    .getByRole("button", { name: "Shared reviewer quotas", exact: true })
+    .getByRole("button", { name: "Reviewer quotas", exact: true })
     .click();
   dialog = page.getByRole("dialog");
   await dialog.getByRole("checkbox").check();
@@ -145,7 +145,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     "Target: 1 · Completed: 1 · Remaining: 0",
   );
   await page.reload();
-  await expect(progress).toContainText("Assignment complete");
+  await expect(progress).toContainText("Target reached");
   await page.screenshot({
     path: "test-results/quota-pool-desktop.png",
     fullPage: true,

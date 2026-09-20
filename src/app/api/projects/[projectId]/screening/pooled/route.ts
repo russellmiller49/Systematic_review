@@ -4,7 +4,7 @@ import {
   createPooledDecision,
   createPooledDecisionSchema,
   getPooledQueue,
-  pooledSelectionSchema,
+  pooledNavigatorQuerySchema,
 } from "@/server/services/screening/pooled";
 
 type Params = { params: Promise<{ projectId: string }> };
@@ -13,8 +13,9 @@ export async function GET(req: Request, { params }: Params) {
   return handleRoute(async () => {
     const ctx = await getCtx();
     const { projectId } = await params;
-    const poolId = new URL(req.url).searchParams.get("poolId");
-    const input = pooledSelectionSchema.parse({ poolId });
+    const input = pooledNavigatorQuerySchema.parse(
+      Object.fromEntries(new URL(req.url).searchParams),
+    );
     return ok(await getPooledQueue(ctx, projectId, input));
   });
 }

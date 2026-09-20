@@ -2,16 +2,22 @@
 //
 // A guideline stores each PICO as an independent review project. This service presents the
 // administrator-configured PICO projects as one blind-safe reviewer queue, groups exact cross-PICO citation
-// matches, assigns the same reviewers to every copy in a group, and writes one human choice to
+// matches, authorizes open selection by reviewer quota, and writes one human choice to
 // every linked PICO record atomically. The underlying per-project ScreeningDecision,
 // ScreeningAssignment, conflict, and CitationStageResult rows remain the source of truth.
 
 import { z } from "zod";
-import type { Prisma, ScreeningStage } from "@prisma/client";
+import { Prisma, type ScreeningStage } from "@prisma/client";
 import { quotaProgress, lockScreeningStages } from "./quotas";
 import { groupPooledCitationRows } from "./grouping";
+import { loadPooledState, pooledReviewerState } from "./pooled-state";
 import { prisma } from "@/server/db";
-import { invalidState, notFound, validationError } from "@/server/errors";
+import {
+  forbidden,
+  invalidState,
+  notFound,
+  validationError,
+} from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { can, requirePermission, type Capability } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
@@ -25,10 +31,20 @@ const projectIdsSchema = z
   .array(z.string().trim().min(1))
   .min(2, "Choose at least two PICO projects")
   .max(50)
-  .refine((ids) => new Set(ids).size === ids.length, "PICO projects must be unique");
+  .refine(
+    (ids) => new Set(ids).size === ids.length,
+    "PICO projects must be unique",
+  );
 
 export const pooledSelectionSchema = z.object({
   poolId: z.string().trim().min(1),
+});
+
+export const pooledNavigatorQuerySchema = pooledSelectionSchema.extend({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  q: z.string().trim().max(500).optional(),
+  status: z.enum(["AVAILABLE", "MY_REVIEWED", "ALL"]).default("AVAILABLE"),
 });
 
 export const createPooledAssignmentsSchema = z.object({
@@ -43,8 +59,11 @@ export const createPooledDecisionSchema = z.object({
     .array(z.string().trim().min(1))
     .min(1)
     .max(200)
-    .refine((ids) => new Set(ids).size === ids.length, "Citations must be unique"),
-  decision: z.enum(["INCLUDE", "EXCLUDE"]),
+    .refine(
+      (ids) => new Set(ids).size === ids.length,
+      "Citations must be unique",
+    ),
+  decision: z.enum(["INCLUDE", "EXCLUDE", "MAYBE"]),
   exclusionReasonLabel: z.string().trim().min(1).max(300).nullable().optional(),
   notes: z.string().max(20_000).nullable().optional(),
 });
@@ -85,7 +104,10 @@ async function loadGuideline(
   };
 }
 
-export async function getGuidelineScreeningConfiguration(ctx: Ctx, guidelineId: string) {
+export async function getGuidelineScreeningConfiguration(
+  ctx: Ctx,
+  guidelineId: string,
+) {
   const guideline = await loadGuideline(ctx, guidelineId, "project.view");
   const pool = await prisma.guidelineScreeningPool.findUnique({
     where: { guidelineId },
@@ -96,9 +118,15 @@ export async function getGuidelineScreeningConfiguration(ctx: Ctx, guidelineId: 
       },
     },
   });
-  const pooledIds = new Set(pool?.members.map((member) => member.projectId) ?? []);
-  const pooledPicos = guideline.subProjects.filter((project) => pooledIds.has(project.id));
-  const unpooledPicos = guideline.subProjects.filter((project) => !pooledIds.has(project.id));
+  const pooledIds = new Set(
+    pool?.members.map((member) => member.projectId) ?? [],
+  );
+  const pooledPicos = guideline.subProjects.filter((project) =>
+    pooledIds.has(project.id),
+  );
+  const unpooledPicos = guideline.subProjects.filter(
+    (project) => !pooledIds.has(project.id),
+  );
 
   return {
     guideline: { id: guideline.id, title: guideline.title },
@@ -123,21 +151,45 @@ export async function saveGuidelineScreeningPool(
 ) {
   const guideline = await loadGuideline(ctx, guidelineId, "project.edit");
   const requested = new Set(input.projectIds);
-  const selected = guideline.subProjects.filter((project) => requested.has(project.id));
+  const selected = guideline.subProjects.filter((project) =>
+    requested.has(project.id),
+  );
   if (selected.length !== requested.size) {
-    throw validationError("Every pooled project must be a PICO in this guideline");
+    throw validationError(
+      "Every pooled project must be a PICO in this guideline",
+    );
   }
   const orderedProjectIds = selected.map((project) => project.id);
   const selectedStages = await titleAbstractStages(orderedProjectIds);
 
   return prisma.$transaction(async (tx) => {
+    const familyStages = await tx.screeningStage.findMany({
+      where: {
+        project: { parentProjectId: guidelineId },
+        type: "TITLE_ABSTRACT",
+      },
+      select: { id: true },
+    });
+    await lockScreeningStages(
+      tx,
+      familyStages.map((s) => s.id),
+    );
     const before = await tx.guidelineScreeningPool.findUnique({
       where: { guidelineId },
       include: { members: { orderBy: { order: "asc" } } },
     });
-    if (before && await tx.screeningQuota.count({ where: { poolId: before.id } })) {
-      if (selectedStages.some(stage => stage.reviewersPerCitation !== 2)) {
-        throw invalidState("A pool with shared reviewer quotas requires two reviewers per abstract");
+    const lockedStages = await tx.screeningStage.findMany({
+      where: { id: { in: selectedStages.map((s) => s.id) } },
+    });
+    assertCompatibleStages(lockedStages);
+    if (
+      before &&
+      (await tx.screeningQuota.count({ where: { poolId: before.id } }))
+    ) {
+      if (lockedStages.some((stage) => stage.reviewersPerCitation !== 2)) {
+        throw invalidState(
+          "A pool with shared reviewer quotas requires two reviewers per abstract",
+        );
       }
     }
     const pool = before
@@ -152,9 +204,15 @@ export async function saveGuidelineScreeningPool(
             createdById: ctx.userId,
           },
         });
-    await tx.guidelineScreeningPoolMember.deleteMany({ where: { poolId: pool.id } });
+    await tx.guidelineScreeningPoolMember.deleteMany({
+      where: { poolId: pool.id },
+    });
     await tx.guidelineScreeningPoolMember.createMany({
-      data: orderedProjectIds.map((projectId, order) => ({ poolId: pool.id, projectId, order })),
+      data: orderedProjectIds.map((projectId, order) => ({
+        poolId: pool.id,
+        projectId,
+        order,
+      })),
     });
     await audit.record(tx, {
       projectId: guidelineId,
@@ -177,15 +235,31 @@ export async function saveGuidelineScreeningPool(
   });
 }
 
-export async function deleteGuidelineScreeningPool(ctx: Ctx, guidelineId: string) {
+export async function deleteGuidelineScreeningPool(
+  ctx: Ctx,
+  guidelineId: string,
+) {
   await loadGuideline(ctx, guidelineId, "project.edit");
   return prisma.$transaction(async (tx) => {
+    const familyStages = await tx.screeningStage.findMany({
+      where: {
+        project: { parentProjectId: guidelineId },
+        type: "TITLE_ABSTRACT",
+      },
+      select: { id: true },
+    });
+    await lockScreeningStages(
+      tx,
+      familyStages.map((s) => s.id),
+    );
     const pool = await tx.guidelineScreeningPool.findUnique({
       where: { guidelineId },
       include: { members: { orderBy: { order: "asc" } } },
     });
     if (!pool) throw notFound("Screening pool");
-    await tx.guidelineScreeningPoolMember.deleteMany({ where: { poolId: pool.id } });
+    await tx.guidelineScreeningPoolMember.deleteMany({
+      where: { poolId: pool.id },
+    });
     await tx.guidelineScreeningPool.delete({ where: { id: pool.id } });
     await audit.record(tx, {
       projectId: guidelineId,
@@ -222,9 +296,13 @@ async function loadGuidelinePoolSelection(
   if (!pool) throw notFound("Screening pool");
 
   const requested = new Set(pool.members.map((member) => member.projectId));
-  const selected = guideline.subProjects.filter((project) => requested.has(project.id));
+  const selected = guideline.subProjects.filter((project) =>
+    requested.has(project.id),
+  );
   if (selected.length !== requested.size) {
-    throw invalidState("This screening pool contains a project outside its guideline family");
+    throw invalidState(
+      "This screening pool contains a project outside its guideline family",
+    );
   }
   for (const project of selected) {
     await requirePermission(ctx, project.id, capability);
@@ -236,19 +314,33 @@ async function loadGuidelinePoolSelection(
   };
 }
 
-async function titleAbstractStages(projectIds: string[]): Promise<ScreeningStage[]> {
+async function titleAbstractStages(
+  projectIds: string[],
+): Promise<ScreeningStage[]> {
   await Promise.all(projectIds.map((projectId) => ensureStages(projectId)));
   const stages = await prisma.screeningStage.findMany({
     where: { projectId: { in: projectIds }, type: "TITLE_ABSTRACT" },
   });
-  if (stages.length !== projectIds.length) throw notFound("Title and abstract screening stage");
-  const reviewerCounts = new Set(stages.map((stage) => stage.reviewersPerCitation));
+  if (stages.length !== projectIds.length)
+    throw notFound("Title and abstract screening stage");
+  assertCompatibleStages(stages);
+  return stages;
+}
+
+function assertCompatibleStages(stages: ScreeningStage[]) {
+  const reviewerCounts = new Set(
+    stages.map((stage) => stage.reviewersPerCitation),
+  );
   if (reviewerCounts.size !== 1) {
     throw invalidState(
       "Selected PICOs must use the same number of title/abstract reviewers before they can share a pooled queue",
     );
   }
-  return stages;
+  if (new Set(stages.map((s) => s.maybeGeneratesConflict)).size !== 1) {
+    throw invalidState(
+      "Selected PICOs must use the same Maybe conflict setting before they can share a pooled queue",
+    );
+  }
 }
 
 const pooledCitationSelect = {
@@ -269,13 +361,17 @@ const pooledCitationSelect = {
   },
 } satisfies Prisma.CitationSelect;
 
-type PooledCitation = Prisma.CitationGetPayload<{ select: typeof pooledCitationSelect }>;
+type PooledCitation = Prisma.CitationGetPayload<{
+  select: typeof pooledCitationSelect;
+}>;
 
 function bestRepresentative(group: PooledCitation[]): PooledCitation {
   return [...group].sort((a, b) => {
-    const abstractDifference = (b.abstract?.trim().length ?? 0) - (a.abstract?.trim().length ?? 0);
+    const abstractDifference =
+      (b.abstract?.trim().length ?? 0) - (a.abstract?.trim().length ?? 0);
     if (abstractDifference !== 0) return abstractDifference;
-    const identifierDifference = Number(Boolean(b.doi || b.pmid)) - Number(Boolean(a.doi || a.pmid));
+    const identifierDifference =
+      Number(Boolean(b.doi || b.pmid)) - Number(Boolean(a.doi || a.pmid));
     if (identifierDifference !== 0) return identifierDifference;
     const timeDifference = a.createdAt.getTime() - b.createdAt.getTime();
     return timeDifference !== 0 ? timeDifference : a.id.localeCompare(b.id);
@@ -302,180 +398,187 @@ function queueCitation(citation: PooledCitation) {
 export async function getPooledQueue(
   ctx: Ctx,
   guidelineId: string,
-  input: z.infer<typeof pooledSelectionSchema>,
+  input: z.input<typeof pooledNavigatorQuerySchema>,
 ) {
+  const query = pooledNavigatorQuerySchema.parse(input);
   const family = await loadGuidelinePoolSelection(
     ctx,
     guidelineId,
-    input.poolId,
+    query.poolId,
     "screening.decide",
   );
-  const orderedProjectIds = family.selected.map((project) => project.id);
-  const stages = await titleAbstractStages(orderedProjectIds);
-  const stageByProject = new Map(stages.map((stage) => [stage.projectId, stage]));
-
-  const quota = await quotaProgress(prisma, { poolId: input.poolId }, ctx.userId);
-  const completedAssignments = await prisma.screeningAssignment.findMany({
-    where: { stageId: { in: stages.map(s => s.id) }, status: "COMPLETED" },
-    select: { citationId: true, reviewerId: true },
+  const membership = await prisma.projectMember.findUniqueOrThrow({
+    where: { projectId_userId: { projectId: guidelineId, userId: ctx.userId } },
+    select: { roles: true },
   });
-  const reviewersByCitation = new Map<string, Set<string>>();
-  for (const assignment of completedAssignments) {
-    const reviewers = reviewersByCitation.get(assignment.citationId) ?? new Set<string>();
-    reviewers.add(assignment.reviewerId);
-    reviewersByCitation.set(assignment.citationId, reviewers);
-  }
-  const citations = await prisma.citation.findMany({
-    where: { projectId: { in: orderedProjectIds }, status: "ACTIVE" },
-    select: pooledCitationSelect,
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-  });
-  const groups = groupPooledCitationRows(citations);
-  const citationIds = citations.map((citation) => citation.id);
-  const stageIds = stages.map((stage) => stage.id);
-  const [assignments, decisions, results, reasons] = await Promise.all([
-    prisma.screeningAssignment.findMany({
-      where: {
-        stageId: { in: stageIds },
-        citationId: { in: citationIds },
-        reviewerId: ctx.userId,
-      },
-      select: { stageId: true, citationId: true, status: true },
-    }),
-    prisma.screeningDecision.findMany({
-      where: {
-        stageId: { in: stageIds },
-        citationId: { in: citationIds },
-        reviewerId: ctx.userId,
-      },
-      select: { stageId: true, citationId: true },
-    }),
-    prisma.citationStageResult.findMany({
-      where: { stageId: { in: stageIds }, citationId: { in: citationIds } },
-      select: { stageId: true, citationId: true, outcome: true },
-    }),
-    prisma.exclusionReason.findMany({
-      where: {
-        projectId: { in: orderedProjectIds },
-        isActive: true,
-        stage: { in: ["TITLE_ABSTRACT", "BOTH"] },
-      },
-      select: { projectId: true, label: true, order: true },
-      orderBy: [{ order: "asc" }, { label: "asc" }],
-    }),
-  ]);
+  const isAdmin = can(membership.roles, "screening.configure");
+  if (query.status === "ALL" && !isAdmin)
+    throw forbidden("Only an Owner or Admin can browse all pooled abstracts");
+  const projectIds = family.selected.map((p) => p.id);
+  const stages = await titleAbstractStages(projectIds);
+  const required = stages[0]!.reviewersPerCitation;
+  return prisma.$transaction(
+    async (tx) => {
+      const [quota, states, reasons, searchMatches] = await Promise.all([
+        quotaProgress(tx, { poolId: query.poolId }, ctx.userId),
+        loadPooledState(
+          tx,
+          projectIds,
+          stages.map((s) => s.id),
+        ),
+        tx.exclusionReason.findMany({
+          where: {
+            projectId: { in: projectIds },
+            isActive: true,
+            stage: { in: ["TITLE_ABSTRACT", "BOTH"] },
+          },
+          select: { projectId: true, label: true, order: true },
+          orderBy: [{ order: "asc" }, { label: "asc" }],
+        }),
+        // Search every copy, then page logical groups. Parameterized literal substring search
+        // includes JSON author names without loading the full corpus text into application memory.
+        query.q
+          ? tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT "id" FROM "Citation"
+      WHERE "projectId" IN (${Prisma.join(projectIds)}) AND "status" = 'ACTIVE'
+      AND (strpos(lower("title"), lower(${query.q})) > 0
+        OR strpos(lower(coalesce("abstract", '')), lower(${query.q})) > 0
+        OR strpos(lower(coalesce("doi", '')), lower(${query.q})) > 0
+        OR strpos(lower(coalesce("pmid", '')), lower(${query.q})) > 0
+        OR strpos(lower(coalesce("authors"::text, '')), lower(${query.q})) > 0)
+    `)
+          : null,
+      ]);
+      const searchIds = searchMatches
+        ? new Set(searchMatches.map((c) => c.id))
+        : null;
+      const classified = states.map((state) => ({
+        state,
+        personal: pooledReviewerState(state, ctx.userId, required, quota),
+      }));
+      const matches = classified.filter(
+        ({ state }) =>
+          !searchIds || state.group.some((c) => searchIds.has(c.id)),
+      );
+      const available = classified.filter(
+        (row) => row.personal.available,
+      ).length;
+      const myReviewed = classified.filter(
+        (row) => row.personal.hasReviewed,
+      ).length;
+      const filtered = matches.filter(
+        ({ personal }) =>
+          query.status === "ALL" ||
+          (query.status === "AVAILABLE"
+            ? personal.available
+            : personal.hasReviewed),
+      );
+      const total = filtered.length;
+      const totalPages = Math.max(1, Math.ceil(total / query.limit));
+      const page = Math.min(query.page, totalPages);
+      const pageStates = filtered.slice(
+        (page - 1) * query.limit,
+        page * query.limit,
+      );
+      const pageIds = pageStates.flatMap(({ state }) =>
+        state.group.map((c) => c.id),
+      );
+      const hydrated = await tx.citation.findMany({
+        where: { id: { in: pageIds } },
+        select: pooledCitationSelect,
+      });
+      const citationById = new Map(hydrated.map((c) => [c.id, c]));
+      const projectById = new Map(family.selected.map((p) => [p.id, p]));
+      const labels = [...new Set(reasons.map((r) => r.label))];
+      const commonReasons = labels
+        .filter((label) =>
+          projectIds.every((id) =>
+            reasons.some((r) => r.projectId === id && r.label === label),
+          ),
+        )
+        .map((label) => ({ label }));
 
-  const pairKey = (stageId: string, citationId: string) => `${stageId}:${citationId}`;
-  const assignmentByPair = new Map(
-    assignments.map((assignment) => [
-      pairKey(assignment.stageId, assignment.citationId),
-      assignment,
-    ]),
-  );
-  const decisionPairs = new Set(
-    decisions.map((decision) => pairKey(decision.stageId, decision.citationId)),
-  );
-  const resultByPair = new Map(
-    results.map((result) => [pairKey(result.stageId, result.citationId), result]),
-  );
-
-  const reasonsByLabel = new Map<string, Set<string>>();
-  const reasonOrder = new Map<string, number>();
-  for (const reason of reasons) {
-    const projects = reasonsByLabel.get(reason.label) ?? new Set<string>();
-    projects.add(reason.projectId);
-    reasonsByLabel.set(reason.label, projects);
-    reasonOrder.set(reason.label, Math.min(reasonOrder.get(reason.label) ?? reason.order, reason.order));
-  }
-  const commonReasons = [...reasonsByLabel.entries()]
-    .filter(([, projects]) => orderedProjectIds.every((projectId) => projects.has(projectId)))
-    .map(([label]) => ({ label }))
-    .sort((a, b) => {
-      const orderDifference = (reasonOrder.get(a.label) ?? 0) - (reasonOrder.get(b.label) ?? 0);
-      return orderDifference !== 0 ? orderDifference : a.label.localeCompare(b.label);
-    });
-
-  let ready = 0;
-  let awaitingOtherReviewers = 0;
-  let needsAssignment = 0;
-  let settledOrOutOfSync = 0;
-  let quotaLimited = 0;
-  const readyGroups: PooledCitation[][] = [];
-  for (const group of groups) {
-    const pairs = group.map((citation) => {
-      const stage = stageByProject.get(citation.projectId)!;
-      const key = pairKey(stage.id, citation.id);
       return {
-        assignment: assignmentByPair.get(key),
-        hasDecision: decisionPairs.has(key),
-        result: resultByPair.get(key),
+        guideline: family.guideline,
+        pool: family.pool,
+        picos: family.selected,
+        configuration: {
+          reviewersPerCitation: required,
+          blinded: stages.some((s) => s.blinded),
+        },
+        quota,
+        summary: { available, myReviewed },
+        // Pool health never depends on the logged-in reviewer's assignments or quota.
+        adminSummary: isAdmin
+          ? {
+              pooledAbstracts: states.length,
+              linkedCitationRecords: states.reduce(
+                (sum, s) => sum + s.group.length,
+                0,
+              ),
+              overlaps: states.filter(
+                (s) => new Set(s.group.map((c) => c.projectId)).size > 1,
+              ).length,
+              finalized: states.filter((s) => s.finalOutcome !== null).length,
+              fullyReviewed: states.filter(
+                (s) =>
+                  !s.needsSynchronization &&
+                  !s.finalOutcome &&
+                  s.reviewedBy.size >= required,
+              ).length,
+              needsAdditionalReviews: states.filter(
+                (s) =>
+                  !s.needsSynchronization &&
+                  !s.finalOutcome &&
+                  s.reviewedBy.size < required,
+              ).length,
+              unreviewed: states.filter(
+                (s) =>
+                  !s.needsSynchronization &&
+                  !s.finalOutcome &&
+                  s.reviewedBy.size === 0,
+              ).length,
+              needsSynchronization: states.filter((s) => s.needsSynchronization)
+                .length,
+            }
+          : null,
+        total,
+        pagination: { page, limit: query.limit, total, totalPages },
+        reasons: commonReasons,
+        items: pageStates.map(({ state, personal }) => {
+          const group = state.group.map((c) => citationById.get(c.id)!);
+          const representative = bestRepresentative(group);
+          const byProject = new Map<string, string[]>();
+          for (const citation of group) {
+            const ids = byProject.get(citation.projectId) ?? [];
+            ids.push(citation.id);
+            byProject.set(citation.projectId, ids);
+          }
+          return {
+            id: state.id,
+            citationIds: group.map((c) => c.id).sort(),
+            citation: queueCitation(representative),
+            picos: [...byProject.entries()]
+              .map(([projectId, ids]) => ({
+                ...projectById.get(projectId)!,
+                citationIds: ids.sort(),
+              }))
+              .sort((a, b) => a.picoNumber - b.picoNumber),
+            completedReviews: state.reviewedBy.size,
+            requiredReviews: required,
+            myDecision: personal.myDecision,
+            finalOutcome: state.finalOutcome,
+            canDecide: personal.available || personal.canRevise,
+            needsSynchronization: state.needsSynchronization,
+          };
+        }),
       };
-    });
-    const reviewedBy = new Set(group.flatMap(c => [...(reviewersByCitation.get(c.id) ?? [])]));
-    const resultCount = pairs.filter((pair) => pair.result).length;
-    const decisionCount = pairs.filter((pair) => pair.hasDecision).length;
-    if (resultCount > 0 || reviewedBy.size >= stages[0]!.reviewersPerCitation || pairs.some(pair => pair.assignment?.status === "VOIDED") || (decisionCount > 0 && decisionCount < pairs.length)) {
-      settledOrOutOfSync += 1;
-    } else if (decisionCount === pairs.length) {
-      awaitingOtherReviewers += 1;
-    } else if (
-      (quota ? quota.remaining > 0 : pairs.every(
-        (pair) => pair.assignment !== undefined && pair.assignment.status === "PENDING",
-      ))
-    ) {
-      ready += 1;
-      readyGroups.push(group);
-    } else if (quota) {
-      quotaLimited += 1;
-    } else {
-      needsAssignment += 1;
-    }
-  }
-
-  const projectById = new Map(family.selected.map((project) => [project.id, project]));
-  return {
-    guideline: family.guideline,
-    pool: family.pool,
-    picos: family.selected,
-    configuration: {
-      reviewersPerCitation: stages[0]!.reviewersPerCitation,
-      blinded: stages.every((stage) => stage.blinded),
     },
-    summary: {
-      pooledAbstracts: groups.length,
-      linkedCitationRecords: citations.length,
-      overlaps: groups.filter(
-        (group) => new Set(group.map((citation) => citation.projectId)).size > 1,
-      ).length,
-      ready,
-      awaitingOtherReviewers,
-      needsAssignment,
-      settledOrOutOfSync,
-      quotaLimited,
+    {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      timeout: 30_000,
     },
-    quota,
-    total: ready,
-    reasons: commonReasons,
-    items: readyGroups.slice(0, 25).map((group) => {
-      const representative = bestRepresentative(group);
-      const byProject = new Map<string, string[]>();
-      for (const citation of group) {
-        const ids = byProject.get(citation.projectId) ?? [];
-        ids.push(citation.id);
-        byProject.set(citation.projectId, ids);
-      }
-      return {
-        citationIds: group.map((citation) => citation.id).sort(),
-        citation: queueCitation(representative),
-        picos: [...byProject.entries()]
-          .map(([projectId, ids]) => ({
-            ...projectById.get(projectId)!,
-            citationIds: ids.sort(),
-          }))
-          .sort((a, b) => a.picoNumber - b.picoNumber),
-      };
-    }),
-  };
+  );
 }
 
 export async function createPooledAssignments(
@@ -514,7 +617,9 @@ export async function createPooledAssignments(
         .map((member) => `${member.projectId}:${member.userId}`),
     );
     const ineligible = reviewerIds.filter((reviewerId) =>
-      orderedProjectIds.some((projectId) => !eligible.has(`${projectId}:${reviewerId}`)),
+      orderedProjectIds.some(
+        (projectId) => !eligible.has(`${projectId}:${reviewerId}`),
+      ),
     );
     if (ineligible.length > 0) {
       throw validationError(
@@ -536,7 +641,9 @@ export async function createPooledAssignments(
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
     const groups = groupPooledCitationRows(citations);
-    const stageByProject = new Map(stages.map((stage) => [stage.projectId, stage]));
+    const stageByProject = new Map(
+      stages.map((stage) => [stage.projectId, stage]),
+    );
     const pairsByProject = new Map<
       string,
       { stageId: string; citationId: string; reviewerId: string }[]
@@ -548,7 +655,8 @@ export async function createPooledAssignments(
           ? reviewerIds
           : Array.from(
               { length: reviewersPerCitation },
-              (_, offset) => reviewerIds[(cursor + offset) % reviewerIds.length]!,
+              (_, offset) =>
+                reviewerIds[(cursor + offset) % reviewerIds.length]!,
             );
       if (input.strategy === "split") {
         cursor = (cursor + reviewersPerCitation) % reviewerIds.length;
@@ -557,7 +665,11 @@ export async function createPooledAssignments(
         const stage = stageByProject.get(citation.projectId)!;
         const projectPairs = pairsByProject.get(citation.projectId) ?? [];
         for (const reviewerId of assignedReviewers) {
-          projectPairs.push({ stageId: stage.id, citationId: citation.id, reviewerId });
+          projectPairs.push({
+            stageId: stage.id,
+            citationId: citation.id,
+            reviewerId,
+          });
         }
         pairsByProject.set(citation.projectId, projectPairs);
       }
@@ -609,6 +721,7 @@ export async function createPooledDecision(
   guidelineId: string,
   input: z.infer<typeof createPooledDecisionSchema>,
 ) {
+  input = createPooledDecisionSchema.parse(input);
   const family = await loadGuidelinePoolSelection(
     ctx,
     guidelineId,
@@ -619,52 +732,86 @@ export async function createPooledDecision(
   const stages = await titleAbstractStages(orderedProjectIds);
 
   return prisma.$transaction(async (tx) => {
-    await lockScreeningStages(tx, stages.map(stage => stage.id));
+    for (const projectId of [...orderedProjectIds].sort()) {
+      await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id" = ${projectId} FOR NO KEY UPDATE`;
+    }
+    await lockScreeningStages(
+      tx,
+      stages.map((stage) => stage.id),
+    );
+    await requirePermission(ctx, guidelineId, "screening.decide", tx);
     const quota = await quotaProgress(tx, { poolId: input.poolId }, ctx.userId);
-    const citations = await tx.citation.findMany({
-      where: { projectId: { in: orderedProjectIds }, status: "ACTIVE" },
-      select: {
-        id: true,
-        projectId: true,
-        doi: true,
-        pmid: true,
-        normalizedTitle: true,
-        createdAt: true,
-      },
+    const currentMembers = await tx.guidelineScreeningPoolMember.findMany({
+      where: { poolId: input.poolId },
     });
-    const groups = groupPooledCitationRows(citations);
+    if (
+      currentMembers.length !== orderedProjectIds.length ||
+      currentMembers.some((m) => !orderedProjectIds.includes(m.projectId))
+    ) {
+      throw invalidState(
+        "This screening pool changed. Refresh the queue before deciding.",
+      );
+    }
+    const currentStages = await tx.screeningStage.findMany({
+      where: { id: { in: stages.map((s) => s.id) } },
+    });
+    assertCompatibleStages(currentStages);
+    const states = await loadPooledState(
+      tx,
+      orderedProjectIds,
+      currentStages.map((s) => s.id),
+    );
     const requestedIds = new Set(input.citationIds);
-    const group = groups.find((candidate) =>
-      candidate.some((citation) => requestedIds.has(citation.id)),
+    const state = states.find((s) =>
+      s.group.some((c) => requestedIds.has(c.id)),
     );
     if (
-      !group ||
-      group.length !== requestedIds.size ||
-      group.some((citation) => !requestedIds.has(citation.id))
+      !state ||
+      state.group.length !== requestedIds.size ||
+      state.group.some((c) => !requestedIds.has(c.id))
     ) {
       throw invalidState(
         "This pooled abstract changed after it was loaded. Refresh the queue before deciding.",
       );
     }
+    const group = state.group;
+    if (state.needsSynchronization) {
+      throw invalidState(
+        "This abstract needs synchronization across its linked PICOs. Choose another abstract and ask an administrator to review the linked screening state.",
+      );
+    }
+    const personal = pooledReviewerState(
+      state,
+      ctx.userId,
+      currentStages[0]!.reviewersPerCitation,
+      quota,
+    );
+    if (
+      !personal.hasReviewed &&
+      (state.finalOutcome ||
+        state.reviewedBy.size >= currentStages[0]!.reviewersPerCitation)
+    ) {
+      throw invalidState(
+        "This abstract has just received all required reviews. Choose another abstract.",
+      );
+    }
+    if (state.finalOutcome)
+      throw invalidState(
+        "This abstract has a final stage outcome. An administrator must reopen every linked record before revision.",
+      );
+    if (!personal.hasReviewed && quota?.remaining === 0)
+      throw invalidState("Your review quota is complete");
+    if (!personal.available && !personal.canRevise)
+      throw forbidden(
+        "You need a reviewer quota or live fixed assignments across every linked PICO to screen this abstract",
+      );
 
-    const completedAssignments = await tx.screeningAssignment.findMany({ where: {
-      stageId: { in: stages.map(s => s.id) }, citationId: { in: input.citationIds }, status: "COMPLETED",
-    }, select: { reviewerId: true } });
-    const reviewedBy = new Set(completedAssignments.map(a => a.reviewerId));
-    if (!reviewedBy.has(ctx.userId) && reviewedBy.size >= stages[0]!.reviewersPerCitation) {
-      throw invalidState("This abstract already has all required reviewers. Refresh the queue to choose another.");
-    }
-    if (quota && quota.remaining === 0) {
-      const completed = await tx.screeningAssignment.count({ where: {
-        stageId: { in: stages.map(s => s.id) }, citationId: { in: input.citationIds },
-        reviewerId: ctx.userId, status: "COMPLETED",
-      } });
-      if (completed !== group.length) throw invalidState("Your review quota is complete");
-    }
     const reasonByProject = new Map<string, string>();
     if (input.decision === "EXCLUDE") {
       if (!input.exclusionReasonLabel) {
-        throw validationError("Pooled title/abstract exclusions require a common reason subgroup");
+        throw validationError(
+          "Pooled title/abstract exclusions require a common reason subgroup",
+        );
       }
       const reasons = await tx.exclusionReason.findMany({
         where: {
@@ -675,15 +822,20 @@ export async function createPooledDecision(
         },
         select: { id: true, projectId: true },
       });
-      for (const reason of reasons) reasonByProject.set(reason.projectId, reason.id);
-      if (orderedProjectIds.some((projectId) => !reasonByProject.has(projectId))) {
+      for (const reason of reasons)
+        reasonByProject.set(reason.projectId, reason.id);
+      if (
+        orderedProjectIds.some((projectId) => !reasonByProject.has(projectId))
+      ) {
         throw validationError(
           "The selected exclusion reason must be active in every PICO in this pooled queue",
         );
       }
     }
 
-    const stageByProject = new Map(stages.map((stage) => [stage.projectId, stage]));
+    const stageByProject = new Map(
+      currentStages.map((stage) => [stage.projectId, stage]),
+    );
     const metadata = {
       pooledGuidelineId: guidelineId,
       pooledScreeningPoolId: family.pool.id,
@@ -704,7 +856,7 @@ export async function createPooledDecision(
             citationId: citation.id,
             decision: input.decision,
             exclusionReasonId: reasonByProject.get(citation.projectId) ?? null,
-            notes: input.notes ?? null,
+            notes: input.notes,
             labels: [],
             flaggedForDiscussion: false,
           },

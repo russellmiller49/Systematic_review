@@ -6,15 +6,28 @@
 //   R7 (MAYBE semantics; unanimous MAYBE always conflicts)
 
 import { z } from "zod";
-import { Prisma, type ProjectMember, type ScreeningStage } from "@prisma/client";
+import {
+  Prisma,
+  type ProjectMember,
+  type ScreeningStage,
+} from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
-import { forbidden, invalidState, notFound, validationError } from "@/server/errors";
+import {
+  forbidden,
+  invalidState,
+  notFound,
+  validationError,
+} from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { can, getMembership, requirePermission } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { screeningKeywordCitationWhere } from "@/server/services/screening-keywords";
-import { quotaProgress, completedReviewCounts, lockScreeningStages } from "./quotas";
+import {
+  quotaProgress,
+  completedReviewCounts,
+  lockScreeningStages,
+} from "./quotas";
 import * as studies from "@/server/services/studies";
 
 // ---------------------------------------------------------------------------
@@ -54,7 +67,10 @@ export const batchExcludeSchema = z.object({
     .array(z.string().min(1))
     .min(1, "Choose at least one citation")
     .max(50, "You can exclude up to 50 citations at once")
-    .refine((ids) => new Set(ids).size === ids.length, "Citations must be unique"),
+    .refine(
+      (ids) => new Set(ids).size === ids.length,
+      "Citations must be unique",
+    ),
   exclusionReasonId: z.string().min(1),
 });
 
@@ -72,13 +88,22 @@ export const screeningNavigatorQuerySchema = z.object({
   q: z.string().trim().max(500).optional(),
   keywordGroup: z.string().trim().min(1).max(200).optional(),
   status: z
-    .enum(["ALL", "UNDECIDED", "DECIDED", "ONE_REVIEWER", "INCLUDED", "EXCLUDED"])
+    .enum([
+      "ALL",
+      "UNDECIDED",
+      "DECIDED",
+      "ONE_REVIEWER",
+      "INCLUDED",
+      "EXCLUDED",
+    ])
     .default("UNDECIDED"),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-export type ScreeningNavigatorQuery = z.infer<typeof screeningNavigatorQuerySchema>;
+export type ScreeningNavigatorQuery = z.infer<
+  typeof screeningNavigatorQuerySchema
+>;
 
 export const listConflictsQuerySchema = z.object({
   stage: z.enum(["TITLE_ABSTRACT", "FULL_TEXT"]).optional(),
@@ -123,7 +148,9 @@ export const reopenSchema = z.object({
 
 // R9: by-id stage load is tenant-scoped.
 async function getStageOr404(tx: Tx, projectId: string, stageId: string) {
-  const stage = await tx.screeningStage.findFirst({ where: { id: stageId, projectId } });
+  const stage = await tx.screeningStage.findFirst({
+    where: { id: stageId, projectId },
+  });
   if (!stage) throw notFound("Screening stage");
   return stage;
 }
@@ -131,7 +158,10 @@ async function getStageOr404(tx: Tx, projectId: string, stageId: string) {
 // A PICO inside a persisted guideline pool has one authoritative title/abstract entry point.
 // The pooled service calls createDecisionInTransaction directly after resolving the pool;
 // ordinary queue/assignment/decision endpoints are blocked to prevent partial, out-of-sync work.
-async function assertIndividualTitleAbstractAllowed(tx: Tx, stage: ScreeningStage) {
+async function assertIndividualTitleAbstractAllowed(
+  tx: Tx,
+  stage: ScreeningStage,
+) {
   if (stage.type !== "TITLE_ABSTRACT") return;
   const membership = await tx.guidelineScreeningPoolMember.findUnique({
     where: { projectId: stage.projectId },
@@ -152,7 +182,9 @@ const citationCardInclude = {
   },
 } satisfies Prisma.CitationInclude;
 
-type CitationWithCard = Prisma.CitationGetPayload<{ include: typeof citationCardInclude }>;
+type CitationWithCard = Prisma.CitationGetPayload<{
+  include: typeof citationCardInclude;
+}>;
 
 function citationCard(citation: CitationWithCard) {
   return {
@@ -166,7 +198,9 @@ function citationCard(citation: CitationWithCard) {
     pmid: citation.pmid,
     url: citation.url,
     identifiers: citation.identifiers,
-    sources: [...new Set(citation.sourceRecords.map((r) => r.batch.source.name))],
+    sources: [
+      ...new Set(citation.sourceRecords.map((r) => r.batch.source.name)),
+    ],
   };
 }
 
@@ -188,7 +222,12 @@ async function validateExclusionReason(
       ? (["FULL_TEXT", "BOTH"] as const)
       : (["TITLE_ABSTRACT", "BOTH"] as const);
   const reason = await tx.exclusionReason.findFirst({
-    where: { id: exclusionReasonId, projectId, isActive: true, stage: { in: [...allowed] } },
+    where: {
+      id: exclusionReasonId,
+      projectId,
+      isActive: true,
+      stage: { in: [...allowed] },
+    },
   });
   if (!reason) {
     throw validationError(
@@ -208,8 +247,12 @@ const STAGE_TYPES = ["TITLE_ABSTRACT", "FULL_TEXT"] as const;
 // with schema defaults on first read so screening works regardless of when project setup
 // ran; the unique constraint makes concurrent creation safe.
 export async function ensureStages(projectId: string) {
-  const existing = await prisma.screeningStage.findMany({ where: { projectId } });
-  const missing = STAGE_TYPES.filter((t) => !existing.some((s) => s.type === t));
+  const existing = await prisma.screeningStage.findMany({
+    where: { projectId },
+  });
+  const missing = STAGE_TYPES.filter(
+    (t) => !existing.some((s) => s.type === t),
+  );
   for (const type of missing) {
     try {
       await prisma.screeningStage.create({ data: { projectId, type } });
@@ -229,37 +272,60 @@ export async function listStages(ctx: Ctx, projectId: string) {
   return Promise.all(
     stages.map(async (stage) => {
       // R8: all progress queries only count ACTIVE citations.
-      const [assigned, decided, openConflicts, included, excluded] = await Promise.all([
-        prisma.screeningAssignment.findMany({
+      const [assigned, decided, openConflicts, included, excluded] =
+        await Promise.all([
+          prisma.screeningAssignment.findMany({
+            where: {
+              stageId: stage.id,
+              status: { not: "VOIDED" },
+              citation: { status: "ACTIVE" },
+            },
+            distinct: ["citationId"],
+            select: { citationId: true },
+          }),
+          prisma.screeningDecision.findMany({
+            where: { stageId: stage.id, citation: { status: "ACTIVE" } },
+            distinct: ["citationId"],
+            select: { citationId: true },
+          }),
+          prisma.screeningConflict.count({
+            where: {
+              stageId: stage.id,
+              status: "OPEN",
+              citation: { status: "ACTIVE" },
+            },
+          }),
+          prisma.citationStageResult.count({
+            where: {
+              stageId: stage.id,
+              outcome: "INCLUDE",
+              citation: { status: "ACTIVE" },
+            },
+          }),
+          prisma.citationStageResult.count({
+            where: {
+              stageId: stage.id,
+              outcome: "EXCLUDE",
+              citation: { status: "ACTIVE" },
+            },
+          }),
+        ]);
+      const sharedQuota =
+        stage.type === "TITLE_ABSTRACT" &&
+        (await prisma.screeningQuota.findFirst({
           where: {
-            stageId: stage.id,
-            status: { not: "VOIDED" },
-            citation: { status: "ACTIVE" },
+            OR: [
+              { stageId: stage.id },
+              { pool: { members: { some: { projectId } } } },
+            ],
           },
-          distinct: ["citationId"],
-          select: { citationId: true },
-        }),
-        prisma.screeningDecision.findMany({
-          where: { stageId: stage.id, citation: { status: "ACTIVE" } },
-          distinct: ["citationId"],
-          select: { citationId: true },
-        }),
-        prisma.screeningConflict.count({
-          where: { stageId: stage.id, status: "OPEN", citation: { status: "ACTIVE" } },
-        }),
-        prisma.citationStageResult.count({
-          where: { stageId: stage.id, outcome: "INCLUDE", citation: { status: "ACTIVE" } },
-        }),
-        prisma.citationStageResult.count({
-          where: { stageId: stage.id, outcome: "EXCLUDE", citation: { status: "ACTIVE" } },
-        }),
-      ]);
-      const sharedQuota = stage.type === "TITLE_ABSTRACT" && await prisma.screeningQuota.findFirst({
-        where: { OR: [{ stageId: stage.id }, { pool: { members: { some: { projectId } } } }] },
-        select: { id: true },
-      });
+          select: { id: true },
+        }));
       const assignedCitations = sharedQuota
-        ? await prisma.citation.count({ where: { projectId, status: "ACTIVE" } }) : assigned.length;
+        ? await prisma.citation.count({
+            where: { projectId, status: "ACTIVE" },
+          })
+        : assigned.length;
       return {
         ...stage,
         progress: {
@@ -283,12 +349,20 @@ export async function updateStage(
   return prisma.$transaction(async (tx) => {
     const stage = await getStageOr404(tx, projectId, stageId);
     await lockScreeningStages(tx, [stage.id]);
-    if (stage.type === "TITLE_ABSTRACT" && input.reviewersPerCitation !== undefined && input.reviewersPerCitation !== 2) {
-      const quota = await tx.screeningQuota.findFirst({ where: { OR: [
-        { stageId },
-        { pool: { members: { some: { projectId } } } },
-      ] } });
-      if (quota) throw invalidState("Shared reviewer quotas require two reviewers per abstract");
+    if (
+      stage.type === "TITLE_ABSTRACT" &&
+      input.reviewersPerCitation !== undefined &&
+      input.reviewersPerCitation !== 2
+    ) {
+      const quota = await tx.screeningQuota.findFirst({
+        where: {
+          OR: [{ stageId }, { pool: { members: { some: { projectId } } } }],
+        },
+      });
+      if (quota)
+        throw invalidState(
+          "Shared reviewer quotas require two reviewers per abstract",
+        );
     }
     const unblinding = input.blinded === false && stage.blinded === true;
     const updated = await tx.screeningStage.update({
@@ -357,7 +431,10 @@ export async function createAssignments(
     // Eligible citation pool: ACTIVE citations of this project (intersected with the
     // explicit citationIds when given). R3: FULL_TEXT may only target citations with an
     // INCLUDE stage result at TITLE_ABSTRACT.
-    const citationWhere: Prisma.CitationWhereInput = { projectId, status: "ACTIVE" };
+    const citationWhere: Prisma.CitationWhereInput = {
+      projectId,
+      status: "ACTIVE",
+    };
     if (input.citationIds && input.citationIds.length > 0) {
       citationWhere.id = { in: input.citationIds };
     }
@@ -370,7 +447,9 @@ export async function createAssignments(
           "Full-text assignment requires a title/abstract stage with INCLUDE results",
         );
       }
-      citationWhere.stageResults = { some: { stageId: taStage.id, outcome: "INCLUDE" } };
+      citationWhere.stageResults = {
+        some: { stageId: taStage.id, outcome: "INCLUDE" },
+      };
     }
     const citations = await tx.citation.findMany({
       where: citationWhere,
@@ -537,7 +616,9 @@ export async function resetPendingAssignments(
   await requirePermission(ctx, projectId, "screening.configure");
   return prisma.$transaction(async (tx) => {
     const stage = await getStageOr404(tx, projectId, stageId);
-    const reviewerIds = input.reviewerIds ? [...new Set(input.reviewerIds)] : undefined;
+    const reviewerIds = input.reviewerIds
+      ? [...new Set(input.reviewerIds)]
+      : undefined;
 
     if (reviewerIds) {
       const known = await tx.projectMember.count({
@@ -559,7 +640,9 @@ export async function resetPendingAssignments(
       },
     });
 
-    const removed = await tx.$queryRaw<{ id: string; reviewerId: string }[]>(Prisma.sql`
+    const removed = await tx.$queryRaw<
+      { id: string; reviewerId: string }[]
+    >(Prisma.sql`
       DELETE FROM "ScreeningAssignment" AS assignment
       WHERE assignment."stageId" = ${stage.id}
         AND assignment."status" = 'PENDING'
@@ -581,7 +664,9 @@ export async function resetPendingAssignments(
         ...(reviewerIds ? { reviewerId: { in: reviewerIds } } : {}),
       },
     });
-    const affectedReviewerIds = [...new Set(removed.map((row) => row.reviewerId))];
+    const affectedReviewerIds = [
+      ...new Set(removed.map((row) => row.reviewerId)),
+    ];
 
     if (removed.length > 0) {
       await audit.record(tx, {
@@ -632,12 +717,22 @@ export async function getQueue(
   const quota = await quotaProgress(prisma, { stageId }, ctx.userId);
   if (quota) {
     const navigator = await getScreeningNavigator(ctx, projectId, stageId, {
-      ...query, status: "UNDECIDED", page: 1, limit: 25,
+      ...query,
+      status: "UNDECIDED",
+      page: 1,
+      limit: 25,
     });
-    return { stage: navigator.stage, total: navigator.summary.undecided, items: navigator.items, quota };
+    return {
+      stage: navigator.stage,
+      total: navigator.summary.undecided,
+      items: navigator.items,
+      quota,
+    };
   }
   const counts = await completedReviewCounts(prisma, [stageId]);
-  const fullIds = [...counts].filter(([, count]) => count >= stage.reviewersPerCitation).map(([id]) => id);
+  const fullIds = [...counts]
+    .filter(([, count]) => count >= stage.reviewersPerCitation)
+    .map(([id]) => id);
   const keywordWhere = await screeningKeywordCitationWhere(
     prisma,
     projectId,
@@ -654,7 +749,9 @@ export async function getQueue(
     stageId: stage.id,
     reviewerId: ctx.userId,
     status: "PENDING",
-    citation: keywordWhere ? { AND: [citationWhere, keywordWhere] } : citationWhere,
+    citation: keywordWhere
+      ? { AND: [citationWhere, keywordWhere] }
+      : citationWhere,
   };
 
   const total = await prisma.screeningAssignment.count({ where });
@@ -667,7 +764,10 @@ export async function getQueue(
       select: { id: true, citationId: true, createdAt: true },
     });
     const scores = await prisma.screeningSuggestion.findMany({
-      where: { stageId: stage.id, citationId: { in: slim.map((a) => a.citationId) } },
+      where: {
+        stageId: stage.id,
+        citationId: { in: slim.map((a) => a.citationId) },
+      },
       select: { citationId: true, score: true },
     });
     const scoreByCitation = new Map(scores.map((s) => [s.citationId, s.score]));
@@ -675,7 +775,8 @@ export async function getQueue(
       const sa = scoreByCitation.get(a.citationId);
       const sb = scoreByCitation.get(b.citationId);
       if (sa !== undefined && sb !== undefined && sa !== sb) return sb - sa;
-      if ((sa !== undefined) !== (sb !== undefined)) return sa !== undefined ? -1 : 1;
+      if ((sa !== undefined) !== (sb !== undefined))
+        return sa !== undefined ? -1 : 1;
       const dt = a.createdAt.getTime() - b.createdAt.getTime();
       if (dt !== 0) return dt;
       return a.id < b.id ? -1 : 1;
@@ -701,19 +802,30 @@ export async function getQueue(
   const citationIds = assignments.map((a) => a.citationId);
   const [myDecisions, visibleSuggestions] = await Promise.all([
     prisma.screeningDecision.findMany({
-      where: { stageId: stage.id, reviewerId: ctx.userId, citationId: { in: citationIds } },
+      where: {
+        stageId: stage.id,
+        reviewerId: ctx.userId,
+        citationId: { in: citationIds },
+      },
       include: decisionInclude,
     }),
     // Scores reach screeners only when the stage's aiShowScores toggle is on.
     stage.aiShowScores
       ? prisma.screeningSuggestion.findMany({
           where: { stageId: stage.id, citationId: { in: citationIds } },
-          select: { citationId: true, score: true, suggestedDecision: true, rationale: true },
+          select: {
+            citationId: true,
+            score: true,
+            suggestedDecision: true,
+            rationale: true,
+          },
         })
       : Promise.resolve([]),
   ]);
   const decisionByCitation = new Map(myDecisions.map((d) => [d.citationId, d]));
-  const suggestionByCitation = new Map(visibleSuggestions.map((s) => [s.citationId, s]));
+  const suggestionByCitation = new Map(
+    visibleSuggestions.map((s) => [s.citationId, s]),
+  );
   return {
     stage: { id: stage.id, type: stage.type },
     total,
@@ -785,22 +897,42 @@ export async function getScreeningNavigator(
 
   const quota = await quotaProgress(prisma, { stageId }, ctx.userId);
   const reviewCounts = await completedReviewCounts(prisma, [stageId]);
-  const fullIds = [...reviewCounts].filter(([, count]) => count >= stage.reviewersPerCitation).map(([id]) => id);
+  const fullIds = [...reviewCounts]
+    .filter(([, count]) => count >= stage.reviewersPerCitation)
+    .map(([id]) => id);
   const available: Prisma.CitationWhereInput = {
     id: { notIn: fullIds },
     decisions: { none: { stageId, reviewerId: ctx.userId } },
-    NOT: { assignments: { some: { stageId, reviewerId: ctx.userId, status: "VOIDED" } } },
+    NOT: {
+      assignments: {
+        some: { stageId, reviewerId: ctx.userId, status: "VOIDED" },
+      },
+    },
     stageResults: { none: { stageId } },
-    ...(quota ? (quota.remaining > 0 ? {} : { id: { in: [] } }) : {
-      assignments: { some: { stageId, reviewerId: ctx.userId, status: "PENDING" } },
-    }),
+    ...(quota
+      ? quota.remaining > 0
+        ? {}
+        : { id: { in: [] } }
+      : {
+          assignments: {
+            some: { stageId, reviewerId: ctx.userId, status: "PENDING" },
+          },
+        }),
   };
   const basePredicates: Prisma.CitationWhereInput[] = [
     {
       projectId,
       status: "ACTIVE",
       OR: [
-        { assignments: { some: { stageId, reviewerId: ctx.userId, status: { not: "VOIDED" } } } },
+        {
+          assignments: {
+            some: {
+              stageId,
+              reviewerId: ctx.userId,
+              status: { not: "VOIDED" },
+            },
+          },
+        },
         ...(quota ? [available] : []),
       ],
     },
@@ -822,15 +954,27 @@ export async function getScreeningNavigator(
     .filter(([, count]) => count === 1)
     .map(([id]) => id);
 
-  const statusFilter = (status: ScreeningNavigatorQuery["status"]): Prisma.CitationWhereInput | undefined => {
+  const statusFilter = (
+    status: ScreeningNavigatorQuery["status"],
+  ): Prisma.CitationWhereInput | undefined => {
     if (status === "UNDECIDED") return available;
-    return navigatorStatusWhere(stage.id, ctx.userId, status, oneReviewerCitationIds);
+    return navigatorStatusWhere(
+      stage.id,
+      ctx.userId,
+      status,
+      oneReviewerCitationIds,
+    );
   };
   const statusWhere = statusFilter(query.status);
   const filteredWhere: Prisma.CitationWhereInput = statusWhere
-    ? { AND: [baseWhere, statusWhere] } : baseWhere;
-  const countFor = (status: Exclude<ScreeningNavigatorQuery["status"], "ALL">) =>
-    prisma.citation.count({ where: { AND: [baseWhere, statusFilter(status)!] } });
+    ? { AND: [baseWhere, statusWhere] }
+    : baseWhere;
+  const countFor = (
+    status: Exclude<ScreeningNavigatorQuery["status"], "ALL">,
+  ) =>
+    prisma.citation.count({
+      where: { AND: [baseWhere, statusFilter(status)!] },
+    });
 
   const [total, all, undecided, decided, oneReviewer, included, excluded] =
     await Promise.all([
@@ -875,7 +1019,9 @@ export async function getScreeningNavigator(
     },
   } satisfies Prisma.CitationInclude;
 
-  type NavigatorCitation = Prisma.CitationGetPayload<{ include: typeof include }>;
+  type NavigatorCitation = Prisma.CitationGetPayload<{
+    include: typeof include;
+  }>;
   let citations: NavigatorCitation[];
   if (stage.aiRankingEnabled && query.status === "UNDECIDED") {
     const slim = await prisma.citation.findMany({
@@ -883,10 +1029,15 @@ export async function getScreeningNavigator(
       select: { id: true, createdAt: true },
     });
     const scores = await prisma.screeningSuggestion.findMany({
-      where: { stageId: stage.id, citationId: { in: slim.map((citation) => citation.id) } },
+      where: {
+        stageId: stage.id,
+        citationId: { in: slim.map((citation) => citation.id) },
+      },
       select: { citationId: true, score: true },
     });
-    const scoreByCitation = new Map(scores.map((score) => [score.citationId, score.score]));
+    const scoreByCitation = new Map(
+      scores.map((score) => [score.citationId, score.score]),
+    );
     slim.sort((a, b) => {
       const scoreA = scoreByCitation.get(a.id);
       const scoreB = scoreByCitation.get(b.id);
@@ -910,7 +1061,9 @@ export async function getScreeningNavigator(
     const byId = new Map(loaded.map((citation) => [citation.id, citation]));
     citations = pageIds
       .map((id) => byId.get(id))
-      .filter((citation): citation is NavigatorCitation => citation !== undefined);
+      .filter(
+        (citation): citation is NavigatorCitation => citation !== undefined,
+      );
   } else {
     citations = await prisma.citation.findMany({
       where: filteredWhere,
@@ -965,7 +1118,12 @@ export async function getScreeningNavigator(
         finalOutcome: result,
         completedReviews: citation._count.assignments,
         requiredReviews: stage.reviewersPerCitation,
-        canDecide: result === null && (decision !== null || ((reviewCounts.get(citation.id) ?? 0) < stage.reviewersPerCitation && (!quota || quota.remaining > 0))),
+        canDecide:
+          result === null &&
+          (decision !== null ||
+            ((reviewCounts.get(citation.id) ?? 0) <
+              stage.reviewersPerCitation &&
+              (!quota || quota.remaining > 0))),
         aiSuggestion: suggestion
           ? {
               score: suggestion.score,
@@ -1172,7 +1330,9 @@ export async function getAdminOverview(
           doi: citation.doi,
           pmid: citation.pmid,
           sources: [
-            ...new Set(citation.sourceRecords.map((row) => row.batch.source.name)),
+            ...new Set(
+              citation.sourceRecords.map((row) => row.batch.source.name),
+            ),
           ],
           createdAt: citation.createdAt,
         },
@@ -1219,61 +1379,72 @@ export async function batchExclude(
   input: z.infer<typeof batchExcludeSchema>,
 ) {
   await requirePermission(ctx, projectId, "screening.decide");
-  return prisma.$transaction(async (tx) => {
-    const stage = await getStageOr404(tx, projectId, stageId);
-    await assertIndividualTitleAbstractAllowed(tx, stage);
+  return prisma.$transaction(
+    async (tx) => {
+      const stage = await getStageOr404(tx, projectId, stageId);
+      await assertIndividualTitleAbstractAllowed(tx, stage);
 
-    await lockScreeningStages(tx, [stage.id]);
-    const quota = await quotaProgress(tx, { stageId }, ctx.userId);
-    // Validate the common reason before any decision writes. The per-citation helper also
-    // validates it, preserving the same lifecycle contract as an individual exclusion.
-    await validateExclusionReason(
-      tx,
-      projectId,
-      stage.type,
-      input.exclusionReasonId,
-    );
-
-    const actionableCount = await tx.citation.count({
-      where: {
-        id: { in: input.citationIds },
-        projectId,
-        status: "ACTIVE",
-        ...(quota ? {} : { assignments: {
-          some: { stageId: stage.id, reviewerId: ctx.userId, status: { not: "VOIDED" as const } },
-        } }),
-        decisions: {
-          none: { stageId: stage.id, reviewerId: ctx.userId },
-        },
-        stageResults: { none: { stageId: stage.id } },
-      },
-    });
-    if (actionableCount !== input.citationIds.length) {
-      throw invalidState(
-        "One or more selected citations are no longer undecided and assigned to you. Refresh the article list and try again.",
-      );
-    }
-
-    for (const citationId of input.citationIds) {
-      await createDecisionInTransaction(
+      await lockScreeningStages(tx, [stage.id]);
+      const quota = await quotaProgress(tx, { stageId }, ctx.userId);
+      // Validate the common reason before any decision writes. The per-citation helper also
+      // validates it, preserving the same lifecycle contract as an individual exclusion.
+      await validateExclusionReason(
         tx,
-        ctx,
         projectId,
-        stage,
-        {
-          citationId,
-          decision: "EXCLUDE",
-          exclusionReasonId: input.exclusionReasonId,
-          notes: null,
-          labels: [],
-          flaggedForDiscussion: false,
-        },
-        { batchExclusion: true, batchSize: input.citationIds.length },
+        stage.type,
+        input.exclusionReasonId,
       );
-    }
 
-    return { excluded: input.citationIds.length };
-  }, { timeout: 30_000 });
+      const actionableCount = await tx.citation.count({
+        where: {
+          id: { in: input.citationIds },
+          projectId,
+          status: "ACTIVE",
+          ...(quota
+            ? {}
+            : {
+                assignments: {
+                  some: {
+                    stageId: stage.id,
+                    reviewerId: ctx.userId,
+                    status: { not: "VOIDED" as const },
+                  },
+                },
+              }),
+          decisions: {
+            none: { stageId: stage.id, reviewerId: ctx.userId },
+          },
+          stageResults: { none: { stageId: stage.id } },
+        },
+      });
+      if (actionableCount !== input.citationIds.length) {
+        throw invalidState(
+          "One or more selected citations are no longer undecided and assigned to you. Refresh the article list and try again.",
+        );
+      }
+
+      for (const citationId of input.citationIds) {
+        await createDecisionInTransaction(
+          tx,
+          ctx,
+          projectId,
+          stage,
+          {
+            citationId,
+            decision: "EXCLUDE",
+            exclusionReasonId: input.exclusionReasonId,
+            notes: null,
+            labels: [],
+            flaggedForDiscussion: false,
+          },
+          { batchExclusion: true, batchSize: input.citationIds.length },
+        );
+      }
+
+      return { excluded: input.citationIds.length };
+    },
+    { timeout: 30_000 },
+  );
 }
 
 // Shared decision write used by both the ordinary per-PICO queue and the guideline-level
@@ -1293,6 +1464,9 @@ export async function createDecisionInTransaction(
   if (stage.projectId !== projectId) throw notFound("Screening stage");
   await lockScreeningStages(tx, [stage.id]);
   stage = await getStageOr404(tx, projectId, stage.id);
+  await requirePermission(ctx, projectId, "screening.decide", tx);
+  if (!auditMetadata?.pooledScreeningPoolId)
+    await assertIndividualTitleAbstractAllowed(tx, stage);
 
   // R9: tenant-scoped citation load; must be ACTIVE to screen.
   const citation = await tx.citation.findFirst({
@@ -1303,7 +1477,7 @@ export async function createDecisionInTransaction(
     throw invalidState("Citation is a merged duplicate and cannot be screened");
   }
 
-  // The reviewer is ALWAYS the session user and must hold a live assignment.
+  // The reviewer is ALWAYS the session user. Quotas authorize on-demand assignments.
   let assignment = await tx.screeningAssignment.findUnique({
     where: {
       stageId_citationId_reviewerId: {
@@ -1313,31 +1487,57 @@ export async function createDecisionInTransaction(
       },
     },
   });
-  const alreadyReviewed = await tx.screeningDecision.findUnique({ where: {
-    stageId_citationId_reviewerId: { stageId: stage.id, citationId: citation.id, reviewerId: ctx.userId },
-  } });
-  const quota = auditMetadata?.pooledScreeningPoolId ? null : await quotaProgress(tx, { stageId: stage.id }, ctx.userId);
+  const alreadyReviewed = await tx.screeningDecision.findUnique({
+    where: {
+      stageId_citationId_reviewerId: {
+        stageId: stage.id,
+        citationId: citation.id,
+        reviewerId: ctx.userId,
+      },
+    },
+  });
+  const quota = auditMetadata?.pooledScreeningPoolId
+    ? null
+    : await quotaProgress(tx, { stageId: stage.id }, ctx.userId);
   if (!alreadyReviewed) {
-    if (quota && quota.remaining === 0) throw invalidState("Your review quota is complete");
-    const completed = await tx.screeningAssignment.count({ where: {
-      stageId: stage.id, citationId: citation.id, status: "COMPLETED",
-    } });
+    if (quota && quota.remaining === 0)
+      throw invalidState("Your review quota is complete");
+    const completed = await tx.screeningAssignment.count({
+      where: {
+        stageId: stage.id,
+        citationId: citation.id,
+        status: "COMPLETED",
+      },
+    });
     if (completed >= stage.reviewersPerCitation) {
-      throw invalidState("This abstract already has all required reviews. Refresh the queue to choose another.");
+      throw invalidState(
+        "This abstract already has all required reviews. Refresh the queue to choose another.",
+      );
     }
   }
-  if (!assignment && (pooledQuotaAuthorized || (quota && quota.remaining > 0))) {
-    assignment = await tx.screeningAssignment.create({ data: {
-      stageId: stage.id, citationId: citation.id, reviewerId: ctx.userId,
-    } });
+  if (
+    !assignment &&
+    (pooledQuotaAuthorized || (quota && quota.remaining > 0))
+  ) {
+    assignment = await tx.screeningAssignment.create({
+      data: {
+        stageId: stage.id,
+        citationId: citation.id,
+        reviewerId: ctx.userId,
+      },
+    });
   }
   if (!assignment || assignment.status === "VOIDED") {
-    throw forbidden("You are not assigned to screen this citation at this stage");
+    throw forbidden(
+      "You are not assigned to screen this citation at this stage",
+    );
   }
 
   // R5 lock: once a stage result exists, decisions are immutable until reopen.
   const existingResult = await tx.citationStageResult.findUnique({
-    where: { stageId_citationId: { stageId: stage.id, citationId: citation.id } },
+    where: {
+      stageId_citationId: { stageId: stage.id, citationId: citation.id },
+    },
   });
   if (existingResult) {
     throw invalidState(
@@ -1423,7 +1623,10 @@ export async function createDecisionInTransaction(
     // Only the materialized result is echoed back — once it exists it is visible to
     // everyone anyway (blinding lifts). Conflict state is NOT returned to reviewers.
     result: evaluation.result
-      ? { outcome: evaluation.result.outcome, resolvedVia: evaluation.result.resolvedVia }
+      ? {
+          outcome: evaluation.result.outcome,
+          resolvedVia: evaluation.result.resolvedVia,
+        }
       : null,
   };
 }
@@ -1446,11 +1649,14 @@ export async function evaluateCitation(
   const allDecisions = await tx.screeningDecision.findMany({
     where: { stageId: stage.id, citationId },
   });
-  const decisions = allDecisions.filter((d) => activeReviewers.has(d.reviewerId));
+  const decisions = allDecisions.filter((d) =>
+    activeReviewers.has(d.reviewerId),
+  );
 
   const required = stage.reviewersPerCitation;
   // Not enough decisions yet → nothing to evaluate; any OPEN conflict stays open.
-  if (decisions.length < required) return { status: "pending" as const, result: null };
+  if (decisions.length < required)
+    return { status: "pending" as const, result: null };
 
   const values = new Set(decisions.map((d) => d.decision));
   const unanimous = values.size === 1 ? decisions[0]!.decision : null;
@@ -1580,7 +1786,8 @@ export async function visibleDecisionsFor(
     orderBy: { createdAt: "asc" },
   });
   const seesAll =
-    can(member.roles, "screening.adjudicate") || can(member.roles, "project.edit");
+    can(member.roles, "screening.adjudicate") ||
+    can(member.roles, "project.edit");
   if (seesAll || stage.blinded === false) return decisions;
   const result = await prisma.citationStageResult.findUnique({
     where: { stageId_citationId: { stageId: stage.id, citationId } },
@@ -1623,12 +1830,16 @@ export async function listConflicts(
       ? []
       : await prisma.screeningDecision.findMany({
           where: {
-            OR: conflicts.map((c) => ({ stageId: c.stageId, citationId: c.citationId })),
+            OR: conflicts.map((c) => ({
+              stageId: c.stageId,
+              citationId: c.citationId,
+            })),
           },
           include: decisionInclude,
           orderBy: { createdAt: "asc" },
         });
-  const decisionKey = (stageId: string, citationId: string) => `${stageId}:${citationId}`;
+  const decisionKey = (stageId: string, citationId: string) =>
+    `${stageId}:${citationId}`;
   const decisionsByPair = new Map<string, typeof decisions>();
   for (const d of decisions) {
     const key = decisionKey(d.stageId, d.citationId);
@@ -1652,7 +1863,8 @@ export async function listConflicts(
       resolvedAt: c.resolvedAt,
       stage: c.stage,
       citation: citationCard(c.citation),
-      decisions: decisionsByPair.get(decisionKey(c.stageId, c.citationId)) ?? [],
+      decisions:
+        decisionsByPair.get(decisionKey(c.stageId, c.citationId)) ?? [],
       adjudication: c.adjudication,
     })),
     criteria,
@@ -1667,21 +1879,36 @@ export async function adjudicateConflict(
 ) {
   await requirePermission(ctx, projectId, "screening.adjudicate");
   return prisma.$transaction(async (tx) => {
+    const lockTarget = await tx.screeningConflict.findFirst({
+      where: { id: conflictId, stage: { projectId } },
+      select: { stageId: true },
+    });
+    if (!lockTarget) throw notFound("Conflict");
+    await lockScreeningStages(tx, [lockTarget.stageId]);
     // R9: tenant scoping via the stage's project.
     const conflictRow = await tx.screeningConflict.findFirst({
       where: { id: conflictId, stage: { projectId } },
-      include: { stage: true, adjudication: true, citation: { select: { status: true } } },
+      include: {
+        stage: true,
+        adjudication: true,
+        citation: { select: { status: true } },
+      },
     });
     if (!conflictRow) throw notFound("Conflict");
-    if (conflictRow.status !== "OPEN") throw invalidState("Conflict is not open");
+    if (conflictRow.status !== "OPEN")
+      throw invalidState("Conflict is not open");
     if (conflictRow.citation.status !== "ACTIVE") {
-      throw invalidState("Citation is a merged duplicate and cannot be adjudicated");
+      throw invalidState(
+        "Citation is a merged duplicate and cannot be adjudicated",
+      );
     }
 
     let exclusionReasonId: string | null = null;
     if (input.finalDecision === "EXCLUDE") {
       if (conflictRow.stage.type === "FULL_TEXT" && !input.exclusionReasonId) {
-        throw validationError("Full-text exclusions require an exclusion reason");
+        throw validationError(
+          "Full-text exclusions require an exclusion reason",
+        );
       }
       if (input.exclusionReasonId) {
         const reason = await validateExclusionReason(
@@ -1778,8 +2005,16 @@ export async function adjudicateConflict(
       },
     });
 
-    if (input.finalDecision === "INCLUDE" && conflictRow.stage.type === "FULL_TEXT") {
-      await studies.autoCreateForCitation(tx, ctx, projectId, conflictRow.citationId);
+    if (
+      input.finalDecision === "INCLUDE" &&
+      conflictRow.stage.type === "FULL_TEXT"
+    ) {
+      await studies.autoCreateForCitation(
+        tx,
+        ctx,
+        projectId,
+        conflictRow.citationId,
+      );
     }
 
     return { adjudication, conflict: resolved, result };
@@ -1800,21 +2035,30 @@ export async function reopenCitation(
   const member = await getMembership(ctx.userId, projectId);
   if (
     !member ||
-    !(can(member.roles, "screening.adjudicate") || can(member.roles, "project.edit"))
+    !(
+      can(member.roles, "screening.adjudicate") ||
+      can(member.roles, "project.edit")
+    )
   ) {
     throw forbidden();
   }
   return prisma.$transaction(async (tx) => {
-    const citation = await tx.citation.findFirst({ where: { id: citationId, projectId } });
+    const citation = await tx.citation.findFirst({
+      where: { id: citationId, projectId },
+    });
     if (!citation) throw notFound("Citation");
     const stage = await tx.screeningStage.findUnique({
       where: { projectId_type: { projectId, type: input.stageType } },
     });
     if (!stage) throw notFound("Screening stage");
+    await lockScreeningStages(tx, [stage.id]);
     const result = await tx.citationStageResult.findUnique({
-      where: { stageId_citationId: { stageId: stage.id, citationId: citation.id } },
+      where: {
+        stageId_citationId: { stageId: stage.id, citationId: citation.id },
+      },
     });
-    if (!result) throw invalidState("No stage result exists to reopen at this stage");
+    if (!result)
+      throw invalidState("No stage result exists to reopen at this stage");
 
     await tx.citationStageResult.delete({ where: { id: result.id } });
     await audit.record(tx, {
@@ -1836,7 +2080,9 @@ export async function reopenCitation(
     // A RESOLVED conflict for this (stage, citation) is voided; if disagreement recurs,
     // evaluateCitation flips it back to OPEN and re-adjudication updates the 1:1 row.
     const conflictRow = await tx.screeningConflict.findUnique({
-      where: { stageId_citationId: { stageId: stage.id, citationId: citation.id } },
+      where: {
+        stageId_citationId: { stageId: stage.id, citationId: citation.id },
+      },
     });
     if (conflictRow && conflictRow.status === "RESOLVED") {
       await tx.screeningConflict.update({

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { KeywordHighlightedText } from "@/components/citations/keyword-highlighted-text";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +11,7 @@ import { cn } from "@/lib/utils";
 import type {
   ScreeningKeyword,
   ScreeningNavigatorFilter,
-  ScreeningNavigatorItem,
+  DecisionValue,
   ScreeningNavigatorResponse,
 } from "./types";
 
@@ -52,7 +53,7 @@ function filterCount(
   }
 }
 
-function ArticleStatus({ item }: { item: ScreeningNavigatorItem }) {
+function ArticleStatus({ item }: { item: ArticleListRow }) {
   if (item.finalOutcome === "INCLUDE") {
     return <Badge variant="include">Included</Badge>;
   }
@@ -79,10 +80,84 @@ function ArticleStatus({ item }: { item: ScreeningNavigatorItem }) {
       </Badge>
     );
   }
-  return <Badge variant="outline">Undecided</Badge>;
+  return <Badge variant="outline">0 of {item.requiredReviews} reviewed</Badge>;
 }
 
-export function ArticleNavigator({
+export interface ArticleListRow {
+  id: string;
+  citation: { title: string; year: number | null };
+  myDecision: { decision: DecisionValue } | null;
+  finalOutcome: "INCLUDE" | "EXCLUDE" | null;
+  completedReviews: number;
+  requiredReviews: number;
+  canDecide: boolean;
+}
+
+interface ArticleListProps<F extends string> {
+  data: {
+    pagination: ScreeningNavigatorResponse["pagination"];
+    items: ArticleListRow[];
+  };
+  filter: F;
+  filterOptions: { value: F; label: string; count: number }[];
+  searchLabel: string;
+  selectedId: string | null;
+  searchDraft: string;
+  keywords: ScreeningKeyword[];
+  highlightsEnabled: boolean;
+  loading: boolean;
+  batchSelectedIds?: Set<string>;
+  batchBusy?: boolean;
+  onFilterChange: (filter: F) => void;
+  onSelect: (id: string) => void;
+  onBatchSelect?: (id: string, selected: boolean) => void;
+  onBatchSelectPage?: (ids: string[], selected: boolean) => void;
+  onBatchExclude?: () => void;
+  onSearchDraftChange: (value: string) => void;
+  onSearch: () => void;
+  onClearSearch: () => void;
+  onPageChange: (page: number) => void;
+}
+
+// Ordinary screening adapts its API into presentation-only rows. Pooled screening
+// uses the same list directly, with logical group IDs and its own status vocabulary.
+export function ArticleNavigator(
+  props: Omit<
+    ArticleListProps<ScreeningNavigatorFilter>,
+    "data" | "filterOptions" | "searchLabel"
+  > & { data: ScreeningNavigatorResponse },
+) {
+  const { data } = props;
+  return (
+    <ArticleList
+      {...props}
+      data={{
+        pagination: data.pagination,
+        items: data.items.map((item) => ({ ...item, id: item.citation.id })),
+      }}
+      searchLabel={
+        data.quota
+          ? "Search available and reviewed articles"
+          : "Search assigned articles"
+      }
+      filterOptions={FILTER_ORDER.map((value) => ({
+        value,
+        count: filterCount(data, value),
+        label: data.quota
+          ? value === "ALL"
+            ? "Available and reviewed articles"
+            : value === "UNDECIDED"
+              ? "Available"
+              : value === "DECIDED"
+                ? "My reviewed"
+                : FILTER_LABELS[value]
+          : FILTER_LABELS[value],
+      }))}
+    />
+  );
+}
+
+export function ArticleList<F extends string>({
   data,
   filter,
   selectedId,
@@ -90,8 +165,10 @@ export function ArticleNavigator({
   keywords,
   highlightsEnabled,
   loading,
-  batchSelectedIds,
-  batchBusy,
+  batchSelectedIds = new Set<string>(),
+  batchBusy = false,
+  filterOptions,
+  searchLabel,
   onFilterChange,
   onSelect,
   onBatchSelect,
@@ -101,27 +178,22 @@ export function ArticleNavigator({
   onSearch,
   onClearSearch,
   onPageChange,
-}: {
-  data: ScreeningNavigatorResponse;
-  filter: ScreeningNavigatorFilter;
-  selectedId: string | null;
-  searchDraft: string;
-  keywords: ScreeningKeyword[];
-  highlightsEnabled: boolean;
-  loading: boolean;
-  batchSelectedIds: Set<string>;
-  batchBusy: boolean;
-  onFilterChange: (filter: ScreeningNavigatorFilter) => void;
-  onSelect: (citationId: string) => void;
-  onBatchSelect: (citationId: string, selected: boolean) => void;
-  onBatchSelectPage: (citationIds: string[], selected: boolean) => void;
-  onBatchExclude: () => void;
-  onSearchDraftChange: (value: string) => void;
-  onSearch: () => void;
-  onClearSearch: () => void;
-  onPageChange: (page: number) => void;
-}) {
-  const filterLabel = (value: ScreeningNavigatorFilter) => data.quota && value === "ALL" ? "Available and reviewed articles" : FILTER_LABELS[value];
+}: ArticleListProps<F>) {
+  const filterLabel = (value: F) =>
+    filterOptions.find((option) => option.value === value)!.label;
+  const batchEnabled = Boolean(onBatchExclude);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const list = listRef.current;
+    const selected = list?.querySelector('[aria-current="true"]');
+    if (!list || !selected) return;
+    const bounds = list.getBoundingClientRect();
+    const row = selected.getBoundingClientRect();
+    // Scroll only the list, keeping keyboard navigation from moving the whole page.
+    if (row.top < bounds.top) list.scrollTop += row.top - bounds.top - 12;
+    else if (row.bottom > bounds.bottom)
+      list.scrollTop += row.bottom - bounds.bottom + 12;
+  }, [selectedId, data.items]);
   const firstShown =
     data.pagination.total === 0
       ? 0
@@ -132,7 +204,7 @@ export function ArticleNavigator({
   );
   const batchEligibleIds = data.items
     .filter((item) => item.canDecide && item.myDecision === null)
-    .map((item) => item.citation.id);
+    .map((item) => item.id);
   const allEligibleSelected =
     batchEligibleIds.length > 0 &&
     batchEligibleIds.every((citationId) => batchSelectedIds.has(citationId));
@@ -140,7 +212,7 @@ export function ArticleNavigator({
   return (
     <aside
       aria-label="Article navigator"
-      className="flex min-h-[30rem] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-sm lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)]"
+      className="flex max-h-[28rem] min-h-[20rem] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-sm lg:sticky lg:top-20 lg:min-h-[30rem] lg:max-h-[calc(100vh-6rem)]"
     >
       <div className="space-y-3 border-b border-border p-3">
         <div>
@@ -156,13 +228,13 @@ export function ArticleNavigator({
             className="mt-1"
             value={filter}
             onChange={(event) => {
-              onFilterChange(event.target.value as ScreeningNavigatorFilter);
+              onFilterChange(event.target.value as F);
               event.currentTarget.blur();
             }}
           >
-            {FILTER_ORDER.map((option) => (
-              <option key={option} value={option}>
-                {filterLabel(option)} ({filterCount(data, option).toLocaleString()})
+            {filterOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label} ({option.count.toLocaleString()})
               </option>
             ))}
           </Select>
@@ -177,13 +249,18 @@ export function ArticleNavigator({
         >
           <Input
             type="search"
-            aria-label={data.quota ? "Search available and reviewed articles" : "Search assigned articles"}
+            aria-label={searchLabel}
             value={searchDraft}
             onChange={(event) => onSearchDraftChange(event.target.value)}
             placeholder="Search titles or abstracts"
             className="min-w-0"
           />
-          <Button type="submit" variant="outline" size="icon" aria-label="Search articles">
+          <Button
+            type="submit"
+            variant="outline"
+            size="icon"
+            aria-label="Search articles"
+          >
             <Search />
           </Button>
           {searchDraft && (
@@ -200,37 +277,41 @@ export function ArticleNavigator({
 
         <p className="text-xs text-muted-foreground" aria-live="polite">
           Showing {firstShown.toLocaleString()}–{lastShown.toLocaleString()} of{" "}
-          {data.pagination.total.toLocaleString()} {filterLabel(filter).toLowerCase()}
+          {data.pagination.total.toLocaleString()}{" "}
+          {filterLabel(filter).toLowerCase()}
         </p>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-          <label className="inline-flex items-center gap-2 text-xs font-medium">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border accent-primary"
-              aria-label="Select all undecided articles on this page"
-              checked={allEligibleSelected}
-              disabled={batchEligibleIds.length === 0 || batchBusy}
-              onChange={(event) =>
-                onBatchSelectPage(batchEligibleIds, event.target.checked)
-              }
-            />
-            Select page
-          </label>
-          <Button
-            type="button"
-            variant="exclude"
-            size="sm"
-            disabled={batchSelectedIds.size === 0 || batchBusy}
-            onClick={onBatchExclude}
-          >
-            <X /> Exclude selected
-            {batchSelectedIds.size > 0 ? ` (${batchSelectedIds.size})` : ""}
-          </Button>
-        </div>
+        {batchEnabled && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+            <label className="inline-flex items-center gap-2 text-xs font-medium">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-border accent-primary"
+                aria-label="Select all undecided articles on this page"
+                checked={allEligibleSelected}
+                disabled={batchEligibleIds.length === 0 || batchBusy}
+                onChange={(event) =>
+                  onBatchSelectPage?.(batchEligibleIds, event.target.checked)
+                }
+              />
+              Select page
+            </label>
+            <Button
+              type="button"
+              variant="exclude"
+              size="sm"
+              disabled={batchSelectedIds.size === 0 || batchBusy}
+              onClick={onBatchExclude}
+            >
+              <X /> Exclude selected
+              {batchSelectedIds.size > 0 ? ` (${batchSelectedIds.size})` : ""}
+            </Button>
+          </div>
+        )}
       </div>
 
       <div
+        ref={listRef}
         role="list"
         aria-label={`${filterLabel(filter)} articles`}
         aria-busy={loading}
@@ -245,36 +326,41 @@ export function ArticleNavigator({
           </div>
         ) : (
           data.items.map((item, index) => {
-            const selected = item.citation.id === selectedId;
+            const selected = item.id === selectedId;
             const batchEligible = item.canDecide && item.myDecision === null;
             const articleNumber =
               (data.pagination.page - 1) * data.pagination.limit + index + 1;
             return (
               <div
-                key={item.citation.id}
+                key={item.id}
                 role="listitem"
                 className={cn(
-                  "grid w-full grid-cols-[1.25rem_2rem_minmax(0,1fr)] items-start gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                  "grid w-full items-start gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                  batchEnabled
+                    ? "grid-cols-[1.25rem_2rem_minmax(0,1fr)]"
+                    : "grid-cols-[2rem_minmax(0,1fr)]",
                   selected && "bg-primary/5 ring-1 ring-inset ring-primary/25",
                 )}
               >
-                <input
-                  type="checkbox"
-                  className="mt-0.5 h-4 w-4 rounded border-border accent-primary"
-                  aria-label={`Select ${item.citation.title} for batch exclusion`}
-                  checked={batchSelectedIds.has(item.citation.id)}
-                  disabled={!batchEligible || batchBusy}
-                  onChange={(event) =>
-                    onBatchSelect(item.citation.id, event.target.checked)
-                  }
-                />
+                {batchEnabled && (
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-border accent-primary"
+                    aria-label={`Select ${item.citation.title} for batch exclusion`}
+                    checked={batchSelectedIds.has(item.id)}
+                    disabled={!batchEligible || batchBusy}
+                    onChange={(event) =>
+                      onBatchSelect?.(item.id, event.target.checked)
+                    }
+                  />
+                )}
                 <span className="pt-0.5 text-xs font-semibold tabular-nums text-muted-foreground">
                   {articleNumber}
                 </span>
                 <button
                   type="button"
                   aria-current={selected ? "true" : undefined}
-                  onClick={() => onSelect(item.citation.id)}
+                  onClick={() => onSelect(item.id)}
                   className="min-w-0 text-left"
                 >
                   <span className="line-clamp-2 text-sm font-medium leading-snug">
