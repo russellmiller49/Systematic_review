@@ -23,8 +23,10 @@ describe("confirmed companion graph projection", () => {
       a: "a",
       b: "b",
     });
-    expect(graph.conflicts(["a", "b"])).toBe(true);
-    expect(graph.conflicts(["a", "unrelated"])).toBe(false);
+    expect(graph.hasDirectConflict(["a", "b"])).toBe(true);
+    expect(graph.hasDirectConflict(["copy", "b"])).toBe(true);
+    expect(graph.hasDirectConflict(["copy", "a"])).toBe(false);
+    expect(graph.hasDirectConflict(["a", "unrelated"])).toBe(false);
   });
   it("recognizes transitive companions and rejects corrupt alias cycles", () => {
     const graph = projectCompanionGraph(
@@ -37,6 +39,8 @@ describe("confirmed companion graph projection", () => {
       [edge("a", "b"), edge("b", "c"), edge("cycle", "a")],
     );
     expect(graph.sameStudy("a", "c")).toBe(true);
+    expect(graph.hasDirectConflict(["a", "c"])).toBe(false);
+    expect(graph.hasDirectConflict(["a", "b", "c"])).toBe(true);
     expect([...graph.members("a")].sort()).toEqual(["a", "b", "c"]);
     expect(graph.root("cycle")).toBeNull();
     expect(graph.root("foreign")).toBeNull();

@@ -65,7 +65,7 @@ for conflicts. Canonical controls have citation-specific accessible labels and r
 suggested membership changes.
 
 The server supplies bulk eligibility to the UI and recalculates it on execution. Only connected,
-ACTIVE, single-DOI groups containing solely exact DOI suggestions, no historical rejected or companion pair,
+ACTIVE, single-DOI groups containing solely exact DOI suggestions, no historical rejected pair or direct companion judgment between merge members,
 and no metadata conflicts qualify. Canonical preference remains screening-history count,
 metadata completeness, oldest import, then citation ID. Historical rejected pairs conservatively
 exclude their retained group from bulk merge even if a split moved the other endpoint away.
@@ -138,8 +138,11 @@ candidate stores original pair IDs, reviewer and timestamp; `dedup.companion_con
 project, pair, previous/new status, and actor. Comparing abstracts never creates audit events.
 Only SUGGESTED edges participate in normalization. Removing a companion bridge immediately
 splits the duplicate graph; removing an edge of a cycle can leave a connected component, but
-manual and bulk merges refuse components containing confirmed separate reports, including
-transitive relationships and relationships whose original endpoint was later citation-merged.
+manual and bulk merges refuse any explicit COMPANION edge whose two distinct canonical roots
+are both merge members. Shared companion-component membership through external reports does
+not block true duplicate copies. This is deliberately different from transitive same-study
+membership, which still governs full-text reconciliation. Exact-DOI eligibility ignores
+external companion rows retained in a historical group, while retaining all other review rules.
 Historical endpoints never change: `duplicateOfId` chains project them to current canonicals.
 Detection never overwrites decided pairs and does not invent new duplicate suggestions for
 already confirmed companion components after a canonical replacement.
@@ -190,3 +193,19 @@ Companion feature validation: 664 unit tests, 401 integration tests, and all 4 C
 tests passed. Typecheck, Prisma schema validation, production build, scoped Prettier checks,
 and `git diff --check` passed. The enum migration was applied to the integration database.
 The full unrelated browser suite was not run.
+
+The merge-guard regression covers duplicate copies joining two companion families and copies
+already sharing one family, through both manual and exact-DOI bulk merge. It checks immutable
+human rows, direct and multi-hop historical conflict blocking, canonical projection, detection
+reruns, and full-text inclusion yielding three report links on one Study with correct PRISMA
+counts. Browser coverage checks the explicit-conflict error, then selects the PubMed canonical
+and merges the remaining Embase copy before including the three surviving reports.
+
+Merge-guard correction validation: 54 focused unit tests, 98 integration tests across dedup,
+companion, cohort, screening and full-text suites, and all 5 companion/dedup safety/cohort
+browser tests passed. Typecheck, production build, scoped Prettier and `git diff --check`
+passed. No new migration was added; integration and browser checks used TEST_DATABASE_URL.
+The unrelated full suites were not rerun. Detection retains its existing conservative
+suppression of new suggestions within companion families; existing unresolved duplicate
+suggestions remain reviewable. Missing-root/cycle handling and downstream reopening limits
+are unchanged.
