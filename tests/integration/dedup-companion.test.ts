@@ -3,6 +3,7 @@ import { prisma } from "@/server/db";
 import * as dedup from "@/server/services/dedup";
 import * as cohort from "@/server/services/cohort";
 import * as studies from "@/server/services/studies";
+import { companionGraph } from "@/server/services/studies/companions";
 import * as screening from "@/server/services/screening";
 import { computePrismaCounts } from "@/server/services/prisma-report";
 import { resetDb } from "../db-utils";
@@ -236,6 +237,185 @@ describe("dedup companion decision and study lifecycle", () => {
     await dedup.runDetection(f.ctx, f.project.id);
     expect(await dedup.listGroups(f.ctx, f.project.id)).toHaveLength(0);
   });
+  it.each([
+    { sharedFamily: false, bulk: false },
+    { sharedFamily: true, bulk: false },
+    { sharedFamily: false, bulk: true },
+    { sharedFamily: true, bulk: true },
+  ])(
+    "merges duplicate copies with external companion evidence ($sharedFamily shared family, $bulk bulk)",
+    async ({ sharedFamily, bulk }) => {
+      // R1 — PubMed —(duplicate)— Embase — R2. An optional R1—Embase
+      // judgment puts both copies in the same family BEFORE the duplicate merge.
+      const f = await fixture(4, [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        ...(sharedFamily ? [[0, 2] as [number, number]] : []),
+      ]);
+      const pubmed = f.citations[1]!;
+      const embase = f.citations[2]!;
+      await prisma.citation.updateMany({
+        where: { id: { in: [pubmed.id, embase.id] } },
+        data: {
+          title:
+            "Prospective trial of biodegradable stents for refractory benign esophageal strictures after curative treatment of esophageal cancer",
+          normalizedTitle:
+            "prospective trial of biodegradable stents for refractory benign esophageal strictures after curative treatment of esophageal cancer",
+          doi: "10.1016/j.gie.2017.01.011",
+          year: 2017,
+          journal: "Gastrointestinal Endoscopy",
+        },
+      });
+      await prisma.citation.update({
+        where: { id: pubmed.id },
+        data: { pmid: "28137598" },
+      });
+      await prisma.deduplicationCandidate.update({
+        where: { id: f.pairs[1]!.id },
+        data: { method: "EXACT_DOI" },
+      });
+      for (const n of [0, 2, ...(sharedFamily ? [3] : [])]) await confirm(f, n);
+      const history = await prisma.deduplicationCandidate.findMany({
+        where: { projectId: f.project.id, status: "COMPANION" },
+        orderBy: { id: "asc" },
+      });
+      const before = await companionGraph(prisma, f.project.id);
+      expect(before.sameStudy(pubmed.id, embase.id)).toBe(sharedFamily);
+      const groups = await dedup.listGroups(f.ctx, f.project.id);
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.bulkExactDoiEligible).toBe(true);
+      if (bulk) {
+        expect(
+          await dedup.bulkMergeExactDoiGroups(f.ctx, f.project.id),
+        ).toMatchObject({ groupsMerged: 1, citationsMerged: 1 });
+      } else {
+        await dedup.mergeGroup(f.ctx, f.project.id, groups[0]!.id, {
+          canonicalCitationId: pubmed.id,
+        });
+      }
+      expect(
+        await prisma.citation.findUnique({ where: { id: embase.id } }),
+      ).toMatchObject({ status: "DUPLICATE", duplicateOfId: pubmed.id });
+      await expectActive(f, 3);
+      expect(
+        await prisma.study.count({ where: { projectId: f.project.id } }),
+      ).toBe(0);
+      const graph = await companionGraph(prisma, f.project.id);
+      expect(graph.root(embase.id)).toBe(pubmed.id);
+      expect([...graph.members(pubmed.id)].sort()).toEqual(
+        [f.citations[0]!.id, pubmed.id, f.citations[3]!.id].sort(),
+      );
+      expect(graph.edges).toHaveLength(history.length);
+      expect(
+        graph.edges.every((e) => e.a !== embase.id && e.b !== embase.id),
+      ).toBe(true);
+      await dedup.runDetection(f.ctx, f.project.id);
+      expect(await dedup.listGroups(f.ctx, f.project.id)).toHaveLength(0);
+      expect(
+        await prisma.deduplicationCandidate.findUnique({
+          where: { id: f.pairs[1]!.id },
+        }),
+      ).toMatchObject({ status: "MERGED" });
+      for (const n of [1, 0, 3]) await include(f, n);
+      const rows = await studies.listStudies(f.ctx, f.project.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.reportLinks.map((l) => l.citationId).sort()).toEqual(
+        [f.citations[0]!.id, pubmed.id, f.citations[3]!.id].sort(),
+      );
+      expect(
+        rows[0]!.reportLinks
+          .filter((l) => l.isPrimaryReport)
+          .map((l) => l.citationId),
+      ).toEqual([pubmed.id]);
+      const counts = (await computePrismaCounts(f.project.id)).counts;
+      expect(counts.find((c) => c.key === "studies_included")?.value).toBe(1);
+      expect(counts.find((c) => c.key === "reports_included")?.value).toBe(3);
+      expect(
+        await prisma.deduplicationCandidate.findMany({
+          where: { projectId: f.project.id, status: "COMPANION" },
+          orderBy: { id: "asc" },
+        }),
+      ).toEqual(history);
+    },
+  );
+
+  it("blocks a historical separate-report judgment after successive canonical replacements", async () => {
+    // A—oldB is companion; oldB -> intermediateB -> canonicalB are real merges.
+    const f = await fixture(4, [
+      [0, 1],
+      [1, 2],
+    ]);
+    await confirm(f, 0);
+    const history = await prisma.deduplicationCandidate.findUniqueOrThrow({
+      where: { id: f.pairs[0]!.id },
+    });
+    const group = (await dedup.listGroups(f.ctx, f.project.id))[0]!;
+    await dedup.mergeGroup(f.ctx, f.project.id, group.id, {
+      canonicalCitationId: f.citations[2]!.id,
+    });
+    async function suggest(a: number, b: number) {
+      const group = await prisma.deduplicationGroup.create({
+        data: { projectId: f.project.id },
+      });
+      const [citationAId, citationBId] = [
+        f.citations[a]!.id,
+        f.citations[b]!.id,
+      ].sort() as [string, string];
+      await prisma.deduplicationCandidate.create({
+        data: {
+          projectId: f.project.id,
+          groupId: group.id,
+          citationAId,
+          citationBId,
+          method: "EXACT_DOI",
+          score: 1,
+          reasons: {},
+        },
+      });
+      return group;
+    }
+    const replacement = await suggest(2, 3);
+    await dedup.mergeGroup(f.ctx, f.project.id, replacement.id, {
+      canonicalCitationId: f.citations[3]!.id,
+    });
+    await prisma.citation.updateMany({
+      where: { projectId: f.project.id },
+      data: { doi: "10.1234/shared", journal: "Same journal", year: 2024 },
+    });
+    const unsafe = await suggest(0, 3);
+    const citationsBefore = await prisma.citation.findMany({
+      where: { projectId: f.project.id },
+      orderBy: { id: "asc" },
+    });
+    expect(
+      (await dedup.listGroups(f.ctx, f.project.id))[0]!.bulkExactDoiEligible,
+    ).toBe(false);
+    expect(
+      (await dedup.bulkMergeExactDoiGroups(f.ctx, f.project.id)).groupsMerged,
+    ).toBe(0);
+    await expect(
+      dedup.mergeGroup(f.ctx, f.project.id, unsafe.id, {
+        canonicalCitationId: f.citations[0]!.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_STATE",
+      message:
+        "These citations were previously confirmed as separate reports of the same study. Reopen that companion decision before merging them as duplicate citations.",
+    });
+    expect(
+      await prisma.citation.findMany({
+        where: { projectId: f.project.id },
+        orderBy: { id: "asc" },
+      }),
+    ).toEqual(citationsBefore);
+    expect(
+      await prisma.deduplicationCandidate.findUnique({
+        where: { id: history.id },
+      }),
+    ).toEqual(history);
+  });
+
   it("G/H: the five-report cohort resolves to five active reports and one analysis study", async () => {
     const f = await fixture(5);
     expect(f.pairs).toHaveLength(10);
@@ -519,7 +699,11 @@ describe("dedup companion decision and study lifecycle", () => {
       dedup.mergeGroup(f.ctx, f.project.id, groups[0]!.id, {
         canonicalCitationId: f.citations[0]!.id,
       }),
-    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    ).rejects.toMatchObject({
+      code: "INVALID_STATE",
+      message:
+        "These citations were previously confirmed as separate reports of the same study. Reopen that companion decision before merging them as duplicate citations.",
+    });
     await dedup.runDetection(f.ctx, f.project.id);
     await expectActive(f);
   });

@@ -16,6 +16,24 @@ If every member of a cluster is a separate report of one study, the group action
 all current suggestions at once. Its confirmation lists the consequences and pair count. In a
 mixed cluster, first classify separate reports pair by pair, then merge only the true copies.
 
+Two copies of the same publication can still merge when both belong to the same companion
+family through other reports. For example, a PubMed copy and an Embase copy with DOI
+`10.1016/j.gie.2017.01.011` can merge after the other reports are classified. Shared family
+membership alone is not evidence that these two copies are separate publications.
+
+A merge is blocked when **any two members being merged** have an explicit COMPANION judgment
+between their current canonical roots. This includes historical endpoints that now resolve
+through one or more `duplicateOfId` replacements. Reopen that companion decision before merging
+those reports; changing the canonical selection does not bypass it. A chain A–X–B alone does
+not block merging true copies A and B, but including X in that merge does.
+
+Exact-DOI bulk merge uses the same direct-judgment protection. External companion rows retained
+in the original group do not disqualify clean duplicate copies. Existing rejected-pair,
+metadata-conflict, mixed-evidence and conference/publication review restrictions still apply.
+Original companion rows (including pair IDs, group, reviewer and time) stay unchanged, and
+canonical-root projection preserves their meaning. No schema migration is required for this
+merge-guard correction.
+
 ## After full-text screening
 
 Companion Reports shows the original human confirmations, including current study membership.

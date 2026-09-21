@@ -30,11 +30,23 @@ export function exactDoiEligible(
   const suggested = candidates.filter(
     (candidate) => candidate.status === "SUGGESTED",
   );
+  const memberIds = new Set(
+    suggested.flatMap((candidate) => [
+      candidate.citationAId,
+      candidate.citationBId,
+    ]),
+  );
+  // Decided rows retain their original group even after suggestions split. An
+  // external companion edge must not disqualify the remaining duplicate copies.
+  // The service also checks project-wide companion edges through canonical roots.
   if (
     connectedComponents(suggested).length !== 1 ||
     candidates.some(
       (candidate) =>
-        candidate.status === "REJECTED" || candidate.status === "COMPANION",
+        candidate.status === "REJECTED" ||
+        (candidate.status === "COMPANION" &&
+          memberIds.has(candidate.citationAId) &&
+          memberIds.has(candidate.citationBId)),
     ) ||
     !suggested.every(
       (candidate) =>

@@ -290,7 +290,7 @@ export async function listGroups(
           metadataConflicts: clusterMetadataConflicts(members),
           bulkExactDoiEligible:
             exactDoiEligible(projectId, candidates) &&
-            !companions.conflicts(members.map((c) => c.id)),
+            !companions.hasDirectConflict(members.map((c) => c.id)),
         };
       });
     },
@@ -400,9 +400,9 @@ async function mergeGroupInTransaction(
   }
 
   const companions = await companionGraph(tx, projectId);
-  if (companions.conflicts(memberIds)) {
+  if (companions.hasDirectConflict(memberIds)) {
     throw invalidState(
-      "This cluster contains confirmed separate reports of the same study. Classify the remaining pairs before merging citation duplicates.",
+      "These citations were previously confirmed as separate reports of the same study. Reopen that companion decision before merging them as duplicate citations.",
     );
   }
   const linkedDuplicate = await tx.studyReportLink.findFirst({
@@ -571,7 +571,7 @@ export async function bulkMergeExactDoiGroups(ctx: Ctx, projectId: string) {
           citations.set(candidate.citationB.id, candidate.citationB);
         }
         const members = [...citations.values()];
-        if (companions.conflicts(members.map((c) => c.id))) return [];
+        if (companions.hasDirectConflict(members.map((c) => c.id))) return [];
         return [{ groupId: group.id, canonical: chooseBulkCanonical(members) }];
       });
 

@@ -49,15 +49,12 @@ export function projectCompanionGraph(
     root,
     members: (id: string) => components.get(root(id) ?? id) ?? new Set([id]),
     sameStudy: (a: string, b: string) => components.get(a)?.has(b) ?? false,
-    conflicts: (ids: Iterable<string>) => {
-      const seen = new Set<Set<string>>();
-      for (const id of ids) {
-        const component = components.get(id);
-        if (!component) continue;
-        if (seen.has(component)) return true;
-        seen.add(component);
-      }
-      return false;
+    // Shared study membership does not prove that two imported copies are separate
+    // publications. Only an explicit judgment between their current roots blocks
+    // deduplication; keep the historical decision endpoints untouched.
+    hasDirectConflict: (ids: Iterable<string>) => {
+      const roots = new Set([...ids].map(root).filter((id) => id !== null));
+      return edges.some(({ a, b }) => a !== b && roots.has(a) && roots.has(b));
     },
   };
 }
