@@ -39,7 +39,7 @@ test("organization invite unlocks account creation and beta tester project owner
   const invitedMemberRow = testerPage
     .getByRole("row")
     .filter({ hasText: "Invited Beta Tester" });
-  await expect(invitedMemberRow).toContainText("Member / beta tester");
+  await expect(invitedMemberRow.getByText("Member", { exact: true })).toBeVisible();
 
   await testerPage.getByRole("button", { name: /new project/i }).click();
   await testerPage.fill("#p-title", `Beta tester project ${stamp}`);

@@ -33,7 +33,7 @@ export const guideSteps: GuideStep[] = [
       "Set up the organization, invite collaborators, configure institutional access, and create the right kind of evidence project.",
     actions: [
       "Create or open an organization from the Organizations page.",
-      "Invite members as beta testers, Workspace admins, or Workspace owners; each invitation link is single-use and tied to one email.",
+      "Invite Members, Workspace admins, or Workspace owners; each invitation link is single-use and tied to one email.",
       "Optionally configure the institution's EZProxy prefix and OpenURL resolver once for every full-text queue in the organization.",
       "Select New project, choose a single review or guideline structure, then assign the project roles needed for the work.",
     ],

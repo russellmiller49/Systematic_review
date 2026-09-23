@@ -582,12 +582,12 @@ plus two shared substrates:
 
 ## Current state (2026-07-20) — organization invitations + beta-tester onboarding — DONE
 
-- Owners/Admins can create, list, and revoke 14-day organization invitation links from the
+- Owners/Admins can create, list, and revoke 45-day organization invitation links from the
   organization dashboard. Tokens are exact-email, one-time, returned only on creation, and
   never exposed by list responses or audit payloads.
 - Active organization invitations now unlock the pilot signup gate. The acceptance flow creates
   or reactivates organization membership and redirects the invitee into the workspace.
-- The dashboard offers **Member / beta tester**, **Workspace admin**, and **Workspace owner**
+- The dashboard offers **Member**, **Workspace admin**, and **Workspace owner**
   access levels. Any active member can create a project and becomes that project's full-access
   Owner; organization roles do not silently grant access to other teams' existing projects.
 - Migration: `20260720120000_organization_invitations`. New service coverage verifies signup,

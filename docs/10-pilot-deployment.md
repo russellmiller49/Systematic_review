@@ -114,7 +114,7 @@ Then complete this browser smoke test:
 2. Create the organization and pilot project.
 3. Import a tiny citation file, create assignments, and make one screening decision.
 4. Upload and reopen a small PDF to prove the `/data` volume is working.
-5. On the organization dashboard, create a **Member / beta tester** invitation and copy the
+5. On the organization dashboard, create a **Member** invitation and copy the
    generated link.
 6. Open the link in a private browser, create the tester account with the invited email, accept
    the invitation, create a project, and confirm the tester is that project's Owner.

@@ -33,7 +33,7 @@ const ORGANIZATION_ROLES = ["MEMBER", "ADMIN", "OWNER"] as const;
 type OrganizationRole = (typeof ORGANIZATION_ROLES)[number];
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
-  MEMBER: "Member / beta tester",
+  MEMBER: "Member",
   ADMIN: "Workspace admin",
   OWNER: "Workspace owner",
 };
@@ -215,7 +215,7 @@ export function OrganizationInvitationsSection({ orgId }: { orgId: string }) {
       </div>
 
       <Alert variant="info">
-        For independent beta testing, choose <strong>Member / beta tester</strong>. They can
+        For independent beta testing, choose <strong>Member</strong>. They can
         create their own projects with full Owner access without gaining access to anyone
         else&apos;s project.
       </Alert>
