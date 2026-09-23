@@ -15,7 +15,7 @@ import { getOrgMembership, requireOrgRole } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 
-const ORGANIZATION_INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const ORGANIZATION_INVITATION_TTL_MS = 45 * 24 * 60 * 60 * 1000;
 const orgRoleEnum = z.enum(["OWNER", "ADMIN", "MEMBER"]);
 const ORG_ROLE_RANK: Record<OrgRole, number> = {
   MEMBER: 0,

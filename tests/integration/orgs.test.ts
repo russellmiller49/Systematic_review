@@ -104,8 +104,8 @@ describe("orgs service", () => {
     expect(invitation.token).toHaveLength(43);
     expect(invitation.email).toBe(inviteeEmail);
     const ttlDays = (invitation.expiresAt.getTime() - Date.now()) / 86_400_000;
-    expect(ttlDays).toBeGreaterThan(13.9);
-    expect(ttlDays).toBeLessThanOrEqual(14);
+    expect(ttlDays).toBeGreaterThan(44.9);
+    expect(ttlDays).toBeLessThanOrEqual(45);
 
     const createEvent = await prisma.auditEvent.findFirstOrThrow({
       where: {
