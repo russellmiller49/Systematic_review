@@ -570,7 +570,7 @@ plus two shared substrates:
   never exposed by list responses or audit payloads.
 - Active organization invitations now unlock the pilot signup gate. The acceptance flow creates
   or reactivates organization membership and redirects the invitee into the workspace.
-- The dashboard offers **Member / beta tester**, **Workspace admin**, and **Workspace owner**
+- The dashboard offers **Member**, **Workspace admin**, and **Workspace owner**
   access levels. Any active member can create a project and becomes that project's full-access
   Owner; organization roles do not silently grant access to other teams' existing projects.
 - Migration: `20260720120000_organization_invitations`. New service coverage verifies signup,
