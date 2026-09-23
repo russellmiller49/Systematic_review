@@ -8,3 +8,12 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 .DS_Store
+
+# Local video work and rendered media
+docs/tef-screening-video-refresh.md
+scripts/build-tef-screening-update.ts
+**/TEF-PICO-1-screening-updated-*
+*.mp4
+*.mov
+*.webm
+*.m4v
