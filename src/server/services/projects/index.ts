@@ -1431,7 +1431,7 @@ export async function synchronizeGuidelineMemberAccess(
       projectInvitationsSettled: familyResult.invitationCount,
       organizationInvitationsSettled: organizationResult?.invitationsAccepted ?? 0,
     };
-  });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }
 
 // Adds an EXISTING user (by email) who is already an ACTIVE member of the project's org (R10).
@@ -1721,5 +1721,5 @@ export async function acceptInvitation(ctx: Ctx, token: string) {
       project: { id: project.id, title: project.title },
       membership,
     };
-  });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }

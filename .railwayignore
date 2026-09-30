@@ -3,7 +3,8 @@
 node_modules/
 .env
 .env.local
-storage/
+# Exclude only runtime uploads, preserving src/server/storage in CLI uploads.
+/storage/
 coverage/
 test-results/
 playwright-report/
