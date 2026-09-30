@@ -49,7 +49,12 @@ export function QuotaAssignmentsDialog({
         setReviewers(result.reviewers);
         setTargets(
           Object.fromEntries(
-            result.reviewers.map((r) => [r.id, String(r.quota?.target ?? 200)]),
+            result.reviewers.map((r) => [
+              r.id,
+              r.quota?.target === null
+                ? "none"
+                : String(r.quota?.target ?? 200),
+            ]),
           ),
         );
         setSelected(
@@ -76,7 +81,8 @@ export function QuotaAssignmentsDialog({
       await apiPut(endpoint, {
         reviewers: [...selected].map((reviewerId) => ({
           reviewerId,
-          target: Number(targets[reviewerId]),
+          target:
+            targets[reviewerId] === "none" ? null : Number(targets[reviewerId]),
         })),
       });
       toast.success("Reviewer quotas saved");
@@ -107,8 +113,9 @@ export function QuotaAssignmentsDialog({
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
           Existing completed reviews count toward the target. Each combined-pool
-          abstract counts once. Set a target to 0 to pause new reviews.
-          Unselected reviewers keep their current targets.
+          abstract counts once. Choose No target to allow reviews without a
+          limit. Set a target to 0 to pause new reviews. Unselected reviewers
+          keep their current targets.
         </p>
         {error && <Alert variant="error">{error}</Alert>}
         {!reviewers ? (
@@ -141,6 +148,19 @@ export function QuotaAssignmentsDialog({
                 }
               >
                 Apply target
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setTargets((previous) => ({
+                    ...previous,
+                    ...Object.fromEntries(
+                      [...selected].map((id) => [id, "none"]),
+                    ),
+                  }))
+                }
+              >
+                No target
               </Button>
               <Button
                 variant="ghost"
@@ -192,9 +212,19 @@ export function QuotaAssignmentsDialog({
                           min={0}
                           max={1000000}
                           step={1}
-                          required={selected.has(reviewer.id)}
-                          disabled={!selected.has(reviewer.id)}
-                          value={targets[reviewer.id] ?? ""}
+                          required={
+                            selected.has(reviewer.id) &&
+                            targets[reviewer.id] !== "none"
+                          }
+                          disabled={
+                            !selected.has(reviewer.id) ||
+                            targets[reviewer.id] === "none"
+                          }
+                          value={
+                            targets[reviewer.id] === "none"
+                              ? ""
+                              : (targets[reviewer.id] ?? "")
+                          }
                           onChange={(e) =>
                             setTargets((previous) => ({
                               ...previous,
@@ -202,12 +232,31 @@ export function QuotaAssignmentsDialog({
                             }))
                           }
                         />
+                        <label className="mt-1 flex items-center gap-1 text-xs">
+                          <input
+                            type="checkbox"
+                            aria-label={`No target for ${reviewer.name}`}
+                            checked={targets[reviewer.id] === "none"}
+                            disabled={!selected.has(reviewer.id)}
+                            onChange={(e) =>
+                              setTargets((previous) => ({
+                                ...previous,
+                                [reviewer.id]: e.target.checked
+                                  ? "none"
+                                  : "200",
+                              }))
+                            }
+                          />
+                          No target
+                        </label>
                       </td>
                       <td className="p-2">
                         {reviewer.quota?.completed ?? "—"}
                       </td>
                       <td className="p-2">
-                        {reviewer.quota?.remaining ?? "—"}
+                        {reviewer.quota?.remaining === null
+                          ? "No limit"
+                          : (reviewer.quota?.remaining ?? "—")}
                       </td>
                     </tr>
                   ))}
@@ -219,8 +268,10 @@ export function QuotaAssignmentsDialog({
               {[...selected]
                 .reduce((sum, id) => sum + (Number(targets[id]) || 0), 0)
                 .toLocaleString()}{" "}
-              reviews. For 1,000 abstracts, dual review needs 2,000 reviews (for
-              example, 10 reviewers × 200).
+              targeted reviews;{" "}
+              {[...selected].filter((id) => targets[id] === "none").length}{" "}
+              without a target. For 1,000 abstracts, dual review needs 2,000
+              reviews (for example, 10 reviewers × 200).
             </p>
             <DialogFooter>
               <Button type="submit" disabled={busy || selected.size === 0}>
@@ -248,12 +299,22 @@ export function QuotaProgress({
       aria-label="Your reviewer quota"
       aria-live="polite"
     >
-      <p className="font-medium">Your target</p>
+      <p className="font-medium">
+        {quota.target === null ? "Your reviews" : "Your target"}
+      </p>
       <p className="mt-1 text-sm">
-        Target: <strong>{quota.target.toLocaleString()}</strong> · Completed:{" "}
-        <strong>{quota.completed.toLocaleString()}</strong> · Remaining:{" "}
-        <strong>{quota.remaining.toLocaleString()}</strong> · Available to
-        review: <strong>{available.toLocaleString()}</strong>
+        Target:{" "}
+        <strong>
+          {quota.target === null ? "No target" : quota.target.toLocaleString()}
+        </strong>{" "}
+        · Completed: <strong>{quota.completed.toLocaleString()}</strong>
+        {quota.remaining !== null && (
+          <>
+            {" "}
+            · Remaining: <strong>{quota.remaining.toLocaleString()}</strong>
+          </>
+        )}{" "}
+        · Available to review: <strong>{available.toLocaleString()}</strong>
       </p>
       <p className="mt-1 text-sm text-muted-foreground">
         {quota.target === 0
@@ -261,7 +322,9 @@ export function QuotaProgress({
           : quota.remaining === 0
             ? "Target reached. Your completed reviews remain saved."
             : available === 0
-              ? "No abstracts are currently available. Your remaining target is unchanged; an administrator can adjust it or add more abstracts."
+              ? quota.target === null
+                ? "No abstracts are currently available. Your completed reviews remain saved."
+                : "No abstracts are currently available. Your remaining target is unchanged; an administrator can adjust it or add more abstracts."
               : `Choose any available abstract. ${available.toLocaleString()} currently need your review.`}
       </p>
     </div>

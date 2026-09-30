@@ -144,7 +144,7 @@ export function pooledReviewerState(
   state: PooledState,
   reviewerId: string,
   required: number,
-  quota: { remaining: number } | null,
+  quota: { remaining: number | null } | null,
 ) {
   const myDecisions = state.rows.map((row) =>
     row.decisions.find((d) => d.reviewerId === reviewerId),
@@ -157,7 +157,7 @@ export function pooledReviewerState(
     ),
   );
   const authorized = quota
-    ? quota.remaining > 0
+    ? quota.remaining === null || quota.remaining > 0
     : state.rows.every((row) =>
         row.assignments.some(
           (a) => a.reviewerId === reviewerId && a.status === "PENDING",

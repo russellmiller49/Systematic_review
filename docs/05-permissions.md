@@ -63,7 +63,10 @@ Additional invariants enforced in services, beyond the matrix:
 
 - You can only create/update **your own** screening decisions, extraction forms, and RoB
   assessments (`reviewerId`/`extractorId`/`assessorId` always come from the session).
-- A REVIEWER can decide only citation-stage pairs currently assigned to them. Assignment creation,
+- A REVIEWER can decide citation-stage pairs assigned to them or authorized by an active
+  title/abstract quota, including explicitly saved No target access. The latter creates
+  assignments only when the reviewer submits a decision, preserving independent review
+  capacity and blinding. Assignment creation,
   workload inspection, and reset controls require `screening.configure` (OWNER/ADMIN).
 - Assignment resets require an audit reason and remove only PENDING rows with no saved decision;
   completed assignments, decisions, conflicts, and stage results are preserved.

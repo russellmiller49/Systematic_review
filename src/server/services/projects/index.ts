@@ -12,13 +12,15 @@ import type { OrgRole, Prisma, ProjectRole } from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
-import { getOrgMembership, requirePermission } from "@/server/permissions";
+import { can, getOrgMembership, requirePermission } from "@/server/permissions";
 import { capabilitiesFor } from "@/server/permissions/matrix";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import { getAiConfig } from "@/server/ai/config";
 import { resetManuscriptToPicoDefaultsInTransaction } from "@/server/services/manuscript";
 import { hasPicoDefaultSectionStructure } from "@/server/services/manuscript/default-sections";
+
+import { lockScreeningStages } from "@/server/services/screening/quotas";
 
 const INVITATION_TTL_MS = 45 * 24 * 60 * 60 * 1000; // 45 days
 
@@ -129,6 +131,258 @@ export const createInvitationSchema = z.object({
   email: z.string().email(),
   roles: z.array(projectRoleEnum).min(1),
 });
+
+const invitationQuotaTarget = z.number().int().min(0).max(1_000_000).nullable();
+export const projectAccessGrantsSchema = z
+  .array(
+    z.object({
+      projectId: z.string().min(1),
+      roles: z.array(projectRoleEnum).min(1),
+      quotas: z
+        .array(
+          z.union([
+            z
+              .object({
+                stageId: z.string().min(1),
+                target: invitationQuotaTarget,
+              })
+              .strict(),
+            z
+              .object({
+                poolId: z.string().min(1),
+                target: invitationQuotaTarget,
+              })
+              .strict(),
+          ]),
+        )
+        .max(20)
+        .default([]),
+    }),
+  )
+  .min(1)
+  .max(10)
+  .superRefine((grants, refinement) => {
+    const projects = grants.map((grant) => grant.projectId);
+    const scopes = grants.flatMap((grant) =>
+      grant.quotas.map((quota) =>
+        "stageId" in quota ? `stage:${quota.stageId}` : `pool:${quota.poolId}`,
+      ),
+    );
+    if (
+      new Set(projects).size !== projects.length ||
+      new Set(scopes).size !== scopes.length
+    ) {
+      refinement.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Projects and quota scopes must be unique",
+      });
+    }
+  });
+
+export const projectAccessEnvelopeSchema = z.object({
+  configuredById: z.string().min(1),
+  grants: projectAccessGrantsSchema,
+});
+
+// Workspace invitations remain workspace-only unless a manager explicitly attaches
+// project access. Store grants for people who have not registered yet, then validate
+// the authorizer and current project/stage configuration again on acceptance.
+export async function validateProjectAccessGrants(
+  ctx: Ctx,
+  orgId: string,
+  grants: z.infer<typeof projectAccessGrantsSchema>,
+  tx: Tx,
+) {
+  const stageIds: string[] = [];
+  for (const grant of grants) {
+    await requirePermission(ctx, grant.projectId, "project.members", tx);
+    const project = await tx.project.findFirst({
+      where: { id: grant.projectId, orgId },
+      select: {
+        id: true,
+        isGuideline: true,
+        subProjects: { select: { id: true } },
+      },
+    });
+    if (!project) throw notFound("Project in this organization");
+    const familyIds = [
+      project.id,
+      ...(project.isGuideline ? project.subProjects.map((p) => p.id) : []),
+    ];
+    if (grant.quotas.length && !can(grant.roles, "screening.decide")) {
+      throw invalidState("Review access requires a screening role");
+    }
+    for (const quota of grant.quotas) {
+      let projectIds: string[];
+      if ("stageId" in quota) {
+        const stage = await tx.screeningStage.findFirst({
+          where: {
+            id: quota.stageId,
+            projectId: { in: familyIds },
+            type: "TITLE_ABSTRACT",
+          },
+        });
+        if (!stage)
+          throw notFound("Title/abstract stage in the invited project family");
+        if (
+          await tx.guidelineScreeningPoolMember.findUnique({
+            where: { projectId: stage.projectId },
+          })
+        ) {
+          throw invalidState("Manage shared quotas through the combined pool");
+        }
+        projectIds = [stage.projectId];
+      } else {
+        const pool = await tx.guidelineScreeningPool.findFirst({
+          where: { id: quota.poolId, guidelineId: project.id },
+          include: { members: true },
+        });
+        if (!pool || pool.members.length === 0)
+          throw notFound("Screening pool in the invited guideline");
+        projectIds = pool.members.map((member) => member.projectId);
+        if (projectIds.some((id) => !familyIds.includes(id))) {
+          throw invalidState(
+            "Every pooled PICO must belong to the invited guideline",
+          );
+        }
+      }
+      for (const id of projectIds)
+        await requirePermission(ctx, id, "screening.configure", tx);
+      const stages = await tx.screeningStage.findMany({
+        where: { projectId: { in: projectIds }, type: "TITLE_ABSTRACT" },
+      });
+      if (
+        stages.length !== projectIds.length ||
+        stages.some((stage) => stage.reviewersPerCitation !== 2)
+      ) {
+        throw invalidState(
+          "Reviewer targets require dual title/abstract screening",
+        );
+      }
+      stageIds.push(...stages.map((stage) => stage.id));
+    }
+  }
+  return stageIds;
+}
+
+export async function applyProjectAccessGrants(
+  tx: Tx,
+  input: {
+    orgId: string;
+    userId: string;
+    email: string;
+    actorUserId: string;
+    organizationInvitationId: string;
+    access: z.infer<typeof projectAccessEnvelopeSchema>;
+  },
+) {
+  const authorizer = { userId: input.access.configuredById };
+  const stageIds = await validateProjectAccessGrants(
+    authorizer,
+    input.orgId,
+    input.access.grants,
+    tx,
+  );
+  await lockScreeningStages(tx, stageIds);
+  // Configuration can change while waiting for the stage locks.
+  const currentStageIds = await validateProjectAccessGrants(
+    authorizer,
+    input.orgId,
+    input.access.grants,
+    tx,
+  );
+  if (
+    currentStageIds.some((id) => !stageIds.includes(id)) ||
+    stageIds.some((id) => !currentStageIds.includes(id))
+  ) {
+    throw invalidState(
+      "The review pool changed. Ask a project manager to update the invitation.",
+    );
+  }
+  if (!(await getOrgMembership(input.userId, input.orgId, tx)))
+    throw forbidden();
+  const metadata = {
+    organizationInvitationId: input.organizationInvitationId,
+    configuredById: authorizer.userId,
+  };
+  for (const grant of input.access.grants) {
+    const project = await tx.project.findUniqueOrThrow({
+      where: { id: grant.projectId },
+    });
+    const before = await tx.projectMember.findUnique({
+      where: {
+        projectId_userId: { projectId: project.id, userId: input.userId },
+      },
+    });
+    const roles = mergeProjectRoles(before?.roles ?? [], grant.roles);
+    if (
+      !before ||
+      before.status !== "ACTIVE" ||
+      !sameRoles(before.roles, roles)
+    ) {
+      const member = await tx.projectMember.upsert({
+        where: {
+          projectId_userId: { projectId: project.id, userId: input.userId },
+        },
+        create: { projectId: project.id, userId: input.userId, roles },
+        update: { status: "ACTIVE", roles },
+      });
+      await audit.record(tx, {
+        projectId: project.id,
+        userId: input.actorUserId,
+        entityType: "ProjectMember",
+        entityId: member.id,
+        action:
+          before?.status === "ACTIVE"
+            ? AuditActions.MEMBER_ROLES_CHANGED
+            : AuditActions.MEMBER_ADDED,
+        previousValue: before
+          ? { roles: before.roles, status: before.status }
+          : undefined,
+        newValue: { userId: input.userId, roles, status: "ACTIVE" },
+        metadata,
+      });
+    }
+    if (project.isGuideline)
+      await syncGuidelineMemberToSubProjects(tx, {
+        guidelineId: project.id,
+        userId: input.userId,
+        email: input.email,
+        roles,
+        actorUserId: input.actorUserId,
+        now: new Date(),
+        invitationResolution: "accepted",
+      });
+    for (const quota of grant.quotas) {
+      const scope =
+        "stageId" in quota
+          ? { stageId: quota.stageId }
+          : { poolId: quota.poolId };
+      const previous = await tx.screeningQuota.findFirst({
+        where: { ...scope, reviewerId: input.userId },
+      });
+      if (previous && previous.target === quota.target) continue;
+      const saved = previous
+        ? await tx.screeningQuota.update({
+            where: { id: previous.id },
+            data: { target: quota.target },
+          })
+        : await tx.screeningQuota.create({
+            data: { ...scope, reviewerId: input.userId, target: quota.target },
+          });
+      await audit.record(tx, {
+        projectId: project.id,
+        userId: input.actorUserId,
+        entityType: "ScreeningQuota",
+        entityId: saved.id,
+        action: AuditActions.SCREENING_QUOTA_UPDATED,
+        previousValue: previous ? { target: previous.target } : undefined,
+        newValue: { ...scope, reviewerId: input.userId, target: quota.target },
+        metadata,
+      });
+    }
+  }
+}
 
 // Everything except `token` — R11: the token is returned ONLY by the create call.
 const invitationPublicSelect = {
@@ -413,6 +667,23 @@ async function reconcileOrganizationInvitations(
         ? { satisfiedByProjectInvitationId: input.sourceProjectInvitationId }
         : { reconciledByGuidelineMemberSync: true },
     });
+    const acceptedInvitation =
+      await tx.organizationInvitation.findUniqueOrThrow({
+        where: { id: invitation.id },
+        select: { projectAccess: true },
+      });
+    if (acceptedInvitation.projectAccess !== null) {
+      await applyProjectAccessGrants(tx, {
+        orgId: input.orgId,
+        userId: input.userId,
+        email: input.email,
+        actorUserId: input.actorUserId,
+        organizationInvitationId: invitation.id,
+        access: projectAccessEnvelopeSchema.parse(
+          acceptedInvitation.projectAccess,
+        ),
+      });
+    }
   }
 
   return {

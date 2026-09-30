@@ -59,7 +59,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .getByRole("button", { name: "Reviewer quotas", exact: true })
     .click();
   let dialog = page.getByRole("dialog");
-  await dialog.getByRole("checkbox").check();
+  await dialog.getByRole("checkbox").first().check();
   await dialog
     .getByRole("spinbutton", { name: `Target for ${name}`, exact: true })
     .fill("1");
@@ -106,6 +106,20 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
   });
   await expectNoErrorOverlay(page);
 
+  await page
+    .getByRole("button", { name: "Reviewer quotas", exact: true })
+    .click();
+  dialog = page.getByRole("dialog");
+  await dialog
+    .getByRole("checkbox", { name: `No target for ${name}`, exact: true })
+    .check();
+  await dialog.getByRole("button", { name: "Save quotas" }).click();
+  await expect(progress).toContainText("Target: No target · Completed: 1");
+  await expect(progress).not.toContainText("Remaining:");
+  await page.getByRole("button", { name: /^Include/ }).click();
+  await expect(progress).toContainText("Completed: 2");
+  await expect(page.getByRole("button", { name: /^Include/ })).toBeEnabled();
+
   const guideline = await post(page.request, `/api/orgs/${org.id}/projects`, {
     title: "Quota guideline",
     reviewType: "GUIDELINE_EVIDENCE_REVIEW",
@@ -134,7 +148,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .getByRole("button", { name: "Reviewer quotas", exact: true })
     .click();
   dialog = page.getByRole("dialog");
-  await dialog.getByRole("checkbox").check();
+  await dialog.getByRole("checkbox").first().check();
   await dialog
     .getByRole("spinbutton", { name: `Target for ${name}`, exact: true })
     .fill("1");
@@ -151,4 +165,20 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     fullPage: true,
   });
   await expectNoErrorOverlay(page);
+  await page
+    .getByRole("button", { name: "Reviewer quotas", exact: true })
+    .click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "No target", exact: true }).click();
+  await dialog.getByRole("button", { name: "Save quotas" }).click();
+  await expect(progress).toContainText("Target: No target · Completed: 1");
+  await page.reload();
+  await expect(progress).not.toContainText("Remaining:");
+  await page.getByRole("button", { name: /^Include/ }).click();
+  await expect(progress).toContainText("Completed: 2");
+  await expect(page.getByRole("button", { name: /^Include/ })).toBeEnabled();
+  await page.screenshot({
+    path: "test-results/quota-pool-no-target.png",
+    fullPage: true,
+  });
 });

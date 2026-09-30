@@ -15,6 +15,13 @@ import { getOrgMembership, requireOrgRole } from "@/server/permissions";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 
+import {
+  applyProjectAccessGrants,
+  projectAccessEnvelopeSchema,
+  projectAccessGrantsSchema,
+  validateProjectAccessGrants,
+} from "@/server/services/projects";
+
 const ORGANIZATION_INVITATION_TTL_MS = 45 * 24 * 60 * 60 * 1000;
 const orgRoleEnum = z.enum(["OWNER", "ADMIN", "MEMBER"]);
 const ORG_ROLE_RANK: Record<OrgRole, number> = {
@@ -412,81 +419,166 @@ export async function revokeOrganizationInvitation(
 }
 
 export async function acceptOrganizationInvitation(ctx: Ctx, token: string) {
-  return prisma.$transaction(async (tx) => {
-    const invitation = await tx.organizationInvitation.findUnique({
-      where: { token },
-      include: { organization: { select: { id: true, name: true, slug: true } } },
-    });
-    if (!invitation) throw notFound("Invitation");
+  return prisma.$transaction(
+    async (tx) => {
+      const invitation = await tx.organizationInvitation.findUnique({
+        where: { token },
+        include: {
+          organization: { select: { id: true, name: true, slug: true } },
+        },
+      });
+      if (!invitation) throw notFound("Invitation");
 
-    const user = await tx.user.findUniqueOrThrow({ where: { id: ctx.userId } });
-    if (user.email.toLowerCase() !== invitation.email.toLowerCase()) {
-      throw forbidden("This invitation was issued to a different email address");
-    }
-    if (invitation.revokedAt) throw invalidState("Invitation has been revoked");
-    if (invitation.acceptedAt) throw invalidState("Invitation has already been used");
+      const user = await tx.user.findUniqueOrThrow({
+        where: { id: ctx.userId },
+      });
+      if (user.email.toLowerCase() !== invitation.email.toLowerCase()) {
+        throw forbidden(
+          "This invitation was issued to a different email address",
+        );
+      }
+      if (invitation.revokedAt)
+        throw invalidState("Invitation has been revoked");
+      if (invitation.acceptedAt)
+        throw invalidState("Invitation has already been used");
 
-    const now = new Date();
-    if (invitation.expiresAt.getTime() < now.getTime()) {
-      throw invalidState("Invitation has expired");
-    }
+      const now = new Date();
+      if (invitation.expiresAt.getTime() < now.getTime()) {
+        throw invalidState("Invitation has expired");
+      }
 
-    // Consume and validate expiry atomically so concurrent accepts cannot both succeed.
-    const consumed = await tx.organizationInvitation.updateMany({
-      where: {
-        id: invitation.id,
-        acceptedAt: null,
-        revokedAt: null,
-        expiresAt: { gt: now },
-      },
-      data: { acceptedAt: now },
-    });
-    if (consumed.count === 0) throw invalidState("Invitation is no longer valid");
+      // Consume and validate expiry atomically so concurrent accepts cannot both succeed.
+      const consumed = await tx.organizationInvitation.updateMany({
+        where: {
+          id: invitation.id,
+          acceptedAt: null,
+          revokedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { acceptedAt: now },
+      });
+      if (consumed.count === 0)
+        throw invalidState("Invitation is no longer valid");
 
-    const existing = await tx.organizationMember.findUnique({
-      where: { orgId_userId: { orgId: invitation.orgId, userId: ctx.userId } },
-    });
-    const role = strongestOrgRole([existing?.role ?? "MEMBER", invitation.role]);
-    const membership =
-      existing === null
-        ? await tx.organizationMember.create({
-            data: { orgId: invitation.orgId, userId: ctx.userId, role },
-          })
-        : existing.status === "ACTIVE" && existing.role === role
-          ? existing
-          : await tx.organizationMember.update({
-              where: { id: existing.id },
-              data: { status: "ACTIVE", role },
-            });
+      const existing = await tx.organizationMember.findUnique({
+        where: {
+          orgId_userId: { orgId: invitation.orgId, userId: ctx.userId },
+        },
+      });
+      const role = strongestOrgRole([
+        existing?.role ?? "MEMBER",
+        invitation.role,
+      ]);
+      const membership =
+        existing === null
+          ? await tx.organizationMember.create({
+              data: { orgId: invitation.orgId, userId: ctx.userId, role },
+            })
+          : existing.status === "ACTIVE" && existing.role === role
+            ? existing
+            : await tx.organizationMember.update({
+                where: { id: existing.id },
+                data: { status: "ACTIVE", role },
+              });
 
-    if (existing?.status === "ACTIVE" && existing.role !== membership.role) {
+      if (existing?.status === "ACTIVE" && existing.role !== membership.role) {
+        await audit.record(tx, {
+          userId: ctx.userId,
+          entityType: "OrganizationMember",
+          entityId: membership.id,
+          action: AuditActions.MEMBER_ROLES_CHANGED,
+          previousValue: { role: existing.role },
+          newValue: { role: membership.role },
+          metadata: { organizationInvitationId: invitation.id },
+        });
+      }
+
       await audit.record(tx, {
         userId: ctx.userId,
-        entityType: "OrganizationMember",
-        entityId: membership.id,
-        action: AuditActions.MEMBER_ROLES_CHANGED,
-        previousValue: { role: existing.role },
-        newValue: { role: membership.role },
-        metadata: { organizationInvitationId: invitation.id },
+        entityType: "OrganizationInvitation",
+        entityId: invitation.id,
+        action: AuditActions.INVITATION_ACCEPTED,
+        newValue: {
+          orgId: invitation.orgId,
+          email: invitation.email,
+          role: invitation.role,
+        },
+        metadata: {
+          membershipReactivated: existing?.status === "REMOVED",
+          membershipRoleApplied: membership.role,
+        },
       });
-    }
 
-    await audit.record(tx, {
-      userId: ctx.userId,
-      entityType: "OrganizationInvitation",
-      entityId: invitation.id,
-      action: AuditActions.INVITATION_ACCEPTED,
-      newValue: {
-        orgId: invitation.orgId,
-        email: invitation.email,
-        role: invitation.role,
-      },
-      metadata: {
-        membershipReactivated: existing?.status === "REMOVED",
-        membershipRoleApplied: membership.role,
-      },
-    });
+      const acceptedInvitation =
+        await tx.organizationInvitation.findUniqueOrThrow({
+          where: { id: invitation.id },
+          select: { projectAccess: true },
+        });
+      if (acceptedInvitation.projectAccess !== null) {
+        await applyProjectAccessGrants(tx, {
+          orgId: invitation.orgId,
+          userId: user.id,
+          email: invitation.email,
+          actorUserId: ctx.userId,
+          organizationInvitationId: invitation.id,
+          access: projectAccessEnvelopeSchema.parse(
+            acceptedInvitation.projectAccess,
+          ),
+        });
+      }
 
-    return { organization: invitation.organization, membership };
-  });
+      return { organization: invitation.organization, membership };
+    },
+    { maxWait: 10_000, timeout: 30_000 },
+  );
+}
+
+// Service-only configuration for already-issued workspace invitations. Existing
+// invitation URLs keep working; access is applied atomically when the invitee joins.
+export async function configureOrganizationInvitationProjectAccess(
+  ctx: Ctx,
+  orgId: string,
+  invitationId: string,
+  rawGrants: z.input<typeof projectAccessGrantsSchema>,
+) {
+  const grants = projectAccessGrantsSchema.parse(rawGrants);
+  return prisma.$transaction(
+    async (tx) => {
+      await requireOrgRole(ctx, orgId, ["OWNER", "ADMIN"], tx);
+      const invitation = await tx.organizationInvitation.findFirst({
+        where: {
+          id: invitationId,
+          orgId,
+          acceptedAt: null,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+      });
+      if (!invitation) throw notFound("Pending organization invitation");
+      await validateProjectAccessGrants(ctx, orgId, grants, tx);
+      const projectAccess = { configuredById: ctx.userId, grants };
+      const updated = await tx.organizationInvitation.updateMany({
+        where: {
+          id: invitation.id,
+          acceptedAt: null,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        data: { projectAccess },
+      });
+      if (updated.count !== 1)
+        throw invalidState("Invitation is no longer pending");
+      await audit.record(tx, {
+        userId: ctx.userId,
+        entityType: "OrganizationInvitation",
+        entityId: invitation.id,
+        action: AuditActions.INVITATION_ACCESS_UPDATED,
+        previousValue: invitation.projectAccess ?? undefined,
+        newValue: projectAccess,
+        metadata: { orgId, email: invitation.email },
+      });
+      return { id: invitation.id, email: invitation.email, projectAccess };
+    },
+    { maxWait: 10_000, timeout: 30_000 },
+  );
 }

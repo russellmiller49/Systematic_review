@@ -301,9 +301,9 @@ export interface PooledQueueResponse {
 }
 
 export interface ReviewerQuota {
-  target: number;
+  target: number | null;
   completed: number;
-  remaining: number;
+  remaining: number | null;
 }
 
 export type PooledNavigatorFilter = "AVAILABLE" | "MY_REVIEWED" | "ALL";

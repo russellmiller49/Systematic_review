@@ -13,6 +13,7 @@ export const AuditActions = {
   MEMBER_ROLES_CHANGED: "member.roles_changed",
   MEMBER_REMOVED: "member.removed",
   INVITATION_CREATED: "invitation.created",
+  INVITATION_ACCESS_UPDATED: "invitation.access_updated",
   INVITATION_ACCEPTED: "invitation.accepted",
   INVITATION_REVOKED: "invitation.revoked",
   USER_CREATED: "user.created",

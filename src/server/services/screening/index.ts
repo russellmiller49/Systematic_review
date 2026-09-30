@@ -911,7 +911,7 @@ export async function getScreeningNavigator(
     },
     stageResults: { none: { stageId } },
     ...(quota
-      ? quota.remaining > 0
+      ? quota.remaining === null || quota.remaining > 0
         ? {}
         : { id: { in: [] } }
       : {
@@ -1124,7 +1124,7 @@ export async function getScreeningNavigator(
           (decision !== null ||
             ((reviewCounts.get(citation.id) ?? 0) <
               stage.reviewersPerCitation &&
-              (!quota || quota.remaining > 0))),
+              (!quota || quota.remaining === null || quota.remaining > 0))),
         aiSuggestion: suggestion
           ? {
               score: suggestion.score,
@@ -1531,7 +1531,8 @@ export async function createDecisionInTransaction(
   }
   if (
     !assignment &&
-    (pooledQuotaAuthorized || (quota && quota.remaining > 0))
+    (pooledQuotaAuthorized ||
+      (quota && (quota.remaining === null || quota.remaining > 0)))
   ) {
     assignment = await tx.screeningAssignment.create({
       data: {

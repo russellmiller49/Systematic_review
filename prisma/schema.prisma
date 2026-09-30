@@ -379,6 +379,7 @@ model OrganizationInvitation {
   orgId       String
   email       String // lowercased
   role        OrgRole
+  projectAccess Json? // explicit project roles and review access applied on acceptance
   token       String    @unique // crypto.randomBytes(32) base64url; returned only at creation
   invitedById String
   expiresAt   DateTime
@@ -2290,7 +2291,7 @@ model ScreeningQuota {
   stageId    String?
   poolId     String?
   reviewerId String
-  target     Int
+  target     Int? // null grants open reviewing without a target; zero pauses reviewing
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

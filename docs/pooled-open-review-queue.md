@@ -3,6 +3,16 @@
 A reviewer target specifies how many logical abstracts to screen. It never selects or
 reserves particular abstracts. PICO 1 remains an independent title/abstract queue; the
 saved guideline pool defines the combined queue (for example, PICO 2–6).
+An explicitly saved **No target** grants the same open queue without a review limit.
+Its target and remaining values are null. Zero still pauses new reviewing, and an
+absent quota still requires legacy fixed assignments.
+
+Managers can attach project access and review targets to existing workspace invitations
+through `configureOrganizationInvitationProjectAccess`. Acceptance applies guideline
+membership, all current PICO memberships, and targets in one audited transaction.
+Ordinary workspace invitations continue to grant workspace membership alone. Existing
+invitation links remain valid; the granting manager's current permissions, organization,
+project family, and dual-screening scopes are checked again when the invitee accepts.
 
 ## Previous behavior and architecture
 
@@ -26,7 +36,7 @@ Pooled API types remain separate from ordinary citation/assignment API types.
 ## Authorization, availability, and history
 
 Active organization and screening membership are required for the guideline and its
-selected PICOs. A saved pooled quota with remaining work authorizes any eligible logical
+selected PICOs. A saved pooled quota with remaining work, or explicit No target access, authorizes any eligible logical
 abstract. If no quota exists, live legacy fixed assignments on every copy still authorize
 that work. A quota, including target zero, takes precedence over pending fixed assignments.
 

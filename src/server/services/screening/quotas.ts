@@ -15,7 +15,7 @@ export const saveQuotasSchema = z.object({
     .array(
       z.object({
         reviewerId: z.string().min(1),
-        target: z.number().int().min(0).max(1_000_000),
+        target: z.number().int().min(0).max(1_000_000).nullable(),
       }),
     )
     .min(1)
@@ -115,7 +115,8 @@ export async function quotaProgress(
   return {
     target: quota.target,
     completed,
-    remaining: Math.max(0, quota.target - completed),
+    remaining:
+      quota.target === null ? null : Math.max(0, quota.target - completed),
   };
 }
 
@@ -206,7 +207,10 @@ export async function listQuotas(
         ? {
             target: saved.target,
             completed,
-            remaining: Math.max(0, saved.target - completed),
+            remaining:
+              saved.target === null
+                ? null
+                : Math.max(0, saved.target - completed),
           }
         : null,
     });
@@ -214,7 +218,8 @@ export async function listQuotas(
   return { reviewers };
 }
 
-// Upsert only the supplied reviewers. A zero target pauses new reviews while preserving
+// Upsert only the supplied reviewers. Null permits reviews without a target.
+// A zero target pauses new reviews while preserving
 // the assignment and its completed work. Prior reviews in this corpus count toward targets.
 export async function saveQuotas(
   ctx: Ctx,
