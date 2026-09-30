@@ -36,7 +36,7 @@ PANEL_MEMBER, TRAINEE, OBSERVER` (capability matrix in `05-permissions.md`).
   (name, type PRIMARY|SECONDARY, measure, timepoint — future GRADE anchor). The spec's
   `ScreeningRule` lives as config on `ScreeningStage` (reviewersPerCitation, blinded,
   maybeGeneratesConflict) — one operational source of truth; protocol version snapshots capture
-  the stage config at publish time so the *planned* rules are still versioned.
+  the stage config at publish time so the _planned_ rules are still versioned.
 - `ExclusionReason` — project-scoped list, `stage: TITLE_ABSTRACT|FULL_TEXT|BOTH`, protocol-derived,
   orderable. Full-text exclusions **must** reference one.
 - Extraction fields and RoB tool config are first-class in their own domains
@@ -57,7 +57,7 @@ PANEL_MEMBER, TRAINEE, OBSERVER` (capability matrix in `05-permissions.md`).
   parse+preview (batch stored with parsed rows) → commit (citations created).
 - `Citation` — the **report**: title, authors (JSON array of `{family, given, raw}`), year,
   journal, volume, issue, pages, abstract, doi, pmid, url, language. Plus `status:
-  ACTIVE|DUPLICATE`, `duplicateOfId` (self-FK; set by merge, cleared by undo), and normalized
+ACTIVE|DUPLICATE`, `duplicateOfId` (self-FK; set by merge, cleared by undo), and normalized
   columns (`normalizedTitle`, `normalizedDoi`) maintained by the service for dedup/index use.
 - `CitationSourceRecord` — **immutable** raw record per import (rawRecord text + parsed JSON +
   batch FK). A merged duplicate keeps its source records; nothing is ever discarded.
@@ -89,7 +89,7 @@ PANEL_MEMBER, TRAINEE, OBSERVER` (capability matrix in `05-permissions.md`).
 - `ScreeningAssignment` — (stage, citation, reviewer, status `PENDING|COMPLETED`). Queue = my
   PENDING assignments. Unique (stageId, citationId, reviewerId).
 - `ScreeningDecision` — (stage, citation, reviewer) unique; `decision:
-  INCLUDE|EXCLUDE|MAYBE|UNRESOLVED`; `exclusionReasonId` (**required at FULL_TEXT when
+INCLUDE|EXCLUDE|MAYBE|UNRESOLVED`; `exclusionReasonId` (**required at FULL_TEXT when
   EXCLUDE**, enforced in service+Zod); notes, labels (string[]), flaggedForDiscussion. Decisions
   are updated in place; every change writes an AuditEvent carrying the previous value, so full
   history is reconstructable.
@@ -185,10 +185,22 @@ One line each — field detail lives in `prisma/schema.prisma` (inline-commented
 
 ## Deliberate deviations from the spec's entity list
 
-| Spec entity | Implemented as | Why |
-|---|---|---|
-| InclusionCriterion / ExclusionCriterion | `EligibilityCriterion.type` | Identical shape; one table, one API. |
-| ExtractionFieldDefinition (protocol) | `ExtractionField` + `Protocol.extractionTemplateId` | One field system for protocol planning and live extraction; no dual maintenance. |
-| RiskOfBiasToolConfig (protocol) | `Protocol.riskOfBiasToolId` | Same reason. |
-| Role (table) | `ProjectRole[]` enum + code capability matrix | Roles are static in MVP; a table adds joins without flexibility we use. Revisit for custom roles. |
-| FullTextExclusionSummary | `PrismaCount.breakdown` + live query | Derived data; storing it independently invites drift. |
+| Spec entity                             | Implemented as                                      | Why                                                                                               |
+| --------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| InclusionCriterion / ExclusionCriterion | `EligibilityCriterion.type`                         | Identical shape; one table, one API.                                                              |
+| ExtractionFieldDefinition (protocol)    | `ExtractionField` + `Protocol.extractionTemplateId` | One field system for protocol planning and live extraction; no dual maintenance.                  |
+| RiskOfBiasToolConfig (protocol)         | `Protocol.riskOfBiasToolId`                         | Same reason.                                                                                      |
+| Role (table)                            | `ProjectRole[]` enum + code capability matrix       | Roles are static in MVP; a table adds joins without flexibility we use. Revisit for custom roles. |
+| FullTextExclusionSummary                | `PrismaCount.breakdown` + live query                | Derived data; storing it independently invites drift.                                             |
+
+## Dedup-stage companion judgments
+
+`DedupCandidateStatus.COMPANION` is a human judgment that two original citation IDs represent
+separate publications of the same cohort. It is distinct from REJECTED and MERGED and uses the
+existing candidate reviewer/timestamp fields. Migration: `20260920150000_dedup_companion`.
+It neither changes Citation status nor creates a Study/StudyReportLink before full-text inclusion.
+Only SUGGESTED edges form duplicate components. Historical endpoints remain immutable; current
+canonical chains resolve companion evidence during inclusion. The existing StudyReportLink and
+one-study-per-report lifecycle remain the analysis authority. `CohortCandidate.LINKED` still
+means a real study operation; manual dedup evidence is read directly, never copied into a fake
+LINKED candidate. See [companion reports](companion-reports.md) and [dedup safety](deduplication-safety.md).

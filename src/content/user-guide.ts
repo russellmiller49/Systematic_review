@@ -88,7 +88,8 @@ export const guideSteps: GuideStep[] = [
       "Publish the protocol to freeze version 1 before screening.",
       "After screening begins, describe why a change is needed; Synthesis records an amendment and a new version.",
     ],
-    remember: "Published versions are permanent snapshots. Editing the working protocol never rewrites history.",
+    remember:
+      "Published versions are permanent snapshots. Editing the working protocol never rewrites history.",
     image: "/guide/captures/02-protocol.jpg",
   },
   {
@@ -118,10 +119,13 @@ export const guideSteps: GuideStep[] = [
     actions: [
       "Run detection after all planned search batches are committed.",
       "Compare each suggested pair and its DOI, PMID, title, author, and year evidence.",
-      "Choose the canonical record and merge, or reject the suggestion.",
+      "For copies of the same publication, choose the canonical record and merge. For unrelated records, choose Not a duplicate.",
+      "For different publications of one cohort, choose Same study / separate report. Keep both citations; full-text included reports will share one study.",
+      "If every citation is a separate report of one study, use the confirmed group action. Review or reopen early companion decisions in Resolved.",
       "Use Merged citations to review or undo a merge when necessary.",
     ],
-    remember: "A merge preserves provenance and history; it does not silently delete the duplicate record.",
+    remember:
+      "A merge preserves provenance and history; it does not silently delete the duplicate record.",
     image: "/guide/captures/04-dedup.jpg",
   },
   {
@@ -157,7 +161,8 @@ export const guideSteps: GuideStep[] = [
       "Upload the main PDF and preview it in the workspace.",
       "Complete assigned full-text decisions; included reports automatically create or join studies.",
     ],
-    remember: "Mark a report Not retrievable explicitly so it appears in the correct PRISMA box.",
+    remember:
+      "Mark a report Not retrievable explicitly so it appears in the correct PRISMA box.",
     image: "/guide/captures/06-fulltext.jpg",
   },
   {
@@ -170,11 +175,12 @@ export const guideSteps: GuideStep[] = [
     actions: [
       "Build a draft template with text, number, date, select, multiselect, and boolean fields.",
       "Publish the template, assign extractors, and start one form per study and extractor.",
-      "Run companion-report detection and link follow-up publications to the correct study before treating reports as independent cohorts.",
+      "Companion judgments made during deduplication appear here automatically. Full-text included reports share one study; excluded reports remain unlinked. Run detection for additional relationships not previously reviewed.",
       "Capture a source quote and page, or select text directly in the PDF viewer; re-anchor an older quote when the source text has shifted.",
       "Use Table for the living matrix and Conflicts to adjudicate field-level disagreements.",
     ],
-    remember: "Resolved data follows a fixed precedence: adjudicated, then consensus, then a single final value.",
+    remember:
+      "Resolved data follows a fixed precedence: adjudicated, then consensus, then a single final value.",
     image: "/guide/captures/07-extraction.jpg",
   },
   {
@@ -190,7 +196,8 @@ export const guideSteps: GuideStep[] = [
       "Answer signaling questions, record support for each judgment, and complete the assessment.",
       "Review the summary and adjudicate domain or overall disagreements.",
     ],
-    remember: "Tool structure freezes after assessments start; create a new copy when the instrument must change.",
+    remember:
+      "Tool structure freezes after assessments start; create a new copy when the instrument must change.",
     image: "/guide/captures/08-risk-of-bias.jpg",
   },
   {
@@ -206,7 +213,8 @@ export const guideSteps: GuideStep[] = [
       "Compare fixed and random effects and inspect included, incomplete, disputed, and manually excluded studies.",
       "Download forest and funnel plots; review heterogeneity, prediction intervals, and small-study diagnostics where available.",
     ],
-    remember: "Provisional values are visibly optional and remain hidden from users who must stay blinded.",
+    remember:
+      "Provisional values are visibly optional and remain hidden from users who must stay blinded.",
     image: "/guide/captures/09-analysis.jpg",
   },
   {
@@ -222,7 +230,8 @@ export const guideSteps: GuideStep[] = [
       "Edit judgments and rationales, then mark the assessment reviewed when all sources are current.",
       "Open Summary of Findings to review relative and anticipated absolute effects, certainty, and footnotes.",
     ],
-    remember: "Changes to pooled evidence, RoB, or protocol context mark the assessment stale until it is reviewed again.",
+    remember:
+      "Changes to pooled evidence, RoB, or protocol context mark the assessment stale until it is reviewed again.",
     image: "/guide/captures/10-grade.jpg",
   },
   {
@@ -272,7 +281,8 @@ export const guideSteps: GuideStep[] = [
       "Download the diagram as SVG or PNG and create permitted CSV or JSON exports.",
       "Use Audit trail filters to find who changed an entity, what changed, when, and why.",
     ],
-    remember: "Audit and export visibility follows project capabilities and never bypasses reviewer blinding.",
+    remember:
+      "Audit and export visibility follows project capabilities and never bypasses reviewer blinding.",
     image: "/guide/captures/12-prisma.jpg",
   },
 ];
@@ -333,7 +343,8 @@ export const videoChapters: VideoChapter[] = [
     image: "01-dashboard.jpg",
     label: "Overview",
     title: "From question to certainty",
-    subtitle: "One traceable workspace for the entire evidence-synthesis workflow",
+    subtitle:
+      "One traceable workspace for the entire evidence-synthesis workflow",
     narration:
       "Welcome to Synthesis, a traceable workspace for systematic reviews and meta-analyses. This overview follows a review from its protocol through screening, synthesis, and reporting. What you see is the seeded demonstration project, using the same workflows your team will use.",
   },
@@ -437,7 +448,8 @@ export const videoChapters: VideoChapter[] = [
     image: "01-dashboard.jpg",
     label: "Start here",
     title: "Build the review, not the spreadsheet maze",
-    subtitle: "Open the full guide for task steps, roles, shortcuts, and troubleshooting",
+    subtitle:
+      "Open the full guide for task steps, roles, shortcuts, and troubleshooting",
     narration:
       "That is Synthesis: one connected workspace for planning, screening, extraction, risk assessment, synthesis, and reporting. Open the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.",
   },
@@ -447,7 +459,8 @@ const aiOverviewChapter: VideoChapter = {
   image: "../ai-insert/captures/02-ai-screening.jpg",
   label: "10 · Assist",
   title: "Optional AI, with people in control",
-  subtitle: "Separate suggestions, source-linked evidence, and an auditable apply step",
+  subtitle:
+    "Separate suggestions, source-linked evidence, and an auditable apply step",
   narration:
     "AI assistance in Synthesis is optional, and it is designed as a second set of eyes—not an automated decision-maker. During title-and-abstract screening, it can score and prioritize citations, then show reviewers a suggested decision and rationale. For extraction and risk of bias, it can read the linked PDF, propose values or domain judgments, and surface supporting quotes with page references. In GRADE, it can draft per-domain rationale from the current pooled results and protocol context. Suggestions stay separate from the authoritative record. A reviewer chooses what to apply, existing work is protected, and accepted changes follow the normal audit trail.",
 };
@@ -466,7 +479,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "16-team-chat.jpg",
     label: "14 · Coordinate",
     title: "Chat, mentions, and accountable assignments",
-    subtitle: "Channels, direct messages, threads, due dates, and per-person completion",
+    subtitle:
+      "Channels, direct messages, threads, due dates, and per-person completion",
     narration:
       "Synthesis now keeps review coordination beside the evidence. Use project channels and direct messages for questions, mentions to bring in the right colleague, and assignment messages with due dates and per-person completion. Unread badges show where attention is needed without exposing another project's activity.",
   },
@@ -474,7 +488,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "21-notifications.jpg",
     label: "15 · Coordinate",
     title: "Notifications that lead back to the work",
-    subtitle: "Direct messages, mentions, comments, and assignments in one inbox",
+    subtitle:
+      "Direct messages, mentions, comments, and assignments in one inbox",
     narration:
       "The notification bell brings direct messages, manuscript mentions, and assigned work into one inbox. Each item links back to its project context, and read state stays synchronized as the team moves between conversations and evidence tasks.",
   },
@@ -482,7 +497,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "19-library-fulltext.jpg",
     label: "16 · Retrieve",
     title: "Open-access and institutional full-text routes",
-    subtitle: "Unpaywall, Europe PMC, proxy links, OpenURL, and one retrieval history",
+    subtitle:
+      "Unpaywall, Europe PMC, proxy links, OpenURL, and one retrieval history",
     narration:
       "Configure institutional proxy and OpenURL links once at the organization level. Each full-text record then offers DOI, PubMed, and library resolver routes. Owners can also run legal open-access retrieval through Unpaywall and Europe PMC, with successful files following the same validation and attempt history as manual uploads.",
   },
@@ -490,7 +506,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "17-reference-library.jpg",
     label: "17 · Cite",
     title: "A reference library connected to the manuscript",
-    subtitle: "Included studies, external sources, formatted styles, and interoperable exports",
+    subtitle:
+      "Included studies, external sources, formatted styles, and interoperable exports",
     narration:
       "The reference library brings included studies, methods papers, and background sources together. Add by DOI or PMID, paste RIS or BibTeX, or enter a record manually. Format Vancouver, AMA, APA, or NLM bibliographies and export to reference managers. A guideline family shares one library.",
   },
@@ -498,7 +515,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "18-manuscript.jpg",
     label: "18 · Write",
     title: "Collaborative manuscript drafting",
-    subtitle: "Section ownership, safe editing, citations, comments, versions, and DOCX",
+    subtitle:
+      "Section ownership, safe editing, citations, comments, versions, and DOCX",
     narration:
       "Draft the manuscript section by section with assignments, editing locks, autosave, comments, mentions, version history, and approval states. Insert citations from the project library; the reference list follows first-use order and the selected style. Export the current manuscript as DOCX when the team is ready.",
   },
@@ -506,7 +524,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "15-guideline-hub.jpg",
     label: "19 · Scale",
     title: "Guidelines with complete PICO sub-reviews",
-    subtitle: "Shared coordination and writing, with a full review workflow per question",
+    subtitle:
+      "Shared coordination and writing, with a full review workflow per question",
     narration:
       "For multi-question guidelines, create a guideline hub and add one full review for each PICO question. Teams can also convert an existing standalone review without recreating its evidence or history. The hub holds shared context, chat, references, and general manuscript sections, while each PICO keeps its complete review workflow.",
   },
@@ -514,7 +533,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "20-compiled-guideline.jpg",
     label: "20 · Publish",
     title: "One compiled guideline and bibliography",
-    subtitle: "General sections, ordered PICO sections, complete-access checks, and DOCX",
+    subtitle:
+      "General sections, ordered PICO sections, complete-access checks, and DOCX",
     narration:
       "The compiled preview assembles the guideline's general sections followed by each PICO question, with one bibliography across the family. Full DOCX export is enabled only when the caller can read every included sub-project, so a partial guideline is never produced silently.",
   },
@@ -522,7 +542,8 @@ export const currentFeatureVideoChapters: VideoChapter[] = [
     image: "15-guideline-hub.jpg",
     label: "Start here",
     title: "One workspace, from evidence to publication",
-    subtitle: "Review, coordinate, cite, write, and scale to multi-question guidelines",
+    subtitle:
+      "Review, coordinate, cite, write, and scale to multi-question guidelines",
     narration:
       "That is the current Synthesis workspace: one connected system for evidence review, team coordination, reference management, manuscript development, and multi-question guidelines. Open the user guide for task-by-task instructions, role guidance, shortcuts, and troubleshooting.",
   },
@@ -565,7 +586,8 @@ export const guideFaqs = [
       "No. When configured, AI creates separate suggestions for screening, extraction, RoB, or GRADE. A person must explicitly apply or act on a suggestion; human decision records remain human-authored.",
   },
   {
-    question: "What is the difference between an organization role and a project role?",
+    question:
+      "What is the difference between an organization role and a project role?",
     answer:
       "Organization roles control workspace administration and invitations. Project roles grant capabilities inside a specific review. A workspace member can create and own a new project without receiving access to anyone else's existing project.",
   },

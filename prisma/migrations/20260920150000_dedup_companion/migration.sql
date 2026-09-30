@@ -1,0 +1,1 @@
+ALTER TYPE "DedupCandidateStatus" ADD VALUE 'COMPANION';

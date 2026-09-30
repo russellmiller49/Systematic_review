@@ -232,6 +232,7 @@ function buildRecord(
     pmid: normalizePmid(fields.get("pmid") ?? fields.get("pubmed") ?? null) ?? undefined,
     url: fields.get("url"),
     language: fields.get("language") ?? fields.get("langid"),
+    publicationTypes: [entryType, fields.get("type")].filter((v): v is string => Boolean(v)),
     rawChunk,
     rowNumber,
   };

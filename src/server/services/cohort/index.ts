@@ -14,11 +14,17 @@ import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
 import type { AuthorName } from "@/server/services/citations/normalize";
 import { parse } from "@/server/services/imports/parsers";
+import { mergeStudies } from "@/server/services/studies/reconcile";
+import { lockDedupProject } from "@/server/services/dedup/groups";
+import {
+  companionGraph,
+  reconcileIncludedCompanions,
+} from "@/server/services/studies/companions";
 import { studyLabelFor } from "@/server/services/studies";
 import { detectCohortOverlap, type CohortCitationLite } from "./engine";
 
 export const listCandidatesQuerySchema = z.object({
-  status: z.enum(["SUGGESTED", "LINKED", "REJECTED"]).optional(),
+  status: z.enum(["SUGGESTED", "LINKED", "REJECTED", "COMPANION"]).optional(),
 });
 
 // Detection population cap — newest first; the run audit notes when the cap was hit.
@@ -59,7 +65,10 @@ export async function runCohortDetection(ctx: Ctx, projectId: string) {
         { studyLinks: { some: {} } },
         {
           stageResults: {
-            some: { stage: { projectId, type: "FULL_TEXT" }, outcome: "INCLUDE" },
+            some: {
+              stage: { projectId, type: "FULL_TEXT" },
+              outcome: "INCLUDE",
+            },
           },
         },
       ],
@@ -94,7 +103,8 @@ export async function runCohortDetection(ctx: Ctx, projectId: string) {
     if (!patch) continue;
     c.affiliations = patch.affiliations as unknown as Prisma.JsonValue;
     for (const rid of patch.registryIds) {
-      if (!c.identifiers.some((i) => i.value === rid)) c.identifiers.push({ value: rid });
+      if (!c.identifiers.some((i) => i.value === rid))
+        c.identifiers.push({ value: rid });
     }
   }
 
@@ -103,100 +113,128 @@ export async function runCohortDetection(ctx: Ctx, projectId: string) {
     title: c.title,
     authors: toAuthorNames(c.authors),
     year: c.year,
-    affiliations: Array.isArray(c.affiliations) ? (c.affiliations as string[]) : null,
+    affiliations: Array.isArray(c.affiliations)
+      ? (c.affiliations as string[])
+      : null,
     registryIds: c.identifiers.map((i) => i.value),
     doi: c.doi,
     studyIds: c.studyLinks.map((l) => l.studyId),
   }));
   const pairs = detectCohortOverlap(lites);
 
-  return prisma.$transaction(async (tx) => {
-    const existing = await tx.cohortCandidate.findMany({ where: { projectId } });
-    const byPair = new Map(existing.map((c) => [`${c.citationAId}|${c.citationBId}`, c]));
-
-    let newlySuggested = 0;
-    let refreshed = 0;
-    let skippedDecided = 0;
-    const proposedKeys = new Set<string>();
-    for (const pair of pairs) {
-      const key = `${pair.aId}|${pair.bId}`;
-      proposedKeys.add(key);
-      const current = byPair.get(key);
-      if (!current) {
-        await tx.cohortCandidate.create({
-          data: {
-            projectId,
-            citationAId: pair.aId,
-            citationBId: pair.bId,
-            method: pair.method,
-            score: pair.score,
-            signals: pair.signals as unknown as Prisma.InputJsonValue,
-          },
-        });
-        newlySuggested++;
-      } else if (current.status === "SUGGESTED") {
-        await tx.cohortCandidate.update({
-          where: { id: current.id },
-          data: {
-            method: pair.method,
-            score: pair.score,
-            signals: pair.signals as unknown as Prisma.InputJsonValue,
-          },
-        });
-        refreshed++;
-      } else {
-        skippedDecided++; // human already decided (LINKED/REJECTED) — never resurrect
+  return prisma.$transaction(
+    async (tx) => {
+      await lockDedupProject(tx, projectId);
+      const confirmed = await companionGraph(tx, projectId);
+      const visited = new Set<string>();
+      for (const edge of confirmed.edges) {
+        if (visited.has(edge.a)) continue;
+        confirmed.members(edge.a).forEach((id) => visited.add(id));
+        await reconcileIncludedCompanions(tx, ctx, projectId, edge.a);
       }
-    }
+      const existing = await tx.cohortCandidate.findMany({
+        where: { projectId },
+      });
+      const byPair = new Map(
+        existing.map((c) => [`${c.citationAId}|${c.citationBId}`, c]),
+      );
 
-    // Stale SUGGESTED pairs the run no longer proposes are derived data — delete them.
-    // Skipped entirely when the population was capped: pairs whose citations fell
-    // outside the scored window were not re-evaluated, so their absence proves nothing.
-    let removed = 0;
-    if (!populationCapped) {
-      const staleIds = existing
-        .filter(
-          (c) => c.status === "SUGGESTED" && !proposedKeys.has(`${c.citationAId}|${c.citationBId}`),
-        )
-        .map((c) => c.id);
-      if (staleIds.length > 0) {
-        // status re-checked in the delete: a candidate decided between our read and
-        // this write must survive (deleting it would let a later run resurrect it).
-        const res = await tx.cohortCandidate.deleteMany({
-          where: { id: { in: staleIds }, status: "SUGGESTED" },
-        });
-        removed = res.count;
+      let newlySuggested = 0;
+      let refreshed = 0;
+      let skippedDecided = 0;
+      const proposedKeys = new Set<string>();
+      for (const pair of pairs) {
+        if (confirmed.sameStudy(pair.aId, pair.bId)) {
+          skippedDecided++;
+          continue;
+        }
+        const key = `${pair.aId}|${pair.bId}`;
+        proposedKeys.add(key);
+        const current = byPair.get(key);
+        if (!current) {
+          await tx.cohortCandidate.create({
+            data: {
+              projectId,
+              citationAId: pair.aId,
+              citationBId: pair.bId,
+              method: pair.method,
+              score: pair.score,
+              signals: pair.signals as unknown as Prisma.InputJsonValue,
+            },
+          });
+          newlySuggested++;
+        } else if (current.status === "SUGGESTED") {
+          await tx.cohortCandidate.update({
+            where: { id: current.id },
+            data: {
+              method: pair.method,
+              score: pair.score,
+              signals: pair.signals as unknown as Prisma.InputJsonValue,
+            },
+          });
+          refreshed++;
+        } else {
+          skippedDecided++; // human already decided (LINKED/REJECTED) — never resurrect
+        }
       }
-    }
 
-    const summary = {
-      candidates: pairs.length,
-      newlySuggested,
-      refreshed,
-      removed,
-      skippedDecided,
-      populationSize: population.length,
-      backfilled: backfilled.size,
-      ...(populationCapped ? { populationCapped: true, populationCap: COHORT_POPULATION_CAP } : {}),
-    };
-    await audit.record(tx, {
-      projectId,
-      userId: ctx.userId,
-      entityType: "Project",
-      entityId: projectId,
-      action: AuditActions.COHORT_RUN,
-      metadata: summary,
-    });
-    return summary;
-    // Sequential per-pair writes on a large project can outlive Prisma's 5s default.
-  }, { timeout: 60_000, maxWait: 10_000 });
+      // Stale SUGGESTED pairs the run no longer proposes are derived data — delete them.
+      // Skipped entirely when the population was capped: pairs whose citations fell
+      // outside the scored window were not re-evaluated, so their absence proves nothing.
+      let removed = 0;
+      if (!populationCapped) {
+        const staleIds = existing
+          .filter(
+            (c) =>
+              c.status === "SUGGESTED" &&
+              !proposedKeys.has(`${c.citationAId}|${c.citationBId}`),
+          )
+          .map((c) => c.id);
+        if (staleIds.length > 0) {
+          // status re-checked in the delete: a candidate decided between our read and
+          // this write must survive (deleting it would let a later run resurrect it).
+          const res = await tx.cohortCandidate.deleteMany({
+            where: { id: { in: staleIds }, status: "SUGGESTED" },
+          });
+          removed = res.count;
+        }
+      }
+
+      const summary = {
+        candidates: pairs.length,
+        newlySuggested,
+        refreshed,
+        removed,
+        skippedDecided,
+        populationSize: population.length,
+        backfilled: backfilled.size,
+        ...(populationCapped
+          ? { populationCapped: true, populationCap: COHORT_POPULATION_CAP }
+          : {}),
+      };
+      await audit.record(tx, {
+        projectId,
+        userId: ctx.userId,
+        entityType: "Project",
+        entityId: projectId,
+        action: AuditActions.COHORT_RUN,
+        metadata: summary,
+      });
+      return summary;
+      // Sequential per-pair writes on a large project can outlive Prisma's 5s default.
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
 }
 
 // Re-parse preserved raw records for the given citations and persist affiliations (union
 // across a citation's source records, possibly []) plus any missing REGISTRY_ID
 // identifiers. Returns the per-citation backfill so the caller can score without reloading.
 async function backfillAffiliations(citationIds: string[]) {
-  const result = new Map<string, { affiliations: string[]; registryIds: string[] }>();
+  const result = new Map<
+    string,
+    { affiliations: string[]; registryIds: string[] }
+  >();
   if (citationIds.length === 0) return result;
 
   const rows = await prisma.citationSourceRecord.findMany({
@@ -214,7 +252,10 @@ async function backfillAffiliations(citationIds: string[]) {
     // Parsers are pure and never throw; a raw chunk that fails to parse yields no records.
     const { records } = parse(row.batch.format, row.rawRecord);
     const record = records[0];
-    const entry = result.get(row.citationId) ?? { affiliations: [], registryIds: [] };
+    const entry = result.get(row.citationId) ?? {
+      affiliations: [],
+      registryIds: [],
+    };
     for (const a of record?.affiliations ?? []) {
       if (!entry.affiliations.includes(a)) entry.affiliations.push(a);
     }
@@ -238,7 +279,10 @@ async function backfillAffiliations(citationIds: string[]) {
       for (const [citationId, patch] of chunk) {
         await tx.citation.update({
           where: { id: citationId },
-          data: { affiliations: patch.affiliations as unknown as Prisma.InputJsonValue },
+          data: {
+            affiliations:
+              patch.affiliations as unknown as Prisma.InputJsonValue,
+          },
         });
         if (patch.registryIds.length > 0) {
           await tx.citationIdentifier.createMany({
@@ -268,20 +312,84 @@ export async function listCohortCandidates(
   query: z.infer<typeof listCandidatesQuerySchema> = {},
 ) {
   await requirePermission(ctx, projectId, "project.view");
-  const candidates = await prisma.cohortCandidate.findMany({
-    where: { projectId, ...(query.status ? { status: query.status } : {}) },
-    orderBy: [{ score: "desc" }, { createdAt: "asc" }, { id: "asc" }],
-    include: {
-      citationA: { select: CITATION_DISPLAY_SELECT },
-      citationB: { select: CITATION_DISPLAY_SELECT },
-      decidedBy: { select: { id: true, name: true, email: true } },
-    },
+  const confirmed = await companionGraph(prisma, projectId);
+  const candidates =
+    query.status === "COMPANION"
+      ? []
+      : await prisma.cohortCandidate.findMany({
+          where: {
+            projectId,
+            ...(query.status ? { status: query.status } : {}),
+          },
+          orderBy: [{ score: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+          include: {
+            citationA: { select: CITATION_DISPLAY_SELECT },
+            citationB: { select: CITATION_DISPLAY_SELECT },
+            decidedBy: { select: { id: true, name: true, email: true } },
+          },
+        });
+  const manual =
+    !query.status || query.status === "COMPANION"
+      ? await prisma.deduplicationCandidate.findMany({
+          where: {
+            projectId,
+            status: "COMPANION",
+            citationA: { projectId },
+            citationB: { projectId },
+          },
+          orderBy: { decidedAt: "desc" },
+          include: {
+            citationA: { select: CITATION_DISPLAY_SELECT },
+            citationB: { select: CITATION_DISPLAY_SELECT },
+            decidedBy: { select: { id: true, name: true, email: true } },
+          },
+        })
+      : [];
+  // Display current canonical study membership while preserving original report identity.
+  const currentLinks = await prisma.studyReportLink.findMany({
+    where: { study: { projectId } },
+    include: { study: { select: { id: true, label: true } } },
   });
-  return candidates.map((c) => ({
-    ...c,
-    citationA: { ...c.citationA, studies: c.citationA.studyLinks.map((l) => l.study) },
-    citationB: { ...c.citationB, studies: c.citationB.studyLinks.map((l) => l.study) },
-  }));
+  return [
+    ...manual.map((c) => ({
+      ...c,
+      status: "COMPANION" as const,
+      method: "MANUAL_DEDUP" as const,
+      score: 1,
+      signals: {},
+      citationA: {
+        ...c.citationA,
+        studies: currentLinks
+          .filter((l) => l.citationId === confirmed.root(c.citationAId))
+          .map((l) => l.study),
+      },
+      citationB: {
+        ...c.citationB,
+        studies: currentLinks
+          .filter((l) => l.citationId === confirmed.root(c.citationBId))
+          .map((l) => l.study),
+      },
+    })),
+    ...candidates
+      .filter(
+        (c) =>
+          !confirmed.sameStudy(
+            confirmed.root(c.citationAId) ?? c.citationAId,
+            confirmed.root(c.citationBId) ?? c.citationBId,
+          ),
+      )
+      .map((c) => ({
+        ...c,
+        citationA: {
+          ...c.citationA,
+          studies: c.citationA.studyLinks.map((l) => l.study),
+        },
+        citationB: {
+          ...c.citationB,
+          studies: c.citationB.studyLinks.map((l) => l.study),
+        },
+      })),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -296,14 +404,30 @@ export type CohortLinkCase =
 
 // Link a companion pair: recompute study membership LIVE (the candidate stores citations,
 // not studies) and apply the appropriate case in one transaction.
-export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidateId: string) {
+export async function linkCohortCandidate(
+  ctx: Ctx,
+  projectId: string,
+  candidateId: string,
+) {
   await requirePermission(ctx, projectId, "project.edit");
 
   return prisma.$transaction(async (tx) => {
+    await lockDedupProject(tx, projectId);
     const candidate = await tx.cohortCandidate.findFirst({
       where: { id: candidateId, projectId }, // tenant-scoped by-id load (R9)
     });
     if (!candidate) throw notFound("Cohort candidate");
+    const confirmed = await companionGraph(tx, projectId);
+    if (
+      confirmed.sameStudy(
+        confirmed.root(candidate.citationAId) ?? candidate.citationAId,
+        confirmed.root(candidate.citationBId) ?? candidate.citationBId,
+      )
+    ) {
+      throw invalidState(
+        "This pair was already confirmed during deduplication. Included reports link automatically; revise early judgments in Deduplication → Resolved.",
+      );
+    }
     if (candidate.status !== "SUGGESTED") {
       throw invalidState("Only suggested candidates can be linked");
     }
@@ -311,11 +435,19 @@ export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidate
     const [citationA, citationB] = await Promise.all([
       tx.citation.findFirstOrThrow({
         where: { id: candidate.citationAId, projectId },
-        include: { studyLinks: { include: { study: { select: { id: true, label: true } } } } },
+        include: {
+          studyLinks: {
+            include: { study: { select: { id: true, label: true } } },
+          },
+        },
       }),
       tx.citation.findFirstOrThrow({
         where: { id: candidate.citationBId, projectId },
-        include: { studyLinks: { include: { study: { select: { id: true, label: true } } } } },
+        include: {
+          studyLinks: {
+            include: { study: { select: { id: true, label: true } } },
+          },
+        },
       }),
     ]);
     if (citationA.status !== "ACTIVE" || citationB.status !== "ACTIVE") {
@@ -331,7 +463,11 @@ export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidate
     let linkCase: CohortLinkCase;
     let studyId: string;
 
-    const linkReport = async (targetStudyId: string, citationId: string, primary: boolean) => {
+    const linkReport = async (
+      targetStudyId: string,
+      citationId: string,
+      primary: boolean,
+    ) => {
       const link = await tx.studyReportLink.create({
         data: { studyId: targetStudyId, citationId, isPrimaryReport: primary },
       });
@@ -341,7 +477,11 @@ export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidate
         entityType: "StudyReportLink",
         entityId: link.id,
         action: AuditActions.STUDY_REPORT_LINKED,
-        newValue: { studyId: targetStudyId, citationId, isPrimaryReport: primary },
+        newValue: {
+          studyId: targetStudyId,
+          citationId,
+          isPrimaryReport: primary,
+        },
       });
     };
 
@@ -364,11 +504,16 @@ export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidate
       // citation ("Criner 2018" convention), which becomes the primary report.
       linkCase = "CREATED_STUDY";
       const [earlier, later] =
-        citationB.year !== null && (citationA.year === null || citationB.year < citationA.year)
+        citationB.year !== null &&
+        (citationA.year === null || citationB.year < citationA.year)
           ? [citationB, citationA]
           : [citationA, citationB];
       const study = await tx.study.create({
-        data: { projectId, label: studyLabelFor(earlier), createdById: ctx.userId },
+        data: {
+          projectId,
+          label: studyLabelFor(earlier),
+          createdById: ctx.userId,
+        },
       });
       studyId = study.id;
       await audit.record(tx, {
@@ -377,7 +522,11 @@ export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidate
         entityType: "Study",
         entityId: study.id,
         action: AuditActions.STUDY_CREATED,
-        newValue: { label: study.label, citationId: earlier.id, cohortCandidateId: candidate.id },
+        newValue: {
+          label: study.label,
+          citationId: earlier.id,
+          cohortCandidateId: candidate.id,
+        },
       });
       await linkReport(study.id, earlier.id, true);
       await linkReport(study.id, later.id, false);
@@ -387,78 +536,16 @@ export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidate
       linkCase = "MERGED_STUDIES";
       studyId = aStudyIds[0]!;
       const sourceStudyId = bStudyIds[0]!;
-      const source = await tx.study.findFirstOrThrow({
-        where: { id: sourceStudyId, projectId },
-        include: {
-          _count: {
-            select: {
-              extractionForms: true,
-              extractionAssignments: true,
-              extractionConflicts: true,
-              robAssignments: true,
-              robAssessments: true,
-              robConflicts: true,
-              aiExtractionRuns: true,
-              aiSuggestions: true,
-              aiRobRuns: true,
-              robSuggestions: true,
-              analysisExclusions: true,
-            },
-          },
-        },
-      });
-      // Every restricting Study relation must be covered here — a miss doesn't relax
-      // the rule, it just turns the intended 422 into a P2003 crash at study.delete.
-      const counts = source._count;
-      const blocked =
-        counts.extractionForms > 0 ||
-        counts.extractionAssignments > 0 ||
-        counts.extractionConflicts > 0 ||
-        counts.robAssignments > 0 ||
-        counts.robAssessments > 0 ||
-        counts.robConflicts > 0 ||
-        counts.aiExtractionRuns > 0 ||
-        counts.aiSuggestions > 0 ||
-        counts.aiRobRuns > 0 ||
-        counts.robSuggestions > 0 ||
-        counts.analysisExclusions > 0;
-      if (blocked) {
-        throw invalidState(
-          `Both reports already belong to different studies and “${source.label}” has ` +
-            "extraction, risk-of-bias, AI, or analysis work. Merging would orphan that " +
-            "work — reconcile the two studies manually instead.",
-        );
-      }
-      // Move every report link off the source study (skip citations the target already has).
-      const sourceLinks = await tx.studyReportLink.findMany({ where: { studyId: sourceStudyId } });
-      const targetLinks = await tx.studyReportLink.findMany({ where: { studyId } });
-      const targetCitationIds = new Set(targetLinks.map((l) => l.citationId));
-      for (const link of sourceLinks) {
-        if (targetCitationIds.has(link.citationId)) {
-          await tx.studyReportLink.delete({ where: { id: link.id } });
-        } else {
-          // Merged-in reports are never the primary of the surviving study.
-          await tx.studyReportLink.update({
-            where: { id: link.id },
-            data: { studyId, isPrimaryReport: false },
-          });
-        }
-      }
-      await tx.study.delete({ where: { id: sourceStudyId } });
-      await audit.record(tx, {
-        projectId,
-        userId: ctx.userId,
-        entityType: "Study",
-        entityId: sourceStudyId,
-        action: AuditActions.STUDY_MERGED,
-        previousValue: { label: source.label },
-        metadata: { from: sourceStudyId, to: studyId, movedReports: sourceLinks.length },
-      });
+      await mergeStudies(tx, ctx, projectId, sourceStudyId, studyId);
     }
 
     const updated = await tx.cohortCandidate.update({
       where: { id: candidate.id },
-      data: { status: "LINKED", decidedById: ctx.userId, decidedAt: new Date() },
+      data: {
+        status: "LINKED",
+        decidedById: ctx.userId,
+        decidedAt: new Date(),
+      },
     });
     await audit.record(tx, {
       projectId,
@@ -479,20 +566,40 @@ export async function linkCohortCandidate(ctx: Ctx, projectId: string, candidate
   });
 }
 
-export async function rejectCohortCandidate(ctx: Ctx, projectId: string, candidateId: string) {
+export async function rejectCohortCandidate(
+  ctx: Ctx,
+  projectId: string,
+  candidateId: string,
+) {
   await requirePermission(ctx, projectId, "project.edit");
 
   return prisma.$transaction(async (tx) => {
+    await lockDedupProject(tx, projectId);
     const candidate = await tx.cohortCandidate.findFirst({
       where: { id: candidateId, projectId }, // tenant-scoped by-id load (R9)
     });
     if (!candidate) throw notFound("Cohort candidate");
+    const confirmed = await companionGraph(tx, projectId);
+    if (
+      confirmed.sameStudy(
+        confirmed.root(candidate.citationAId) ?? candidate.citationAId,
+        confirmed.root(candidate.citationBId) ?? candidate.citationBId,
+      )
+    ) {
+      throw invalidState(
+        "This pair was already confirmed during deduplication. Included reports link automatically; revise early judgments in Deduplication → Resolved.",
+      );
+    }
     if (candidate.status !== "SUGGESTED") {
       throw invalidState("Only suggested candidates can be rejected");
     }
     const updated = await tx.cohortCandidate.update({
       where: { id: candidate.id },
-      data: { status: "REJECTED", decidedById: ctx.userId, decidedAt: new Date() },
+      data: {
+        status: "REJECTED",
+        decidedById: ctx.userId,
+        decidedAt: new Date(),
+      },
     });
     await audit.record(tx, {
       projectId,
@@ -502,7 +609,10 @@ export async function rejectCohortCandidate(ctx: Ctx, projectId: string, candida
       action: AuditActions.COHORT_REJECTED,
       previousValue: { status: "SUGGESTED" },
       newValue: { status: "REJECTED" },
-      metadata: { citationAId: candidate.citationAId, citationBId: candidate.citationBId },
+      metadata: {
+        citationAId: candidate.citationAId,
+        citationBId: candidate.citationBId,
+      },
     });
     return { candidate: updated };
   });

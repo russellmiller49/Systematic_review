@@ -2,6 +2,8 @@
 // A Study is auto-created when a citation reaches an FT INCLUDE stage result (screening
 // service calls autoCreateForCitation inside ITS transaction), or manually via POST /studies.
 
+import { lockDedupProject } from "@/server/services/dedup/groups";
+import { companionGraph, reconcileIncludedCompanions } from "./companions";
 import { z } from "zod";
 import type { Citation } from "@prisma/client";
 import { prisma, type Tx } from "@/server/db";
@@ -28,7 +30,9 @@ export const linkReportSchema = z.object({
 });
 
 // "Smith 2019" from the first author's family name + year; fallback: title prefix.
-export function studyLabelFor(citation: Pick<Citation, "title" | "authors" | "year">): string {
+export function studyLabelFor(
+  citation: Pick<Citation, "title" | "authors" | "year">,
+): string {
   const authors = citation.authors;
   let family: string | null = null;
   if (Array.isArray(authors) && authors.length > 0) {
@@ -52,33 +56,16 @@ export async function autoCreateForCitation(
   projectId: string,
   citationId: string,
 ) {
-  const existingLink = await tx.studyReportLink.findFirst({ where: { citationId } });
-  if (existingLink) return null;
-  const citation = await tx.citation.findFirst({ where: { id: citationId, projectId } });
-  if (!citation) throw notFound("Citation");
-  const study = await tx.study.create({
-    data: { projectId, label: studyLabelFor(citation), createdById: ctx.userId },
-  });
-  const link = await tx.studyReportLink.create({
-    data: { studyId: study.id, citationId, isPrimaryReport: true },
-  });
-  await audit.record(tx, {
-    projectId,
-    userId: ctx.userId,
-    entityType: "Study",
-    entityId: study.id,
-    action: AuditActions.STUDY_CREATED,
-    newValue: { label: study.label, citationId, autoCreated: true },
-  });
-  await audit.record(tx, {
-    projectId,
-    userId: ctx.userId,
-    entityType: "StudyReportLink",
-    entityId: link.id,
-    action: AuditActions.STUDY_REPORT_LINKED,
-    newValue: { studyId: study.id, citationId, isPrimaryReport: true },
-  });
-  return study;
+  await lockDedupProject(tx, projectId);
+  const graph = await companionGraph(tx, projectId);
+  if (
+    graph.members(citationId).size === 1 &&
+    (await tx.studyReportLink.findFirst({
+      where: { citationId, study: { projectId } },
+    }))
+  )
+    return null;
+  return reconcileIncludedCompanions(tx, ctx, projectId, citationId);
 }
 
 export async function listStudies(ctx: Ctx, projectId: string) {
@@ -115,12 +102,19 @@ export async function createStudy(
 ) {
   await requirePermission(ctx, projectId, "project.edit");
   return prisma.$transaction(async (tx) => {
+    await lockDedupProject(tx, projectId);
     if (input.citationId) {
       // R9: body-supplied FK must belong to this project.
       const citation = await tx.citation.findFirst({
         where: { id: input.citationId, projectId },
       });
       if (!citation) throw notFound("Citation");
+      const graph = await companionGraph(tx, projectId);
+      if (graph.members(citation.id).size > 1) {
+        throw invalidState(
+          "Confirmed companion reports are linked through full-text inclusion. Use the companion/study workflow to reconcile existing studies.",
+        );
+      }
       // R18 soft rule: one study per report.
       const existingLink = await tx.studyReportLink.findFirst({
         where: { citationId: citation.id },
@@ -140,7 +134,11 @@ export async function createStudy(
     });
     if (input.citationId) {
       const link = await tx.studyReportLink.create({
-        data: { studyId: study.id, citationId: input.citationId, isPrimaryReport: true },
+        data: {
+          studyId: study.id,
+          citationId: input.citationId,
+          isPrimaryReport: true,
+        },
       });
       await audit.record(tx, {
         projectId,
@@ -148,7 +146,11 @@ export async function createStudy(
         entityType: "StudyReportLink",
         entityId: link.id,
         action: AuditActions.STUDY_REPORT_LINKED,
-        newValue: { studyId: study.id, citationId: input.citationId, isPrimaryReport: true },
+        newValue: {
+          studyId: study.id,
+          citationId: input.citationId,
+          isPrimaryReport: true,
+        },
       });
     }
     return tx.study.findUniqueOrThrow({
@@ -166,9 +168,15 @@ export async function updateStudy(
 ) {
   await requirePermission(ctx, projectId, "project.edit");
   return prisma.$transaction(async (tx) => {
-    const study = await tx.study.findFirst({ where: { id: studyId, projectId } });
+    await lockDedupProject(tx, projectId);
+    const study = await tx.study.findFirst({
+      where: { id: studyId, projectId },
+    });
     if (!study) throw notFound("Study");
-    const updated = await tx.study.update({ where: { id: study.id }, data: input });
+    const updated = await tx.study.update({
+      where: { id: study.id },
+      data: input,
+    });
     await audit.record(tx, {
       projectId,
       userId: ctx.userId,
@@ -198,10 +206,33 @@ export async function linkReport(
 ) {
   await requirePermission(ctx, projectId, "project.edit");
   return prisma.$transaction(async (tx) => {
-    const study = await tx.study.findFirst({ where: { id: studyId, projectId } });
+    await lockDedupProject(tx, projectId);
+    const study = await tx.study.findFirst({
+      where: { id: studyId, projectId },
+    });
     if (!study) throw notFound("Study");
-    const citation = await tx.citation.findFirst({ where: { id: input.citationId, projectId } });
+    const citation = await tx.citation.findFirst({
+      where: { id: input.citationId, projectId },
+    });
     if (!citation) throw notFound("Citation");
+    const graph = await companionGraph(tx, projectId);
+    if (graph.members(citation.id).size > 1) {
+      const reconciled = await reconcileIncludedCompanions(
+        tx,
+        ctx,
+        projectId,
+        citation.id,
+      );
+      const link = await tx.studyReportLink.findFirst({
+        where: { citationId: citation.id, studyId },
+      });
+      if (!reconciled || reconciled.id !== studyId || !link) {
+        throw invalidState(
+          "Confirmed companions must be full-text included and share their existing study. Use the companion/study workflow.",
+        );
+      }
+      return link;
+    }
     // R18 soft rule: a report may belong to at most one study in the MVP.
     const existingLink = await tx.studyReportLink.findFirst({
       where: { citationId: citation.id },
@@ -244,9 +275,12 @@ export async function unlinkReport(
 ) {
   await requirePermission(ctx, projectId, "project.edit");
   return prisma.$transaction(async (tx) => {
+    await lockDedupProject(tx, projectId);
     const study = await tx.study.findFirst({
       where: { id: studyId, projectId },
-      include: { _count: { select: { reportLinks: true, extractionForms: true } } },
+      include: {
+        _count: { select: { reportLinks: true, extractionForms: true } },
+      },
     });
     if (!study) throw notFound("Study");
     const link = await tx.studyReportLink.findUnique({

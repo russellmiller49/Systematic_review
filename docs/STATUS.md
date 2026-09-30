@@ -1,3 +1,20 @@
+## Current state (2026-09-20) — same-study decisions during deduplication
+
+Deduplication now offers **Same study / separate report** at pair level and a confirmed
+whole-cluster action. The additive `COMPANION` enum migration preserves each human judgment,
+reviewer, timestamp, and original pair without creating studies before full-text inclusion.
+Only suggested edges form duplicate clusters; manual and exact-DOI bulk merges respect
+confirmed companion components, including citation-merge history. Resolved decisions can be
+reopened until study linkage depends on them. The existing Companion Reports tab displays
+these judgments directly, and eligible reports converge on one study through the shared
+inclusion/reconciliation path. Excluded reports stay unlinked; downstream work blocks unsafe
+merges. See [companion reports](companion-reports.md) and [dedup safety](deduplication-safety.md).
+
+Validation: **664 unit tests**, **401 integration tests**, and **4 Chromium feature tests**
+passed, including the existing dedup and cohort browser workflows. TypeScript, Prisma schema
+validation, production build, scoped formatting, and diff whitespace checks passed. Feature QA
+uses `playwright.companion.config.ts` and TEST_DATABASE_URL; production data was not migrated.
+
 ## Current state (2026-09-20) — deduplication component safety
 
 Rejection now transactionally splits disconnected duplicate clusters. A shared normalizer

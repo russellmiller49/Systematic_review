@@ -27,7 +27,8 @@ type CanonicalField =
   | "volume"
   | "issue"
   | "pages"
-  | "language";
+  | "language"
+  | "publicationTypes";
 
 // Alias → canonical field. Headers are matched after lowercasing and stripping non-alphanumerics.
 const HEADER_ALIASES: Record<string, CanonicalField> = {
@@ -67,6 +68,12 @@ const HEADER_ALIASES: Record<string, CanonicalField> = {
   language: "language",
   lang: "language",
   la: "language",
+  publicationtype: "publicationTypes",
+  publicationtypes: "publicationTypes",
+  documenttype: "publicationTypes",
+  documenttypes: "publicationTypes",
+  referencetype: "publicationTypes",
+  pt: "publicationTypes",
 };
 
 function canonicalize(header: string): CanonicalField | null {
@@ -120,7 +127,9 @@ export function parseCsv(content: string): ParseResult {
 
   result.data.forEach((row, idx) => {
     const rowNumber = idx + 1; // 1-based data row number (header excluded)
-    const rawChunk = Papa.unparse([headers.map((h) => row[h] ?? "")], { newline: "\n" });
+    const rawChunk = Papa.unparse([headers.map((h) => row[h] ?? "")], {
+      newline: "\n",
+    });
     const get = (field: CanonicalField): string | undefined => {
       const header = mapping.get(field);
       if (!header) return undefined;
@@ -158,6 +167,10 @@ export function parseCsv(content: string): ParseResult {
       pmid: normalizePmid(get("pmid") ?? null) ?? undefined,
       url: get("url"),
       language: get("language"),
+      publicationTypes: get("publicationTypes")
+        ?.split(/[;|]/)
+        .map((v) => v.trim())
+        .filter(Boolean),
       rawChunk,
       rowNumber,
     });

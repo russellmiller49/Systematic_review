@@ -1,5 +1,9 @@
 // RIS parser (TY..ER blocks). Pure, never throws — malformed blocks become error rows.
-import { normalizeDoi, normalizePmid, parseAuthorName } from "@/server/services/citations/normalize";
+import {
+  normalizeDoi,
+  normalizePmid,
+  parseAuthorName,
+} from "@/server/services/citations/normalize";
 import { extractRegistryIds } from "./registry-ids";
 import {
   extractYear,
@@ -53,7 +57,11 @@ export function parseRis(content: string): ParseResult {
       if (m && m[1] === "TY") {
         // A new record started before the previous one was terminated.
         finishRecord(false);
-        current = { tags: new Map([["TY", [m[2] ?? ""]]]), lines: [line], lastTag: "TY" };
+        current = {
+          tags: new Map([["TY", [m[2] ?? ""]]]),
+          lines: [line],
+          lastTag: "TY",
+        };
         continue;
       }
       current.lines.push(line);
@@ -75,7 +83,11 @@ export function parseRis(content: string): ParseResult {
         values[idx] = `${values[idx] ?? ""} ${line.trim()}`.trim();
       }
     } else if (m && m[1] === "TY") {
-      current = { tags: new Map([["TY", [m[2] ?? ""]]]), lines: [line], lastTag: "TY" };
+      current = {
+        tags: new Map([["TY", [m[2] ?? ""]]]),
+        lines: [line],
+        lastTag: "TY",
+      };
     }
     // Only TY opens a citation. Headers, footers, and orphan tags outside a
     // record are not citation rows; the import service preserves the full upload.
@@ -131,6 +143,7 @@ function buildRecord(
     pmid: normalizePmid(firstValue(tags, "AN", "C2") ?? null) ?? undefined,
     url: firstValue(tags, "UR"),
     language: firstValue(tags, "LA"),
+    publicationTypes: uniqueValues(tags, "TY", "M3", "PT"),
     affiliations,
     registryIds: extractRegistryIds(...affiliations, title, abstract),
     rawChunk,
