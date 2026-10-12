@@ -1,3 +1,17 @@
+## Current state (2026-10-12) — screening scope and assignment clarity
+
+Dashboard/queue entry links now name the configured combined or individual screening scope.
+Explicit individual entries are honored; stale links require scope selection. Switching PICOs
+resets stage IDs and local screening state. A read-only scope panel displays configured
+populations, question definitions, eligibility, and protocol provenance without inventing
+scientific rules. Combined screening adds capability-gated My screening / Admin view parity;
+admin inspection has no decision controls. Personal workload is explained separately from
+available shared articles. Invitation pages support switching accounts while retaining the
+exact-address authorization boundary and invitation callback.
+
+See [scope, verification, and recovery boundaries](screening-assignment-clarity.md). No schema
+migration, production decision reset, invitation issuance, role change, or deployment.
+
 ## Current state (2026-09-20) — same-study decisions during deduplication
 
 Deduplication now offers **Same study / separate report** at pair level and a confirmed

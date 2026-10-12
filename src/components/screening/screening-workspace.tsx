@@ -24,6 +24,12 @@ import { ManageAssignmentsDialog } from "./manage-assignments-dialog";
 import { AdminScreeningOverview } from "./admin-screening-overview";
 import { PrescreenPanel } from "./prescreen-panel";
 import { KeywordToolbar } from "./keyword-toolbar";
+import { ScreeningScopePanel } from "./scope-panel";
+import {
+  initialScreeningQueue,
+  pooledScopeLabel,
+  screeningQueueHref,
+} from "@/lib/screening-scope";
 import { PooledScreeningWorkspace } from "./pooled-screening-workspace";
 import {
   STAGE_LABELS,
@@ -60,6 +66,7 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    setProject(undefined);
     api<NonNullable<typeof project>>(`/api/projects/${projectId}`)
       .then((response) => {
         if (!cancelled) setProject(response);
@@ -93,6 +100,7 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
   if (project.isGuideline) {
     return (
       <GuidelineScreeningWorkspace
+        key={projectId}
         guidelineId={projectId}
         guideline={project}
       />
@@ -104,11 +112,11 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
       <EmptyState
         icon={Layers3}
         title={`Screen through “${pool.name}”`}
-        description="This PICO belongs to a saved combined abstract-screening pool, so its title-and-abstract assignments are completed from the guideline workspace."
+        description="This PICO is part of a combined title-and-abstract screening scope. Screen for relevance to any question in the configured pool, rather than this question alone. The combined workspace lists all included PICOs and their populations and eligibility criteria."
         action={
           <Link
             className={buttonVariants()}
-            href={`/projects/${pool.guidelineId}/screening`}
+            href={screeningQueueHref(pool.guidelineId, `pool:${pool.id}`)}
           >
             Open combined pool
           </Link>
@@ -116,7 +124,7 @@ export function ScreeningWorkspace({ projectId }: { projectId: string }) {
       />
     );
   }
-  return <ProjectScreeningWorkspace projectId={projectId} />;
+  return <ProjectScreeningWorkspace key={projectId} projectId={projectId} />;
 }
 
 function GuidelineScreeningWorkspace({
@@ -139,6 +147,7 @@ function GuidelineScreeningWorkspace({
     GuidelineScreeningConfiguration | null | undefined
   >(undefined);
   const [activeQueue, setActiveQueue] = useState<string | null>(null);
+  const [invalidEntry, setInvalidEntry] = useState(false);
   const canConfigure = guideline.capabilities.includes("screening.configure");
 
   useEffect(() => {
@@ -149,18 +158,16 @@ function GuidelineScreeningWorkspace({
       .then((response) => {
         if (cancelled) return;
         setConfiguration(response);
-        setActiveQueue((current) => {
-          const available = new Set([
-            ...(response.pool ? [`pool:${response.pool.id}`] : []),
-            ...response.unpooledPicos.map((pico) => `pico:${pico.id}`),
-          ]);
-          if (current && available.has(current)) return current;
-          return response.pool
-            ? `pool:${response.pool.id}`
-            : response.unpooledPicos[0]
-              ? `pico:${response.unpooledPicos[0].id}`
-              : null;
-        });
+        const requested = new URLSearchParams(window.location.search).get(
+          "queue",
+        );
+        const initial = initialScreeningQueue(
+          requested,
+          response.pool?.id ?? null,
+          response.unpooledPicos.map((pico) => pico.id),
+        );
+        setInvalidEntry(Boolean(requested && !initial));
+        setActiveQueue(initial);
       })
       .catch(() => {
         if (!cancelled) setConfiguration(null);
@@ -170,6 +177,16 @@ function GuidelineScreeningWorkspace({
     };
   }, [guidelineId]);
 
+  function chooseQueue(queue: string) {
+    setInvalidEntry(false);
+    setActiveQueue(queue);
+    window.history.replaceState(
+      null,
+      "",
+      screeningQueueHref(guidelineId, queue),
+    );
+  }
+
   const selectedPico = configuration?.unpooledPicos.find(
     (pico) => activeQueue === `pico:${pico.id}`,
   );
@@ -178,9 +195,15 @@ function GuidelineScreeningWorkspace({
     <div className="space-y-6">
       <PageHeader
         title="Abstract screening"
-        description="Work from the saved combined pool or from a PICO that has its own individual queue."
+        description="Select the screening scope assigned by your review lead. Working-group membership and article provenance do not define screening scope."
       />
 
+      {invalidEntry && (
+        <Alert variant="warning">
+          The queue in this link is no longer configured. Confirm your
+          assignment with the review lead and choose the correct scope below.
+        </Alert>
+      )}
       {configuration === undefined ? (
         <Skeleton className="h-36 w-full" />
       ) : configuration === null ? (
@@ -204,9 +227,12 @@ function GuidelineScreeningWorkspace({
                     ? "default"
                     : "outline"
                 }
-                onClick={() => setActiveQueue(`pool:${configuration.pool!.id}`)}
+                aria-pressed={activeQueue === `pool:${configuration.pool.id}`}
+                className="h-auto whitespace-normal text-left"
+                onClick={() => chooseQueue(`pool:${configuration.pool!.id}`)}
               >
-                <Layers3 /> {configuration.pool.name}
+                <Layers3 /> Screen {pooledScopeLabel(configuration.pool.picos)}{" "}
+                · {configuration.pool.name}
                 <Badge variant="secondary">Combined</Badge>
               </Button>
             )}
@@ -216,9 +242,11 @@ function GuidelineScreeningWorkspace({
                 variant={
                   activeQueue === `pico:${pico.id}` ? "default" : "outline"
                 }
-                onClick={() => setActiveQueue(`pico:${pico.id}`)}
+                aria-pressed={activeQueue === `pico:${pico.id}`}
+                className="h-auto whitespace-normal text-left"
+                onClick={() => chooseQueue(`pico:${pico.id}`)}
               >
-                PICO {pico.picoNumber} · {pico.title}
+                Screen PICO {pico.picoNumber} only · {pico.title}
               </Button>
             ))}
           </CardContent>
@@ -247,6 +275,7 @@ function GuidelineScreeningWorkspace({
       {configuration?.pool &&
         activeQueue === `pool:${configuration.pool.id}` && (
           <PooledScreeningWorkspace
+            key={configuration.pool.id}
             guidelineId={guidelineId}
             guideline={guideline}
             pool={configuration.pool}
@@ -258,10 +287,11 @@ function GuidelineScreeningWorkspace({
           <div className="flex items-center gap-2">
             <Badge variant="secondary">Individual PICO</Badge>
             <span className="text-sm font-medium">
-              PICO {selectedPico.picoNumber} · {selectedPico.title}
+              PICO {selectedPico.picoNumber} only · {selectedPico.title}
             </span>
           </div>
           <ProjectScreeningWorkspace
+            key={selectedPico.id}
             projectId={selectedPico.id}
             showHeader={false}
           />
@@ -385,6 +415,9 @@ function ProjectScreeningWorkspace({
         />
       )}
 
+      <div className="my-4">
+        <ScreeningScopePanel projectId={projectId} />
+      </div>
       {stages === null ? (
         <div className="space-y-4">
           <Skeleton className="h-9 w-72" />

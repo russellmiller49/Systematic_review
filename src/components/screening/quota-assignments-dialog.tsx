@@ -317,6 +317,12 @@ export function QuotaProgress({
         · Available to review: <strong>{available.toLocaleString()}</strong>
       </p>
       <p className="mt-1 text-sm text-muted-foreground">
+        Available articles belong to the shared queue. Your remaining target is
+        your workload, and each abstract counts once toward it. Articles leave
+        Available after the required independent reviews, including
+        disagreements awaiting adjudication.
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
         {quota.target === 0
           ? "New reviews are paused. Your completed reviews remain saved."
           : quota.remaining === 0

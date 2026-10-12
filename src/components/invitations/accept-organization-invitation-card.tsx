@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Building2 } from "lucide-react";
 import { apiPost, ApiError } from "@/lib/api";
@@ -46,8 +47,8 @@ export function AcceptOrganizationInvitationCard({
         </div>
         <CardTitle>Join the organization</CardTitle>
         <CardDescription>
-          Accept the invitation to join this workspace. You can then create projects and will
-          have full Owner access to every project you create.
+          Accept the invitation to join this workspace. You can then create projects and will have
+          full Owner access to every project you create.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -55,7 +56,25 @@ export function AcceptOrganizationInvitationCard({
           Signed in as <span className="font-medium text-foreground">{email}</span>. The email on
           your account must match the invited address.
         </p>
+        <p className="text-sm text-muted-foreground">
+          Different institutional domains are separate accounts. Ask the workspace owner to verify
+          the invited address if it differs. Joining a workspace does not grant access to every
+          existing project; the project owner must confirm your project role and screening
+          assignment.
+        </p>
         {error && <Alert variant="error">{error}</Alert>}
+        <Button
+          variant="outline"
+          disabled={busy}
+          className="w-full"
+          onClick={() =>
+            signOut({
+              callbackUrl: `/sign-in?callbackUrl=${encodeURIComponent(`/organization-invitations/${encodeURIComponent(token)}`)}`,
+            })
+          }
+        >
+          Sign in with a different account
+        </Button>
         <Button onClick={accept} disabled={busy} className="w-full">
           {busy && <Spinner />} Accept organization invitation
         </Button>

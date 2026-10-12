@@ -21,6 +21,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { pooledScopeLabel, screeningQueueHref } from "@/lib/screening-scope";
+import type { GuidelineScreeningConfiguration } from "@/components/screening/types";
 import { api, ApiError } from "@/lib/api";
 import { StatCard } from "@/components/layout/page-header";
 import { ConvertSubProjectDialog } from "@/components/projects/convert-subproject-dialog";
@@ -50,6 +52,9 @@ interface ProjectFamily {
   parentProject: { id: string; title: string } | null;
   capabilities: string[];
   myRoles: string[];
+  screeningPoolMembership: {
+    pool: { id: string; name: string; guidelineId: string };
+  } | null;
 }
 
 interface SubProjectRow {
@@ -97,7 +102,12 @@ const STATUS_VARIANTS: Record<string, "muted" | "secondary" | "include"> = {
   ARCHIVED: "muted",
 };
 
-const QUICK_LINKS: { slug: string; label: string; description: string; icon: LucideIcon }[] = [
+const QUICK_LINKS: {
+  slug: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+}[] = [
   {
     slug: "protocol",
     label: "Protocol",
@@ -156,7 +166,12 @@ const QUICK_LINKS: { slug: string; label: string; description: string; icon: Luc
 
 // Workspace links shown on a guideline hub: the guideline itself carries the shared
 // writing surfaces; screening/extraction/analysis happen inside each PICO sub-project.
-const GUIDELINE_QUICK_LINKS: { slug: string; label: string; description: string; icon: LucideIcon }[] = [
+const GUIDELINE_QUICK_LINKS: {
+  slug: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+}[] = [
   {
     slug: "protocol",
     label: "Protocol",
@@ -165,14 +180,16 @@ const GUIDELINE_QUICK_LINKS: { slug: string; label: string; description: string;
   },
   {
     slug: "screening",
-    label: "Combined screening",
-    description: "Choose multiple PICOs, review each unique abstract once, and apply the decision to every linked question.",
+    label: "Screening queues",
+    description:
+      "Open your assigned scope: the saved combined pool or an individual PICO. Your personal target is shown inside the queue.",
     icon: ListChecks,
   },
   {
     slug: "manuscript",
     label: "Manuscript",
-    description: "General sections — introduction, methods, conclusions — plus the compiled guideline.",
+    description:
+      "General sections — introduction, methods, conclusions — plus the compiled guideline.",
     icon: PenLine,
   },
   {
@@ -237,6 +254,8 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [family, setFamily] = useState<ProjectFamily | null>(null);
   const [subProjects, setSubProjects] = useState<SubProjectRow[] | null>(null);
+  const [screeningConfiguration, setScreeningConfiguration] =
+    useState<GuidelineScreeningConfiguration | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -254,6 +273,9 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
       .then((p) => {
         setFamily(p);
         if (p.isGuideline) {
+          api<GuidelineScreeningConfiguration>(`/api/projects/${projectId}/screening/pool`)
+            .then(setScreeningConfiguration)
+            .catch(() => setScreeningConfiguration(null));
           api<SubProjectRow[]>(`/api/projects/${projectId}/subprojects`)
             .then(setSubProjects)
             .catch(() => setSubProjects([]));
@@ -318,6 +340,64 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
 
       {error && <Alert variant="error">{error}</Alert>}
 
+      {!error && isGuideline && (
+        <section aria-label="Screening entry" className="space-y-3">
+          <h2 className="text-lg font-medium">Start your assigned screening</h2>
+          <p className="text-sm text-muted-foreground">
+            Confirm the scope assigned by your review lead. Working-group membership is separate
+            from screening scope. Your personal target, completed reviews, and remaining reviews
+            appear in the selected queue; citation counts below describe the shared corpus.
+          </p>
+          {screeningConfiguration ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {screeningConfiguration.pool && (
+                <Link
+                  className="rounded-lg border border-primary bg-card p-4"
+                  href={screeningQueueHref(projectId, `pool:${screeningConfiguration.pool.id}`)}
+                >
+                  <p className="font-semibold">
+                    Screen {pooledScopeLabel(screeningConfiguration.pool.picos)}
+                  </p>
+                  <p className="text-sm">
+                    {screeningConfiguration.pool.name} · relevance to any included PICO
+                  </p>
+                </Link>
+              )}
+              {screeningConfiguration.unpooledPicos.map((pico) => (
+                <Link
+                  key={pico.id}
+                  className="rounded-lg border border-border bg-card p-4"
+                  href={screeningQueueHref(projectId, `pico:${pico.id}`)}
+                >
+                  <p className="font-semibold">Screen PICO {pico.picoNumber} only</p>
+                  <p className="text-sm">{pico.title}</p>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm">
+              Open Screening queues to load the configured scope. If your assignment is unclear,
+              contact the review lead.
+            </p>
+          )}
+        </section>
+      )}
+      {family?.screeningPoolMembership && (
+        <Alert>
+          This project's abstract screening belongs to “{family.screeningPoolMembership.pool.name}”.{" "}
+          <Link
+            className="font-medium underline"
+            href={screeningQueueHref(
+              family.screeningPoolMembership.pool.guidelineId,
+              `pool:${family.screeningPoolMembership.pool.id}`,
+            )}
+          >
+            Open combined screening scope and all PICO definitions
+          </Link>
+          .
+        </Alert>
+      )}
+
       {/* PICO questions (guideline hub) */}
       {!error && isGuideline && (
         <section className="space-y-3">
@@ -349,13 +429,15 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               {subProjects.map((sub, i) => (
-                <Link key={sub.id} href={`/projects/${sub.id}`}>
+                <div key={sub.id}>
                   <Card className="h-full transition-shadow hover:shadow-md">
                     <CardHeader>
                       <div className="flex items-start justify-between gap-2">
                         <CardTitle className="text-base leading-snug">
                           <span className="mr-2 text-muted-foreground/70">#{i + 1}</span>
-                          {sub.title}
+                          <Link href={`/projects/${sub.id}`} className="hover:underline">
+                            {sub.title}
+                          </Link>
                         </CardTitle>
                         <Badge variant={STATUS_VARIANTS[sub.status] ?? "muted"}>
                           {sub.status.toLowerCase()}
@@ -370,9 +452,27 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
                     <CardContent className="text-sm text-muted-foreground">
                       {sub._count.citations} citations · {sub._count.studies} studies ·{" "}
                       {sub._count.members} members
+                      {screeningConfiguration && (
+                        <p className="mt-2 font-medium text-primary">
+                          {screeningConfiguration.pool?.picos.some((pico) => pico.id === sub.id) ? (
+                            <Link
+                              href={screeningQueueHref(
+                                projectId,
+                                `pool:${screeningConfiguration.pool.id}`,
+                              )}
+                            >
+                              Screen {pooledScopeLabel(screeningConfiguration.pool.picos)}
+                            </Link>
+                          ) : (
+                            <Link href={screeningQueueHref(projectId, `pico:${sub.id}`)}>
+                              Screen PICO {i + 1} only
+                            </Link>
+                          )}
+                        </p>
+                      )}
                     </CardContent>
                   </Card>
-                </Link>
+                </div>
               ))}
             </div>
           )}
@@ -445,7 +545,10 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
               {stats.screening.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No screening stages yet — set them up in{" "}
-                  <Link href={`/projects/${projectId}/screening`} className="text-primary hover:underline">
+                  <Link
+                    href={`/projects/${projectId}/screening`}
+                    className="text-primary hover:underline"
+                  >
                     Screening
                   </Link>{" "}
                   to start reviewing citations.
@@ -512,22 +615,42 @@ export function ProjectDashboard({ projectId }: { projectId: string }) {
       <section className="space-y-3">
         <h2 className="text-lg font-medium">Workspace</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {(isGuideline ? GUIDELINE_QUICK_LINKS : QUICK_LINKS).map(({ slug, label, description, icon: Icon }, i) => (
-            <Link key={slug} href={`/projects/${projectId}/${slug}`}>
-              <Card className="h-full transition-shadow hover:shadow-md">
-                <CardHeader>
-                  <div className="flex items-center gap-2.5">
-                    <Icon className="h-4 w-4 text-muted-foreground" />
-                    <CardTitle className="text-base leading-snug">{label}</CardTitle>
-                    <span className="ml-auto text-xs tabular-nums text-muted-foreground/60">
-                      {i + 1}
-                    </span>
-                  </div>
-                  <CardDescription>{description}</CardDescription>
-                </CardHeader>
-              </Card>
-            </Link>
-          ))}
+          {(isGuideline ? GUIDELINE_QUICK_LINKS : QUICK_LINKS).map(
+            ({ slug, label, description, icon: Icon }, i) => (
+              <Link
+                key={slug}
+                href={
+                  slug === "screening" && family?.screeningPoolMembership
+                    ? screeningQueueHref(
+                        family.screeningPoolMembership.pool.guidelineId,
+                        `pool:${family.screeningPoolMembership.pool.id}`,
+                      )
+                    : `/projects/${projectId}/${slug}`
+                }
+              >
+                <Card className="h-full transition-shadow hover:shadow-md">
+                  <CardHeader>
+                    <div className="flex items-center gap-2.5">
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <CardTitle className="text-base leading-snug">
+                        {slug === "screening" && family?.screeningPoolMembership
+                          ? `Screen combined pool · ${family.screeningPoolMembership.pool.name}`
+                          : label}
+                      </CardTitle>
+                      <span className="ml-auto text-xs tabular-nums text-muted-foreground/60">
+                        {i + 1}
+                      </span>
+                    </div>
+                    <CardDescription>
+                      {slug === "screening" && family?.screeningPoolMembership
+                        ? "Assess relevance to any included PICO. Open the combined scope and configured eligibility criteria."
+                        : description}
+                    </CardDescription>
+                  </CardHeader>
+                </Card>
+              </Link>
+            ),
+          )}
         </div>
       </section>
 

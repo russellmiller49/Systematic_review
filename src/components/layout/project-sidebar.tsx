@@ -24,6 +24,7 @@ import {
   Table2,
   TrendingUp,
 } from "lucide-react";
+import { screeningQueueHref } from "@/lib/screening-scope";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -46,8 +47,8 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-// A guideline hub keeps only the shared surfaces; screening/extraction/analysis live in
-// the PICO sub-projects listed underneath.
+// A guideline hub carries screening queue selection and shared writing surfaces.
+// Other evidence work lives in the PICO sub-projects listed underneath.
 const GUIDELINE_NAV_HREFS = new Set([
   "",
   "/chat",
@@ -64,6 +65,7 @@ interface ProjectInfo {
   isGuideline: boolean;
   parentProject: { id: string; title: string } | null;
   subProjects: { id: string; title: string }[];
+  screeningPoolMembership: { pool: { id: string; name: string; guidelineId: string } } | null;
 }
 
 const UNREAD_POLL_MS = 30_000;
@@ -126,7 +128,11 @@ export function ProjectSidebar({ projectId }: { projectId: string }) {
         </p>
       </div>
       {navItems.map(({ href, label, icon: Icon }) => {
-        const full = `${base}${href}`;
+        const pool = info?.screeningPoolMembership?.pool;
+        const full =
+          href === "/screening" && pool
+            ? screeningQueueHref(pool.guidelineId, `pool:${pool.id}`)
+            : `${base}${href}`;
         const active = href === "" ? pathname === base : pathname.startsWith(full);
         return (
           <Link
@@ -140,7 +146,7 @@ export function ProjectSidebar({ projectId }: { projectId: string }) {
             )}
           >
             <Icon className="h-4 w-4" />
-            {label}
+            {href === "/screening" && pool ? `Combined screening · ${pool.name}` : label}
             {href === "/chat" && chatUnread > 0 && (
               <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
                 {chatUnread > 99 ? "99+" : chatUnread}

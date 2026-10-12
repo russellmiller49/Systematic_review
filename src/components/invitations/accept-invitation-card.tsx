@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { MailCheck } from "lucide-react";
 import { apiPost, ApiError } from "@/lib/api";
@@ -40,8 +41,7 @@ export function AcceptInvitationCard({ token, email }: { token: string; email: s
         </div>
         <CardTitle>Join the project</CardTitle>
         <CardDescription>
-          Accept the invitation to add this project and its assigned role to your Synthesis
-          account.
+          Accept the invitation to add this project and its assigned role to your Synthesis account.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -49,7 +49,25 @@ export function AcceptInvitationCard({ token, email }: { token: string; email: s
           Signed in as <span className="font-medium text-foreground">{email}</span>. The email on
           your account must match the address the owner invited.
         </p>
+        <p className="text-sm text-muted-foreground">
+          Different institutional domains are separate accounts. If the invitation was sent to a
+          different address, sign in with that address or ask the project owner to verify the
+          invitation. Workspace access, project roles, and screening targets are separate; accepting
+          an invitation does not confirm which queue you should screen.
+        </p>
         {error && <Alert variant="error">{error}</Alert>}
+        <Button
+          variant="outline"
+          disabled={busy}
+          className="w-full"
+          onClick={() =>
+            signOut({
+              callbackUrl: `/sign-in?callbackUrl=${encodeURIComponent(`/invitations/${encodeURIComponent(token)}`)}`,
+            })
+          }
+        >
+          Sign in with a different account
+        </Button>
         <Button onClick={accept} disabled={busy} className="w-full">
           {busy && <Spinner />} Accept invitation
         </Button>

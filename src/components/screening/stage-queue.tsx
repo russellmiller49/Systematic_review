@@ -489,7 +489,10 @@ export function StageQueue({
     try {
       const response = await apiPost<{ excluded: number }>(
         `${decisionsUrl}/batch-exclude`,
-        { citationIds, exclusionReasonId },
+        {
+          citationIds,
+          exclusionReasonId,
+        },
       );
       const reason = reasons?.find((item) => item.id === exclusionReasonId);
       setBatchSelectedIds(new Set());
@@ -500,7 +503,9 @@ export function StageQueue({
       }));
       toast.success(
         `Excluded ${response.excluded} article${response.excluded === 1 ? "" : "s"}`,
-        { description: reason?.label },
+        {
+          description: reason?.label,
+        },
       );
       setReloadKey((key) => key + 1);
     } catch (error) {
@@ -857,7 +862,9 @@ export function StageQueue({
                 filter === "UNDECIDED"
                   ? done > 0
                     ? `You screened ${done} citation${done === 1 ? "" : "s"} this session.`
-                    : "Nothing assigned to you needs a decision at this stage right now."
+                    : !data.quota && data.summary.all === 0
+                      ? "No personal target or active fixed assignment is available at this stage. Ask an Owner or Admin to confirm your screening assignment."
+                      : "No articles are available in this view. Check your personal remaining target above; an empty queue does not confirm assignment completion."
                   : "Choose another article status or clear the search to keep browsing."
               }
               action={
