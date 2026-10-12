@@ -59,7 +59,7 @@ export async function getDashboard(ctx: Ctx, projectId: string): Promise<Dashboa
           where: { stageId: stage.id, status: { not: "VOIDED" }, citation: { status: "ACTIVE" } },
         }),
         prisma.screeningDecision.count({
-          where: { stageId: stage.id, citation: { status: "ACTIVE" } },
+          where: { stageId: stage.id, withdrawnAt: null, citation: { status: "ACTIVE" } },
         }),
         prisma.screeningConflict.count({ where: { stageId: stage.id, status: "OPEN" } }),
         prisma.citationStageResult.count({

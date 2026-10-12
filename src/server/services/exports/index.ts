@@ -180,7 +180,7 @@ interface ScreeningSections {
 
 async function screeningSections(projectId: string): Promise<ScreeningSections> {
   const decisions = await prisma.screeningDecision.findMany({
-    where: { stage: { projectId } },
+    where: { stage: { projectId }, withdrawnAt: null },
     orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
     include: {
       stage: { select: { type: true } },

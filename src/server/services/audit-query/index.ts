@@ -23,6 +23,7 @@ import { requirePermission, can } from "@/server/permissions";
 // analysis.view boundary.
 export const SCREENING_SENSITIVE_ENTITY_TYPES = [
   "ScreeningDecision",
+  "ScreeningWithdrawal",
   "ScreeningConflict",
   "ScreeningAdjudication",
 ] as const;

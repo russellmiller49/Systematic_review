@@ -54,7 +54,7 @@ async function completedByReviewer(
       AND d."citationId" = a."citationId" AND d."reviewerId" = a."reviewerId"
     JOIN "Citation" c ON c."id" = a."citationId"
     JOIN "ScreeningStage" s ON s."id" = a."stageId"
-    WHERE a."status" = 'COMPLETED' AND c."status" = 'ACTIVE'
+    WHERE a."status" = 'COMPLETED' AND c."status" = 'ACTIVE' AND d."withdrawnAt" IS NULL
     AND ${
       scope.stageId
         ? Prisma.sql`a."stageId" = ${scope.stageId}`
