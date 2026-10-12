@@ -120,6 +120,9 @@ async function scope(db: Tx, ctx: Ctx, guidelineId: string, input: Input) {
     stages.length !== projectIds.length ||
     stages.some(
       (s) => s.reviewersPerCitation !== stages[0]!.reviewersPerCitation,
+    ) ||
+    stages.some(
+      (s) => s.maybeGeneratesConflict !== stages[0]!.maybeGeneratesConflict,
     )
   )
     throw invalidState(
@@ -266,6 +269,16 @@ async function inspect(
     );
     const reasons: string[] = [];
     if (states[index]!.needsSynchronization)
+      reasons.push("INCONSISTENT_LINKED_STATE");
+    const metadataSignatures = ids.map((id) =>
+      digest(
+        rows
+          .filter((d) => d.citationId === id && !d.withdrawnAt)
+          .map((d) => [d.reviewerId, d.labels, d.flaggedForDiscussion])
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+      ),
+    );
+    if (new Set(metadataSignatures).size > 1)
       reasons.push("INCONSISTENT_LINKED_STATE");
     if (results.some(inGroup)) reasons.push("FINALIZED_STAGE_RESULT");
     if (resultHistory.some(inGroup)) reasons.push("FINALIZED_STAGE_HISTORY");

@@ -785,3 +785,33 @@ it.each(["actor-org", "target-org", "actor-pico"] as const)(
     ).toBe(0);
   },
 );
+
+it("rejects incompatible Maybe evaluation settings across pooled stages", async () => {
+  const f = await fixture(1);
+  await f.decide(0, 0, "EXCLUDE");
+  const stage = f.stages.find((s) => s.projectId === f.picos[2]!.id)!;
+  await prisma.screeningStage.update({
+    where: { id: stage.id },
+    data: { maybeGeneratesConflict: !stage.maybeGeneratesConflict },
+  });
+  await expect(preview(f)).rejects.toMatchObject({ code: "INVALID_STATE" });
+  expect((await rows(f)).every((d) => !d.withdrawnAt)).toBe(true);
+});
+
+it("holds differing active labels or discussion flags on linked copies", async () => {
+  const f = await fixture(1);
+  await f.decide(0, 0, "EXCLUDE");
+  await prisma.screeningDecision.update({
+    where: {
+      stageId_citationId_reviewerId: {
+        stageId: f.groups[0]![0]!.stageId,
+        citationId: f.groups[0]![0]!.id,
+        reviewerId: f.users[0]!.id,
+      },
+    },
+    data: { labels: ["Differing label"], flaggedForDiscussion: true },
+  });
+  const p = await preview(f);
+  expect(p.token).toBeNull();
+  expect(p.groups[0]!.reasons).toContain("INCONSISTENT_LINKED_STATE");
+});
