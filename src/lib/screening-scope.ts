@@ -19,5 +19,5 @@ export function initialScreeningQueue(
   unpooledIds: string[],
 ): string | null {
   const queues = [...(poolId ? [`pool:${poolId}`] : []), ...unpooledIds.map((id) => `pico:${id}`)];
-  return requested ? (queues.includes(requested) ? requested : null) : (queues[0] ?? null);
+  return requested !== null ? (queues.includes(requested) ? requested : null) : (queues[0] ?? null);
 }

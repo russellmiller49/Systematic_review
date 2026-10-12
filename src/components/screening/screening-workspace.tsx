@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Layers3, ListChecks, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
@@ -146,8 +147,18 @@ function GuidelineScreeningWorkspace({
   const [configuration, setConfiguration] = useState<
     GuidelineScreeningConfiguration | null | undefined
   >(undefined);
-  const [activeQueue, setActiveQueue] = useState<string | null>(null);
-  const [invalidEntry, setInvalidEntry] = useState(false);
+  const searchParams = useSearchParams();
+  const requestedQueue = searchParams.get("queue");
+  // The URL is the source of truth, including client navigation and browser history.
+  const activeQueue = configuration
+    ? initialScreeningQueue(
+        requestedQueue,
+        configuration.pool?.id ?? null,
+        configuration.unpooledPicos.map((pico) => pico.id),
+      )
+    : null;
+  const invalidEntry =
+    configuration && requestedQueue !== null && activeQueue === null;
   const canConfigure = guideline.capabilities.includes("screening.configure");
 
   useEffect(() => {
@@ -158,16 +169,6 @@ function GuidelineScreeningWorkspace({
       .then((response) => {
         if (cancelled) return;
         setConfiguration(response);
-        const requested = new URLSearchParams(window.location.search).get(
-          "queue",
-        );
-        const initial = initialScreeningQueue(
-          requested,
-          response.pool?.id ?? null,
-          response.unpooledPicos.map((pico) => pico.id),
-        );
-        setInvalidEntry(Boolean(requested && !initial));
-        setActiveQueue(initial);
       })
       .catch(() => {
         if (!cancelled) setConfiguration(null);
@@ -178,13 +179,7 @@ function GuidelineScreeningWorkspace({
   }, [guidelineId]);
 
   function chooseQueue(queue: string) {
-    setInvalidEntry(false);
-    setActiveQueue(queue);
-    window.history.replaceState(
-      null,
-      "",
-      screeningQueueHref(guidelineId, queue),
-    );
+    window.history.pushState(null, "", screeningQueueHref(guidelineId, queue));
   }
 
   const selectedPico = configuration?.unpooledPicos.find(

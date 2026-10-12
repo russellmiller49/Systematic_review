@@ -11,6 +11,148 @@ async function post(request: APIRequestContext, path: string, data: unknown) {
   return (await response.json()).data;
 }
 
+async function createScopeFixture(request: APIRequestContext) {
+  const org = await post(request, "/api/orgs", { name: `Navigation fixture ${Date.now()}` });
+  const guideline = await post(request, `/api/orgs/${org.id}/projects`, {
+    title: "Navigation and provenance fixture",
+    reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+    isGuideline: true,
+    reviewersPerCitation: 2,
+  });
+  const picos = [];
+  for (let i = 1; i <= 3; i++) {
+    const pico = await post(request, `/api/projects/${guideline.id}/subprojects`, {
+      title: `Navigation question ${i}`,
+      researchQuestion: `Synthetic configured question ${i}`,
+    });
+    const population =
+      i === 1 ? "Individual configured population" : "Pooled configured population";
+    const response = await request.patch(`/api/projects/${pico.id}/protocol`, {
+      data: { population },
+    });
+    expect(response.ok(), await response.text()).toBeTruthy();
+    picos.push(pico);
+  }
+  const response = await request.put(`/api/projects/${guideline.id}/screening/pool`, {
+    data: { name: "Navigation combined pool", projectIds: picos.slice(1).map((p) => p.id) },
+  });
+  expect(response.ok(), await response.text()).toBeTruthy();
+  return { guideline, picos, pool: (await response.json()).data };
+}
+
+test("URL scope stays consistent through sidebar navigation, queue choices, Back/Forward, stale links and reload", async ({
+  page,
+}) => {
+  test.setTimeout(120000);
+  await signUp(page, "Navigation owner", `navigation-owner-${Date.now()}@test.local`);
+  const { guideline, picos } = await createScopeFixture(page.request);
+  const base = `/projects/${guideline.id}/screening`;
+  const individual = `${base}?queue=${encodeURIComponent(`pico:${picos[0].id}`)}`;
+  const scope = page.getByRole("region", { name: "Screening scope" });
+  const poolButton = page.getByRole("button", { name: /Screen PICOs 2, 3 together/ });
+  const individualButton = page.getByRole("button", { name: /Screen PICO 1 only/ });
+  await page.goto(individual);
+  await expect(scope).toContainText("Individual configured population");
+  await page.getByRole("link", { name: "Screening", exact: true }).click();
+  await page.waitForURL(base);
+  // Previously the query-free URL retained PICO 1 until a reload selected the pool.
+  await expect(poolButton).toHaveAttribute("aria-pressed", "true");
+  await expect(scope).toContainText("Pooled configured population");
+  const selectedBeforeReload = await page.getByRole("button", { pressed: true }).allTextContents();
+  await page.reload();
+  await expect(poolButton).toHaveAttribute("aria-pressed", "true");
+  expect(await page.getByRole("button", { pressed: true }).allTextContents()).toEqual(
+    selectedBeforeReload,
+  );
+  await page.goBack();
+  await page.waitForURL(individual);
+  await expect(individualButton).toHaveAttribute("aria-pressed", "true");
+  await expect(scope).toContainText("Individual configured population");
+  await page.goForward();
+  await page.waitForURL(base);
+  await expect(poolButton).toHaveAttribute("aria-pressed", "true");
+  await individualButton.click();
+  await page.waitForURL(individual);
+  await expect(scope).toContainText("Individual configured population");
+  await page.goBack();
+  await page.waitForURL(base);
+  await expect(poolButton).toHaveAttribute("aria-pressed", "true");
+  await page.goForward();
+  await page.waitForURL(individual);
+  await expect(individualButton).toHaveAttribute("aria-pressed", "true");
+  // The native History API is supported by the App Router and must update scope too.
+  await page.evaluate(() => window.history.pushState(null, "", "?queue=pool%3Aremoved"));
+  await expect(
+    page.getByText("The queue in this link is no longer configured", { exact: false }),
+  ).toBeVisible();
+  await expect(scope).toHaveCount(0);
+  await page.goBack();
+  await page.waitForURL(individual);
+  await expect(scope).toContainText("Individual configured population");
+  await page.reload();
+  await expect(individualButton).toHaveAttribute("aria-pressed", "true");
+});
+
+test("protocol provenance separates current saved eligibility from the frozen published version and core timestamp", async ({
+  page,
+}) => {
+  test.setTimeout(120000);
+  await signUp(page, "Provenance owner", `provenance-owner-${Date.now()}@test.local`);
+  const { guideline, picos } = await createScopeFixture(page.request);
+  const projectId = picos[0].id;
+  const criterion = await post(page.request, `/api/projects/${projectId}/protocol/criteria`, {
+    type: "INCLUSION",
+    text: "Frozen configured eligibility",
+  });
+  const version = await post(page.request, `/api/projects/${projectId}/protocol/publish`, {});
+  expect(version.versionNumber).toBe(1);
+  const edit = await page.request.patch(`/api/projects/${projectId}/protocol`, {
+    data: { population: "Current saved draft population" },
+  });
+  expect(edit.ok(), await edit.text()).toBeTruthy();
+  const beforeCriterion = await db.protocol.findUniqueOrThrow({ where: { projectId } });
+  const criterionEdit = await page.request.patch(
+    `/api/projects/${projectId}/protocol/criteria/${criterion.id}`,
+    {
+      data: { text: "Current saved draft eligibility" },
+    },
+  );
+  expect(criterionEdit.ok(), await criterionEdit.text()).toBeTruthy();
+  const afterCriterion = await db.protocol.findUniqueOrThrow({ where: { projectId } });
+  expect(afterCriterion.updatedAt).toEqual(beforeCriterion.updatedAt);
+  const frozen = await db.protocolVersion.findUniqueOrThrow({ where: { id: version.id } });
+  expect((frozen.snapshot as { protocol: { population: string } }).protocol.population).toBe(
+    "Individual configured population",
+  );
+  await page.goto(
+    `/projects/${guideline.id}/screening?queue=${encodeURIComponent(`pico:${projectId}`)}`,
+  );
+  const scope = page.getByRole("region", { name: "Screening scope" });
+  await expect(scope).toContainText("Current saved draft population");
+  await expect(
+    scope.getByText("Question definitions and eligibility · current saved configuration", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(scope).toContainText("Latest frozen protocol version: 1");
+  await expect(scope).toContainText("may differ from the values displayed here");
+  await scope
+    .getByText("Question definitions and eligibility · current saved configuration", {
+      exact: true,
+    })
+    .click();
+  await expect(scope).toContainText("Current saved draft eligibility");
+  await expect(scope).toContainText("Core protocol fields updated:");
+  await expect(scope).toContainText("does not cover PICO or eligibility-criterion edits");
+  await expect(scope).not.toContainText("Current protocol last updated");
+  const response = await page.request.get(`/api/projects/${projectId}/screening/scope`);
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const result = (await response.json()).data.projects[0];
+  expect(result.protocol.population).toBe("Current saved draft population");
+  expect(result.latestFrozenVersion.versionNumber).toBe(1);
+  expect(result.protocol).not.toHaveProperty("versions");
+});
+
 test("configured scope, explicit entry, independent PICO switches, admin inspection and restrictive reviewer journey", async ({
   page: owner,
   browser,

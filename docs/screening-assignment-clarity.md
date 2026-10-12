@@ -4,7 +4,9 @@ The guideline dashboard separates **screening scope** from PICO working-group me
 Every screening entry names the configured combined PICOs or an individual PICO. Combined
 entries use the saved pool; membership is resolved on the server. An individual entry stays
 individual even when the guideline also has a pool. Stale explicit queue links require a new
-selection, rather than silently selecting another scope. Old pooled-PICO screening URLs lead
+selection, rather than silently selecting another scope. The displayed scope derives from the
+reactive URL query, so sidebar navigation, explicit queue choices, Back/Forward, native history
+changes, and reload resolve the same scope. Old pooled-PICO screening URLs lead
 to the configured combined queue. Switching PICOs remounts the workspace so stage IDs,
 permissions, notes, filters, and article state cannot carry over from the previous project.
 
@@ -19,8 +21,13 @@ The scope panel displays populations, question definitions, eligibility criteria
 designs, setting, date/language restrictions, and links to protocol versions and amendments.
 Missing protocols, missing populations, and missing criteria are explicit. No disease,
 population, study-design exception, deadline, personal target, or participant cutoff is
-hard-coded. The panel identifies unpublished protocols and the current protocol's update
-time; it does not treat email proposals as approved amendments.
+hard-coded. Displayed fields are explicitly the **current saved configuration**, which can
+include unpublished edits. The latest immutable snapshot is separate `latestFrozenVersion`
+metadata, labeled as a frozen protocol version; snapshots are created on publication or
+amendment. A version number does not attribute the displayed live fields to that snapshot or
+establish precedence. The timestamp is labeled **Core protocol fields updated** because PICO
+and eligibility-criterion edits do not update the parent protocol row. Version/change history
+must be consulted separately. Email proposals are not treated as approved amendments.
 
 Combined guidance asks reviewers to assess relevance to **any included PICO**, checking all
 configured criteria and exceptions. Article provenance describes where the record was
@@ -99,12 +106,15 @@ cause applies; inspect authorized linked history privately before choosing a rec
 
 - Unit regressions cover explicit and stale entry links and actual noncontiguous pool labels.
 - Integration regressions cover read-only protocol projection, PICO exceptions, missing
-  protocols, pool scoping, restrictive roles, and removed project/organization membership.
+  protocols, pool scoping, restrictive roles, removed project/organization membership, and
+  current saved fields remaining distinct from an immutable snapshot after unpublished edits.
 - `npx playwright test --config playwright.assignment.config.ts` uses only
   `TEST_DATABASE_URL`: explicit individual entry, switching between individual PICOs,
   pooled/individual populations, keyboard expansion, mobile overflow, personal target versus
   shared availability, admin inspection without decision shortcuts, legacy pooled links,
-  reviewer restrictions, stale scope, and invitation mismatch/account switching.
+  reviewer restrictions, stale scope, invitation mismatch/account switching, reactive
+  sidebar/Back/Forward/reload scope, and draft-versus-frozen provenance with a narrowly labeled
+  core timestamp.
 - Existing pooled/quota suites cover distinct reviewers, revisions, stale pages, concurrent
   writes, final slots, conflicts, logical quota counting, exceptional linked histories,
   blinding, and rollback. Existing citation tests cover audited missing-abstract addition and

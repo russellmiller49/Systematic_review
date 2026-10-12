@@ -17,6 +17,7 @@ describe("configured screening entry", () => {
     expect(initialScreeningQueue(null, null, ["one"])).toBe("pico:one");
   });
   it("fails closed for stale links and pooled-PICO individual requests", () => {
+    expect(initialScreeningQueue("", "saved", ["one"])).toBeNull();
     expect(initialScreeningQueue("pool:removed", "saved", ["one"])).toBeNull();
     expect(initialScreeningQueue("pico:pooled", "saved", ["one"])).toBeNull();
     expect(initialScreeningQueue(null, null, [])).toBeNull();

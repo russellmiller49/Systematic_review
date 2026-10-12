@@ -73,7 +73,15 @@ export async function getScreeningScope(ctx: Ctx, projectId: string, poolId?: st
           },
         },
       });
-      return { ...project, protocol };
+      // Current saved fields and immutable version metadata are separate sources.
+      // Do not attribute mutable draft fields to the latest frozen snapshot.
+      if (!protocol) return { ...project, protocol: null, latestFrozenVersion: null };
+      const { versions, ...currentConfiguration } = protocol;
+      return {
+        ...project,
+        protocol: currentConfiguration,
+        latestFrozenVersion: versions[0] ?? null,
+      };
     }),
   );
   return { name, combined: Boolean(poolId), projects };

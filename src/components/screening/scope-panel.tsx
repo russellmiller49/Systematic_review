@@ -61,12 +61,22 @@ export function ScreeningScopePanel({ projectId, poolId }: { projectId: string; 
             {project.protocol?.population ||
               "Not configured at protocol level; check question definitions and criteria below with the review lead."}
           </p>
+          <p className="text-xs text-muted-foreground">
+            Displayed fields are the current saved configuration and can include unpublished edits.{" "}
+            {project.latestFrozenVersion ? (
+              <>
+                Latest frozen protocol version: {project.latestFrozenVersion.versionNumber},
+                recorded {new Date(project.latestFrozenVersion.createdAt).toLocaleString()}. It is a
+                separate snapshot and may differ from the values displayed here.
+              </>
+            ) : (
+              "No frozen protocol version is available."
+            )}{" "}
+            Confirm the intended screening criteria with the review lead if sources differ.
+          </p>
           <details>
             <summary className="cursor-pointer text-primary">
-              Question definitions and eligibility ·{" "}
-              {project.protocol?.versions[0]
-                ? `protocol version ${project.protocol.versions[0].versionNumber}`
-                : "no published version"}
+              Question definitions and eligibility · current saved configuration
             </summary>
             <div className="mt-2 space-y-2 whitespace-pre-wrap">
               {project.protocol ? (
@@ -118,9 +128,10 @@ export function ScreeningScopePanel({ projectId, poolId }: { projectId: string; 
                     </p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Current protocol last updated:{" "}
-                    {new Date(project.protocol.updatedAt).toLocaleString()}. Version history and
-                    amendments are available in the protocol.
+                    Core protocol fields updated:{" "}
+                    {new Date(project.protocol.updatedAt).toLocaleString()}. This timestamp does not
+                    cover PICO or eligibility-criterion edits. Use protocol version/amendment
+                    history and the authorized project audit trail to review saved changes.
                   </p>
                 </>
               ) : (

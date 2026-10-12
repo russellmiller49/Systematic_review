@@ -6,6 +6,7 @@ import { saveGuidelineScreeningPool } from "@/server/services/screening/pooled";
 import * as screening from "@/server/services/screening";
 import * as quotas from "@/server/services/screening/quotas";
 import * as dedup from "@/server/services/dedup";
+import * as protocols from "@/server/services/protocols";
 import { resetDb } from "../db-utils";
 import {
   createTestUser,
@@ -78,9 +79,11 @@ describe("read-only configured screening scope", () => {
     expect(scope.projects[0]!.protocol).toMatchObject({
       population: "Configured population A",
       criteria: [{ type: "INCLUSION", text: "Configured exception for question A" }],
-      versions: [{ versionNumber: 1 }],
     });
+    expect(scope.projects[0]!.latestFrozenVersion).toMatchObject({ versionNumber: 1 });
+    expect(scope.projects[0]!.protocol).not.toHaveProperty("versions");
     expect(scope.projects[1]!.protocol).toBeNull();
+    expect(scope.projects[1]!.latestFrozenVersion).toBeNull();
     expect(await prisma.protocol.count()).toBe(before);
     expect(await prisma.protocol.findUnique({ where: { id: protocol.id } })).not.toBeNull();
     expect(JSON.stringify(scope)).not.toMatch(/reviewerId|myDecision|passwordHash|invitation/);
@@ -116,6 +119,43 @@ describe("read-only configured screening scope", () => {
       code: "FORBIDDEN",
     });
   });
+  it("keeps current saved fields separate from immutable snapshots and scopes the core timestamp", async () => {
+    const f = await fixture();
+    const owner = { userId: f.owner.id };
+    const projectId = f.picos[0]!.id;
+    await protocols.updateProtocol(owner, projectId, {
+      population: "Frozen configured population",
+    });
+    const criterion = await protocols.createCriterion(owner, projectId, {
+      type: "INCLUSION",
+      text: "Frozen configured eligibility",
+    });
+    const version = await protocols.publishProtocol(owner, projectId);
+    await protocols.updateProtocol(owner, projectId, {
+      population: "Current saved draft population",
+    });
+    const beforeCriterion = await prisma.protocol.findUniqueOrThrow({ where: { projectId } });
+    await protocols.updateCriterion(owner, projectId, criterion.id, {
+      text: "Current saved draft eligibility",
+    });
+    const scope = await getScreeningScope({ userId: f.reader.id }, projectId);
+    const current = scope.projects[0]!;
+    expect(current.protocol).toMatchObject({
+      population: "Current saved draft population",
+      updatedAt: beforeCriterion.updatedAt,
+      criteria: [{ text: "Current saved draft eligibility" }],
+    });
+    expect(current.protocol).not.toHaveProperty("versions");
+    expect(current.latestFrozenVersion).toEqual({ versionNumber: 1, createdAt: version.createdAt });
+    const snapshot = (await prisma.protocolVersion.findUniqueOrThrow({ where: { id: version.id } }))
+      .snapshot as { protocol: { population: string; criteria: { text: string }[] } };
+    expect(snapshot.protocol.population).toBe("Frozen configured population");
+    expect(snapshot.protocol.criteria[0]!.text).toBe("Frozen configured eligibility");
+    expect(await prisma.protocolVersion.count({ where: { protocolId: beforeCriterion.id } })).toBe(
+      1,
+    );
+  });
+
   it("recomputes personal credit after merge/undo and counts decision revisions once", async () => {
     const team = await createProjectWithTeam();
     const owner = { userId: team.owner.id };

@@ -9,6 +9,10 @@ admin inspection has no decision controls. Personal workload is explained separa
 available shared articles. Invitation pages support switching accounts while retaining the
 exact-address authorization boundary and invitation callback.
 
+Independent-review repairs make queue selection reactive to URL/client-history changes.
+Current saved protocol fields are explicitly separated from latest frozen-version metadata;
+the displayed update timestamp describes core fields, not child criterion/PICO mutations.
+
 See [scope, verification, and recovery boundaries](screening-assignment-clarity.md). No schema
 migration, production decision reset, invitation issuance, role change, or deployment.
 
