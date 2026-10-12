@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Prisma } from "@prisma/client";
+import { Prisma, type ScreeningAssignment } from "@prisma/client";
 import { z } from "zod";
 import { prisma, type Tx } from "@/server/db";
 import type { Ctx } from "@/server/auth/session";
@@ -69,6 +69,32 @@ const manifestSchema = z.object({
     }),
   ),
 });
+function assignmentScope(
+  row: z.infer<typeof originalRowSchema>,
+  status: "PENDING" | "COMPLETED",
+) {
+  return {
+    id: row.assignmentId,
+    stageId: row.stageId,
+    citationId: row.citationId,
+    reviewerId: row.reviewerId,
+    status,
+  };
+}
+function assignmentMatches(
+  assignment: ScreeningAssignment,
+  row: z.infer<typeof originalRowSchema>,
+  status: "PENDING" | "COMPLETED",
+) {
+  const expected = assignmentScope(row, status);
+  return (
+    assignment.id === expected.id &&
+    assignment.stageId === expected.stageId &&
+    assignment.citationId === expected.citationId &&
+    assignment.reviewerId === expected.reviewerId &&
+    assignment.status === expected.status
+  );
+}
 const json = (value: unknown) =>
   JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 
@@ -199,6 +225,7 @@ async function inspect(
     states,
     rows,
     assignments,
+    retainedAssignments,
     results,
     conflicts,
     citations,
@@ -213,6 +240,20 @@ async function inspect(
       where: pairWhere,
       orderBy: { id: "asc" },
     }),
+    manifest
+      ? db.screeningAssignment.findMany({
+          where: {
+            ...pairWhere,
+            reviewerId: input.reviewerId,
+            id: {
+              in: manifest.groups.flatMap((g) =>
+                g.rows.map((r) => r.assignmentId),
+              ),
+            },
+          },
+          orderBy: { id: "asc" },
+        })
+      : Promise.resolve([]),
     db.citationStageResult.findMany({
       where: pairWhere,
       orderBy: { id: "asc" },
@@ -344,15 +385,20 @@ async function inspect(
                 r.notes === d.notes &&
                 digest(r.labels) === digest(d.labels) &&
                 r.flaggedForDiscussion === d.flaggedForDiscussion,
-            ) ||
-            !assignments.some(
-              (a) =>
-                a.id === saved.rows.find((r) => r.id === d.id)?.assignmentId &&
-                a.status === "PENDING",
             ),
         )
       )
         reasons.push("WITHDRAWN_VOTE_CHANGED");
+      if (
+        !saved ||
+        saved.rows.some(
+          (row) =>
+            !retainedAssignments.some((assignment) =>
+              assignmentMatches(assignment, row, "PENDING"),
+            ),
+        )
+      )
+        reasons.push("RETAINED_ASSIGNMENT_CHANGED");
       if (
         states[index]!.reviewedBy.size >= family.stages[0]!.reviewersPerCitation
       )
@@ -395,34 +441,45 @@ async function inspect(
     }
   const eligible = views.filter((g) => g.eligible);
   const executable = !manifest || views.every((g) => g.eligible);
-  const originals = groups
-    .filter((_, i) => views[i]!.eligible)
-    .map((group) => ({
-      citationIds: group.map((c) => c.id).sort(),
-      rows: rows
-        .filter(
-          (d) =>
-            group.some((c) => c.id === d.citationId) &&
-            d.reviewerId === input.reviewerId,
-        )
-        .map((d) => ({
-          id: d.id,
-          stageId: d.stageId,
-          citationId: d.citationId,
-          reviewerId: d.reviewerId,
-          decision: d.decision,
-          exclusionReasonId: d.exclusionReasonId,
-          notes: d.notes,
-          labels: d.labels,
-          flaggedForDiscussion: d.flaggedForDiscussion,
-          assignmentId: assignments.find(
-            (a) =>
-              a.citationId === d.citationId &&
-              a.stageId === d.stageId &&
-              a.reviewerId === d.reviewerId,
-          )!.id,
-        })),
-    }));
+  // Restoration uses its immutable manifest, never a newly found replacement.
+  const originals = manifest
+    ? []
+    : groups
+        .filter((_, i) => views[i]!.eligible)
+        .map((group) => ({
+          citationIds: group.map((c) => c.id).sort(),
+          rows: rows
+            .filter(
+              (d) =>
+                group.some((c) => c.id === d.citationId) &&
+                d.reviewerId === input.reviewerId,
+            )
+            .map((d) => {
+              const assignment = assignments.find(
+                (a) =>
+                  a.citationId === d.citationId &&
+                  a.stageId === d.stageId &&
+                  a.reviewerId === d.reviewerId &&
+                  a.status === "COMPLETED",
+              );
+              if (!assignment)
+                throw invalidState(
+                  "Validated screening assignment is missing; preview again",
+                );
+              return {
+                id: d.id,
+                stageId: d.stageId,
+                citationId: d.citationId,
+                reviewerId: d.reviewerId,
+                decision: d.decision,
+                exclusionReasonId: d.exclusionReasonId,
+                notes: d.notes,
+                labels: d.labels,
+                flaggedForDiscussion: d.flaggedForDiscussion,
+                assignmentId: assignment.id,
+              };
+            }),
+        }));
   // The fingerprint covers all current rows, including co-reviewer changes, but those
   // values never enter the response, signed payload, recovery manifest, or recovery audit.
   const fingerprint = digest({
@@ -433,6 +490,7 @@ async function inspect(
     target,
     rows,
     assignments,
+    retainedAssignments,
     results,
     resultHistory,
     conflicts,
@@ -658,6 +716,16 @@ export async function executeRecovery(
         await tx.$queryRaw(
           Prisma.sql`SELECT "id" FROM "Citation" WHERE "id" IN (${Prisma.join(ids)}) ORDER BY "id" FOR UPDATE`,
         );
+      const assignmentIds = [
+        ...new Set(
+          (state.manifest?.groups ?? state.originals).flatMap((group) =>
+            group.rows.map((row) => row.assignmentId),
+          ),
+        ),
+      ].sort();
+      if (assignmentIds.length)
+        await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ScreeningAssignment"
+          WHERE "id" IN (${Prisma.join(assignmentIds)}) ORDER BY "id" FOR UPDATE`);
       state = await inspect(tx, ctx, guidelineId, input, claims.withdrawalId);
       if (
         state.fingerprint !== claims.fingerprint ||
@@ -698,18 +766,25 @@ export async function executeRecovery(
           const previous = await tx.screeningDecision.findUniqueOrThrow({
             where: { id: row.id },
           });
+          const assignment = await tx.screeningAssignment.updateMany({
+            where: assignmentScope(
+              row,
+              claims.operation === "withdraw" ? "COMPLETED" : "PENDING",
+            ),
+            data: {
+              status: claims.operation === "withdraw" ? "PENDING" : "COMPLETED",
+            },
+          });
+          if (assignment.count !== 1)
+            throw invalidState(
+              "Retained screening assignment changed; nothing was changed. Preview again",
+            );
           const decision = await tx.screeningDecision.update({
             where: { id: row.id },
             data: {
               withdrawnAt: claims.operation === "withdraw" ? now : null,
               withdrawalId:
                 claims.operation === "withdraw" ? withdrawalId : null,
-            },
-          });
-          await tx.screeningAssignment.update({
-            where: { id: row.assignmentId },
-            data: {
-              status: claims.operation === "withdraw" ? "PENDING" : "COMPLETED",
             },
           });
           await audit.record(tx, {

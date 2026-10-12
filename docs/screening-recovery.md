@@ -38,6 +38,11 @@ once per abstract, including multiple copies in one PICO.
   inactive votes and pending assignment IDs, free review capacity and sufficient
   current quota. It reactivates those votes and reevaluates ordinary conflict or
   consensus state; it never overwrites another reviewer's work.
+- Retained assignment ID, reviewer, citation, stage and pending status must all
+  match. Missing assignments and replacement rows at the former keys are held,
+  never substituted. Execution locks retained rows and conditionally updates
+  their exact identity/status; a changed association rolls the whole transaction
+  back.
 - After the reviewer submits a fresh review, the existing unique decision key is
   reused and inactivity is cleared. Original values remain in the recovery
   manifest and append-only audits. Restoring that old batch is then blocked.
@@ -60,9 +65,12 @@ decision and assignment keys; restoration validates all of them.
 Local tests apply this migration only to disposable synthetic databases.
 Production requires a separately approved coordinated migration and application
 release, followed by a fresh preflight in the deployed version. Older application
-versions ignore inactivity markers and must not serve screening traffic after
-any recovery is applied. Rolling back application code after recovery therefore
-requires its own reviewed reconciliation plan.
+versions ignore inactivity markers. Drain or exclude every older application
+instance before enabling live recovery; none may remain during recovery.
+Schema-first compatibility lasts only until the first withdrawal marker is set.
+Rolling back application code after recovery or subsequent re-review requires
+its own reviewed reconciliation of votes, assignments, results, conflicts and
+downstream work.
 
 Before any live recovery, verify the exact guideline/pool/reviewer, read the fresh
 eligible and held counts, resolve held records separately, and retain the returned

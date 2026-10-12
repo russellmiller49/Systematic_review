@@ -182,6 +182,46 @@ test("administrator previews and applies one logical recovery on mobile, restore
       }),
     ).toBe(6);
     await expect(history).toContainText("Restored");
+    const fresh = await post(owner.request, `${base}/preview`, {
+      poolId: pool.id,
+      reviewerId,
+      reason: "Synthetic missing assignment association",
+    });
+    const secondWithdrawal = await post(owner.request, base, {
+      token: fresh.token,
+    });
+    const retained = await db.screeningAssignment.findFirstOrThrow({
+      where: { citationId: copies[0], reviewerId },
+    });
+    const ownerId = (
+      await db.user.findUniqueOrThrow({
+        where: { email: `recovery-owner-${stamp}@test.local` },
+      })
+    ).id;
+    await db.screeningAssignment.update({
+      where: { id: retained.id },
+      data: { reviewerId: ownerId },
+    });
+    const held = await post(owner.request, `${base}/restore-preview`, {
+      withdrawalId: secondWithdrawal.withdrawalId,
+      reason: "Inspect missing original assignment",
+    });
+    expect(held.token).toBeNull();
+    expect(held.groups[0].reasons).toContain("RETAINED_ASSIGNMENT_CHANGED");
+    await owner.reload();
+    await owner
+      .getByLabel("Reason for this recovery or restoration")
+      .fill("Inspect retained assignment keys");
+    await owner.getByRole("button", { name: "Preview restoration" }).click();
+    await expect(preflight).toContainText(
+      "Retained assignment is missing or its reviewer, citation, stage, or status changed",
+    );
+    await expect(
+      preflight.getByRole("button", { name: "Restore 0 logical reviews" }),
+    ).toBeDisabled();
+    expect(
+      await db.screeningAssignment.findUnique({ where: { id: retained.id } }),
+    ).toMatchObject({ reviewerId: ownerId, status: "PENDING" });
     await expectNoErrorOverlay(owner);
   } finally {
     await context.close();

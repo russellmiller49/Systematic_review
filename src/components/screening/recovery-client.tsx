@@ -49,6 +49,8 @@ const holds: Record<string, string> = {
     "The reviewer has missing, inactive, or differing votes",
   POOL_OR_GROUP_CHANGED: "Pool membership or linked records changed",
   WITHDRAWN_VOTE_CHANGED: "Retained vote or assignment changed",
+  RETAINED_ASSIGNMENT_CHANGED:
+    "Retained assignment is missing or its reviewer, citation, stage, or status changed",
   NO_REVIEW_CAPACITY: "All review slots are now filled",
   RESTORATION_EXCEEDS_QUOTA: "Restoring would exceed the current quota",
 };

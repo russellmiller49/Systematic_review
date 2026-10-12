@@ -815,3 +815,261 @@ it("holds differing active labels or discussion flags on linked copies", async (
   expect(p.token).toBeNull();
   expect(p.groups[0]!.reasons).toContain("INCONSISTENT_LINKED_STATE");
 });
+
+type AssignmentKey = "reviewer" | "stage" | "citation";
+async function assignmentChange(f: Fixture, key: AssignmentKey) {
+  const copy = f.groups[0]![0]!;
+  const assignment = await prisma.screeningAssignment.findUniqueOrThrow({
+    where: {
+      stageId_citationId_reviewerId: {
+        stageId: copy.stageId,
+        citationId: copy.id,
+        reviewerId: f.users[0]!.id,
+      },
+    },
+  });
+  const other = f.groups[0]!.find((c) => c.projectId !== copy.projectId)!;
+  const data =
+    key === "reviewer"
+      ? { reviewerId: f.users[2]!.id }
+      : key === "stage"
+        ? { stageId: other.stageId }
+        : { citationId: other.id };
+  return { assignment, data };
+}
+async function restoration(f: Fixture, withdrawalId: string) {
+  return recovery.previewRestoration(ownerCtx(f), f.guideline.id, {
+    withdrawalId,
+    reason: "Validate retained assignment identity",
+  });
+}
+async function recoverySnapshot(f: Fixture) {
+  return {
+    decisions: await rows(f),
+    assignments: await prisma.screeningAssignment.findMany({
+      where: { stage: { project: { parentProjectId: f.guideline.id } } },
+      orderBy: { id: "asc" },
+    }),
+    conflicts: await prisma.screeningConflict.findMany({
+      where: { stage: { project: { parentProjectId: f.guideline.id } } },
+      orderBy: { id: "asc" },
+    }),
+    ledger: await prisma.screeningWithdrawal.findMany({
+      where: { guidelineId: f.guideline.id },
+      orderBy: { id: "asc" },
+    }),
+    audits: await prisma.auditEvent.count({
+      where: {
+        project: {
+          OR: [{ id: f.guideline.id }, { parentProjectId: f.guideline.id }],
+        },
+      },
+    }),
+  };
+}
+
+it.each([
+  ["reviewer", true],
+  ["reviewer", false],
+  ["stage", true],
+  ["stage", false],
+  ["citation", true],
+  ["citation", false],
+] as const)(
+  "holds a changed retained assignment identity (%s; replacement=%s) without errors or writes",
+  async (key, replacement) => {
+    const f = await fixture(1);
+    await f.decide(0, 0, "EXCLUDE");
+    const batch = await withdraw(f);
+    const { assignment, data } = await assignmentChange(f, key);
+    await prisma.screeningAssignment.update({
+      where: { id: assignment.id },
+      data,
+    });
+    if (replacement)
+      await prisma.screeningAssignment.create({
+        data: {
+          stageId: assignment.stageId,
+          citationId: assignment.citationId,
+          reviewerId: assignment.reviewerId,
+          status: "PENDING",
+        },
+      });
+    const before = await recoverySnapshot(f);
+    const p = await restoration(f, batch.withdrawalId);
+    expect(p.token).toBeNull();
+    expect(p.summary).toMatchObject({ eligibleGroups: 0, heldGroups: 1 });
+    expect(p.groups[0]!.reasons).toContain("RETAINED_ASSIGNMENT_CHANGED");
+    expect(await recoverySnapshot(f)).toEqual(before);
+  },
+);
+
+it.each(["missing", "voided"] as const)(
+  "holds a %s retained assignment explicitly",
+  async (state) => {
+    const f = await fixture(1);
+    await f.decide(0, 0, "EXCLUDE");
+    const batch = await withdraw(f);
+    const { assignment } = await assignmentChange(f, "reviewer");
+    if (state === "missing")
+      await prisma.screeningAssignment.delete({ where: { id: assignment.id } });
+    else
+      await prisma.screeningAssignment.update({
+        where: { id: assignment.id },
+        data: { status: "VOIDED" },
+      });
+    const before = await recoverySnapshot(f);
+    const p = await restoration(f, batch.withdrawalId);
+    expect(p.token).toBeNull();
+    expect(p.groups[0]!.reasons).toContain("RETAINED_ASSIGNMENT_CHANGED");
+    expect(await recoverySnapshot(f)).toEqual(before);
+  },
+);
+
+it.each(["reviewer", "stage", "citation"] as const)(
+  "rejects a previously signed restoration after its assignment %s key changes",
+  async (key) => {
+    const f = await fixture(1);
+    await f.decide(0, 0, "EXCLUDE");
+    const batch = await withdraw(f);
+    const p = await restoration(f, batch.withdrawalId);
+    const { assignment, data } = await assignmentChange(f, key);
+    await prisma.screeningAssignment.update({
+      where: { id: assignment.id },
+      data,
+    });
+    const before = await recoverySnapshot(f);
+    await expect(
+      recovery.executeRecovery(ownerCtx(f), f.guideline.id, p.token!),
+    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    expect(await recoverySnapshot(f)).toEqual(before);
+  },
+);
+
+it.each(["reviewer", "stage", "citation"] as const)(
+  "rejects restoration when a racing transaction changes the retained %s key",
+  async (key) => {
+    const f = await fixture(1);
+    await f.decide(0, 0, "EXCLUDE");
+    const batch = await withdraw(f);
+    const p = await restoration(f, batch.withdrawalId);
+    const { assignment, data } = await assignmentChange(f, key);
+    let ready!: () => void;
+    let release!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const writer = prisma.$transaction(async (tx) => {
+      await tx.screeningAssignment.update({
+        where: { id: assignment.id },
+        data,
+      });
+      ready();
+      await barrier;
+    });
+    await locked;
+    const attempt = recovery
+      .executeRecovery(ownerCtx(f), f.guideline.id, p.token!)
+      .then(
+        (result) => ({ result, error: null }),
+        (error) => ({ result: null, error }),
+      );
+    try {
+      let blocked = false;
+      for (let i = 0; i < 150 && !blocked; i++) {
+        const [observed] = await prisma.$queryRaw<{ blocked: number }[]>`
+        SELECT count(*)::int AS blocked FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'
+        AND (query LIKE '%ScreeningAssignment%' OR query LIKE '%ScreeningStage%' OR query LIKE '%Citation%')`;
+        blocked = (observed?.blocked ?? 0) > 0;
+        if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(
+        blocked,
+        "Recovery must wait for the concurrent key mutation",
+      ).toBe(true);
+    } finally {
+      release();
+    }
+    await writer;
+    const outcome = await attempt;
+    expect(outcome.error).toMatchObject({ code: "INVALID_STATE" });
+    expect(
+      await prisma.screeningAssignment.findUnique({
+        where: { id: assignment.id },
+      }),
+    ).toMatchObject({ ...data, status: "PENDING" });
+    expect(
+      (await rows(f)).every(
+        (d) => d.withdrawnAt && d.withdrawalId === batch.withdrawalId,
+      ),
+    ).toBe(true);
+    expect(
+      await prisma.screeningWithdrawal.findUnique({
+        where: { id: batch.withdrawalId },
+      }),
+    ).toMatchObject({ restoredAt: null });
+    expect(
+      (await restoration(f, batch.withdrawalId)).groups[0]!.reasons,
+    ).toContain("RETAINED_ASSIGNMENT_CHANGED");
+  },
+);
+
+it.each(["reviewer", "stage", "citation"] as const)(
+  "conditional assignment writes roll back restoration if the %s key changes after final inspection",
+  async (key) => {
+    const f = await fixture(1);
+    await f.decide(0, 0, "EXCLUDE");
+    const batch = await withdraw(f);
+    const p = await restoration(f, batch.withdrawalId);
+    const ledger = await prisma.screeningWithdrawal.findUniqueOrThrow({
+      where: { id: batch.withdrawalId },
+    });
+    const manifest = ledger.manifest as {
+      groups: {
+        rows: {
+          assignmentId: string;
+          citationId: string;
+          stageId: string;
+          reviewerId: string;
+        }[];
+      }[];
+    };
+    const second = manifest.groups[0]!.rows[1]!;
+    const other = f.groups[0]!.find(
+      (c) =>
+        c.projectId !==
+        f.stages.find((s) => s.id === second.stageId)!.projectId,
+    )!;
+    const data =
+      key === "reviewer"
+        ? { reviewerId: f.users[2]!.id }
+        : key === "stage"
+          ? { stageId: other.stageId }
+          : { citationId: other.id };
+    const before = await recoverySnapshot(f);
+    const original = audit.record;
+    let calls = 0;
+    const spy = vi
+      .spyOn(audit, "record")
+      .mockImplementation(async (tx, input) => {
+        await original(tx, input);
+        if (++calls === 1)
+          await tx.screeningAssignment.update({
+            where: { id: second.assignmentId },
+            data,
+          });
+      });
+    try {
+      await expect(
+        recovery.executeRecovery(ownerCtx(f), f.guideline.id, p.token!),
+      ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await recoverySnapshot(f)).toEqual(before);
+  },
+);
