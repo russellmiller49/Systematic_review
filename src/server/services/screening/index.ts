@@ -286,7 +286,7 @@ export async function listStages(ctx: Ctx, projectId: string) {
             select: { citationId: true },
           }),
           prisma.screeningDecision.findMany({
-            where: { stageId: stage.id, citation: { status: "ACTIVE" } },
+            where: { stageId: stage.id, withdrawnAt: null, citation: { status: "ACTIVE" } },
             distinct: ["citationId"],
             select: { citationId: true },
           }),
@@ -533,7 +533,7 @@ export async function listAssignmentAdmin(
   });
   const decisionGroups = await prisma.screeningDecision.groupBy({
     by: ["reviewerId"],
-    where: { stageId: stage.id },
+    where: { stageId: stage.id, withdrawnAt: null },
     _count: { _all: true },
   });
   const reviewerIds = [...new Set(grouped.map((row) => row.reviewerId))];
@@ -805,6 +805,7 @@ export async function getQueue(
   const [myDecisions, visibleSuggestions] = await Promise.all([
     prisma.screeningDecision.findMany({
       where: {
+        withdrawnAt: null,
         stageId: stage.id,
         reviewerId: ctx.userId,
         citationId: { in: citationIds },
@@ -864,7 +865,7 @@ function navigatorStatusWhere(
         stageResults: { none: { stageId } },
       };
     case "DECIDED":
-      return { decisions: { some: { stageId, reviewerId } } };
+      return { decisions: { some: { stageId, reviewerId, withdrawnAt: null } } };
     case "ONE_REVIEWER":
       return {
         id: { in: oneReviewerCitationIds },
@@ -904,7 +905,7 @@ export async function getScreeningNavigator(
     .map(([id]) => id);
   const available: Prisma.CitationWhereInput = {
     id: { notIn: fullIds },
-    decisions: { none: { stageId, reviewerId: ctx.userId } },
+    decisions: { none: { stageId, reviewerId: ctx.userId, withdrawnAt: null } },
     NOT: {
       assignments: {
         some: { stageId, reviewerId: ctx.userId, status: "VOIDED" },
@@ -1003,7 +1004,7 @@ export async function getScreeningNavigator(
       take: 1,
     },
     decisions: {
-      where: { stageId: stage.id, reviewerId: ctx.userId },
+      where: { stageId: stage.id, reviewerId: ctx.userId, withdrawnAt: null },
       select: { decision: true, notes: true },
       take: 1,
     },
@@ -1157,12 +1158,12 @@ function overviewStatusWhere(
     case "NOT_STARTED":
       return {
         assignments: { some: activeAssignment },
-        decisions: { none: { stageId } },
+        decisions: { none: { stageId, withdrawnAt: null } },
         stageResults: { none: { stageId } },
       };
     case "IN_PROGRESS":
       return {
-        decisions: { some: { stageId } },
+        decisions: { some: { stageId, withdrawnAt: null } },
         stageResults: { none: { stageId } },
         conflicts: { none: { stageId, status: "OPEN" } },
       };
@@ -1415,7 +1416,7 @@ export async function batchExclude(
                 },
               }),
           decisions: {
-            none: { stageId: stage.id, reviewerId: ctx.userId },
+            none: { stageId: stage.id, reviewerId: ctx.userId, withdrawnAt: null },
           },
           stageResults: { none: { stageId: stage.id } },
         },
@@ -1504,7 +1505,7 @@ export async function createDecisionInTransaction(
       },
     },
   });
-  const alreadyReviewed = await tx.screeningDecision.findUnique({
+  const storedDecision = await tx.screeningDecision.findUnique({
     where: {
       stageId_citationId_reviewerId: {
         stageId: stage.id,
@@ -1513,6 +1514,7 @@ export async function createDecisionInTransaction(
       },
     },
   });
+  const alreadyReviewed = storedDecision?.withdrawnAt === null ? storedDecision : null;
   const quota = auditMetadata?.pooledScreeningPoolId
     ? null
     : await quotaProgress(tx, { stageId: stage.id }, ctx.userId);
@@ -1581,7 +1583,7 @@ export async function createDecisionInTransaction(
     }
   }
 
-  const previous = alreadyReviewed;
+  const previous = storedDecision;
   const data = {
     decision: input.decision,
     exclusionReasonId,
@@ -1590,6 +1592,8 @@ export async function createDecisionInTransaction(
     notes: input.notes === undefined ? (previous?.notes ?? null) : input.notes,
     labels: input.labels ?? [],
     flaggedForDiscussion: input.flaggedForDiscussion ?? false,
+    withdrawnAt: null,
+    withdrawalId: null,
   };
   const decision = previous
     ? await tx.screeningDecision.update({ where: { id: previous.id }, data })
@@ -1623,6 +1627,8 @@ export async function createDecisionInTransaction(
           exclusionReasonId: previous.exclusionReasonId,
           notes: previous.notes,
           labels: previous.labels,
+          withdrawnAt: previous.withdrawnAt,
+          withdrawalId: previous.withdrawalId,
         }
       : undefined,
     newValue: {
@@ -1665,7 +1671,7 @@ export async function evaluateCitation(
   });
   const activeReviewers = new Set(activeAssignments.map((a) => a.reviewerId));
   const allDecisions = await tx.screeningDecision.findMany({
-    where: { stageId: stage.id, citationId },
+    where: { stageId: stage.id, citationId, withdrawnAt: null },
   });
   const decisions = allDecisions.filter((d) =>
     activeReviewers.has(d.reviewerId),
@@ -1799,7 +1805,7 @@ export async function visibleDecisionsFor(
   citationId: string,
 ) {
   const decisions = await prisma.screeningDecision.findMany({
-    where: { stageId: stage.id, citationId },
+    where: { stageId: stage.id, citationId, withdrawnAt: null },
     include: decisionInclude,
     orderBy: { createdAt: "asc" },
   });
@@ -1848,6 +1854,7 @@ export async function listConflicts(
       ? []
       : await prisma.screeningDecision.findMany({
           where: {
+            withdrawnAt: null,
             OR: conflicts.map((c) => ({
               stageId: c.stageId,
               citationId: c.citationId,

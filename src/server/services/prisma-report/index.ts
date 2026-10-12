@@ -57,7 +57,7 @@ export async function computePrismaCounts(projectId: string): Promise<PrismaRepo
       projectId,
       status: "ACTIVE",
       OR: [
-        { decisions: { some: { stage: { type: "TITLE_ABSTRACT" } } } },
+        { decisions: { some: { stage: { type: "TITLE_ABSTRACT" }, withdrawnAt: null } } },
         { stageResults: { some: { stage: { type: "TITLE_ABSTRACT" } } } },
       ],
     },
@@ -105,7 +105,7 @@ export async function computePrismaCounts(projectId: string): Promise<PrismaRepo
       projectId,
       status: "ACTIVE",
       OR: [
-        { decisions: { some: { stage: { type: "FULL_TEXT" } } } },
+        { decisions: { some: { stage: { type: "FULL_TEXT" }, withdrawnAt: null } } },
         { stageResults: { some: { stage: { type: "FULL_TEXT" } } } },
       ],
     },
@@ -141,6 +141,7 @@ export async function computePrismaCounts(projectId: string): Promise<PrismaRepo
     // Otherwise: first non-null exclusion reason among the citation's FT decisions.
     const decisions = await prisma.screeningDecision.findMany({
       where: {
+        withdrawnAt: null,
         stageId: { in: stageIds },
         citationId: { in: citationIds },
         exclusionReasonId: { not: null },

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Layers3, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiDelete, apiPut, ApiError } from "@/lib/api";
@@ -115,6 +116,11 @@ export function ScreeningPoolSection({
   return (
     <section className="space-y-3">
       <h2 className="text-lg font-medium">Combined abstract screening</h2>
+      {canManage && configuration?.pool && (
+        <Link href={`/projects/${guidelineId}/screening/recovery`} className="text-sm text-primary underline">
+          Preview an audited withdrawal of a reviewer’s Exclude votes
+        </Link>
+      )}
       {!configuration ? (
         <Skeleton className="h-72" />
       ) : (

@@ -1041,6 +1041,8 @@ model ScreeningDecision {
   notes                String?
   labels               String[]
   flaggedForDiscussion Boolean  @default(false)
+  withdrawnAt          DateTime?
+  withdrawalId         String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -2302,4 +2304,23 @@ model ScreeningQuota {
 
   @@unique([stageId, reviewerId])
   @@unique([poolId, reviewerId])
+}
+
+// Recovery records retain only the selected reviewer's original rows. No co-reviewer votes.
+model ScreeningWithdrawal {
+  id               String   @id
+  guidelineId      String
+  poolId           String
+  reviewerId       String
+  actorId          String
+  reason           String
+  manifest         Json
+  summary          Json
+  createdAt        DateTime @default(now())
+  restoredAt       DateTime?
+  restoreRequestId String?  @unique
+  restoreActorId   String?
+  restoreSummary   Json?
+
+  @@index([guidelineId, createdAt])
 }

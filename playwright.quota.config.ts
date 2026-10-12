@@ -13,6 +13,7 @@ export default defineConfig({
     "screening-quotas.spec.ts",
     "pooled-open-queue.spec.ts",
     "happy-path.spec.ts",
+    "screening-recovery.spec.ts",
   ],
   workers: 1,
   use: { baseURL: `http://localhost:${port}`, trace: "retain-on-failure" },

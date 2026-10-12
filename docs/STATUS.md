@@ -1,4 +1,14 @@
-## Current state (2026-09-20) — same-study decisions during deduplication
+## Current state (2026-10-12) — audited pooled screening recovery
+
+Owners/admins can preflight and softly withdraw one reviewer's current pooled
+title/abstract Exclude votes, retaining decision rows, snapshots and audit history.
+Guarded whole-batch restoration is available while retained votes, membership,
+capacity and quota still permit it. Finalized/history/downstream/inconsistent
+groups are held. See [screening recovery](screening-recovery.md) for release gates
+and the additive migration requirement. This entry records implementation;
+it does not confirm a production migration, release or live recovery.
+
+## Previous state (2026-09-20) — same-study decisions during deduplication
 
 Deduplication now offers **Same study / separate report** at pair level and a confirmed
 whole-cluster action. The additive `COMPANION` enum migration preserves each human judgment,

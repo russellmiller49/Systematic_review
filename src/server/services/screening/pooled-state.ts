@@ -49,7 +49,7 @@ export async function loadPooledState(
       select: { citationId: true, reviewerId: true, status: true },
     }),
     db.screeningDecision.findMany({
-      where,
+      where: { ...where, withdrawnAt: null },
       select: {
         citationId: true,
         reviewerId: true,

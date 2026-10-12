@@ -310,7 +310,7 @@ export async function getFullTextQueue(
         select: { status: true },
         take: 1,
       },
-      _count: { select: { decisions: { where: { stageId: ftStageId } } } },
+      _count: { select: { decisions: { where: { stageId: ftStageId, withdrawnAt: null } } } },
     },
     orderBy: { createdAt: "asc" },
   });
