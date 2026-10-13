@@ -11,15 +11,39 @@ import { loadPooledCitationGroups, loadPooledState } from "./pooled-state";
 import { lockScreeningStages, quotaProgress } from "./quotas";
 import { evaluateCitation } from "./index";
 import { digest, readPlan, signPlan } from "./recovery-token";
+import {
+  consensusSnapshotSchema,
+  verifiedConsensusSnapshot,
+  verifiedConsensusRestorationHistory,
+  type ResultAudit,
+} from "./consensus-recovery";
 
-export const withdrawalPreviewSchema = z.object({
-  poolId: z.string().min(1),
-  reviewerId: z.string().min(1),
+const externalUseClearanceSchema = z.object({
+  confirmed: z.literal(true),
   reason: z.string().trim().min(3).max(2000),
 });
+
+export const withdrawalPreviewSchema = z
+  .object({
+    poolId: z.string().min(1),
+    reviewerId: z.string().min(1),
+    reason: z.string().trim().min(3).max(2000),
+    mode: z.enum(["unfinalized", "consensus"]).default("unfinalized"),
+    externalUseClearance: externalUseClearanceSchema.optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.mode === "consensus" && !input.externalUseClearance)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["externalUseClearance"],
+        message:
+          "Explicit external-use clearance is required for consensus recovery",
+      });
+  });
 export const restorationPreviewSchema = z.object({
   withdrawalId: z.string().min(1),
   reason: z.string().trim().min(3).max(2000),
+  externalUseClearance: externalUseClearanceSchema.optional(),
 });
 export const executeRecoverySchema = z.object({
   token: z.string().min(1).max(20000),
@@ -35,6 +59,8 @@ const claimsSchema = z
     reviewerId: z.string(),
     reason: z.string().trim().min(3).max(2000),
     withdrawalId: z.string().min(1).optional(),
+    mode: z.enum(["unfinalized", "consensus"]).default("unfinalized"),
+    externalUseClearance: externalUseClearanceSchema.optional(),
     fingerprint: z.string().length(64),
     expiresAt: z.number(),
   })
@@ -44,6 +70,10 @@ const claimsSchema = z
         ? Boolean(claims.withdrawalId)
         : claims.withdrawalId === undefined,
     "Recovery operation and batch scope must match",
+  )
+  .refine(
+    (claims) => claims.mode !== "consensus" || !!claims.externalUseClearance,
+    "Explicit external-use clearance is required",
   );
 type Input = z.infer<typeof withdrawalPreviewSchema>;
 const originalRowSchema = z.object({
@@ -58,17 +88,30 @@ const originalRowSchema = z.object({
   flaggedForDiscussion: z.boolean(),
   assignmentId: z.string(),
 });
-const manifestSchema = z.object({
-  version: z.literal(1),
-  projectIds: z.array(z.string()),
-  stageIds: z.array(z.string()),
-  groups: z.array(
-    z.object({
-      citationIds: z.array(z.string()),
-      rows: z.array(originalRowSchema),
-    }),
-  ),
+const originalGroupSchema = z.object({
+  citationIds: z.array(z.string()),
+  rows: z.array(originalRowSchema),
 });
+const manifestSchema = z.discriminatedUnion("version", [
+  z.object({
+    version: z.literal(1),
+    projectIds: z.array(z.string()),
+    stageIds: z.array(z.string()),
+    groups: z.array(
+      originalGroupSchema.extend({ consensus: z.undefined().optional() }),
+    ),
+  }),
+  z.object({
+    version: z.literal(2),
+    mode: z.literal("consensus"),
+    externalUseClearance: externalUseClearanceSchema,
+    projectIds: z.array(z.string()),
+    stageIds: z.array(z.string()),
+    groups: z.array(
+      originalGroupSchema.extend({ consensus: consensusSnapshotSchema }),
+    ),
+  }),
+]);
 function assignmentScope(
   row: z.infer<typeof originalRowSchema>,
   status: "PENDING" | "COMPLETED",
@@ -181,6 +224,8 @@ async function inspect(
   if (batch?.restoredAt)
     throw invalidState("This withdrawal has already been restored");
   const manifest = batch ? manifestSchema.parse(batch.manifest) : null;
+  if (manifest && (manifest.version === 2) !== (input.mode === "consensus"))
+    throw invalidState("Recovery mode does not match the retained batch");
   const target = await db.screeningDecision.findMany({
     where: manifest
       ? { id: { in: manifest.groups.flatMap((g) => g.rows.map((r) => r.id)) } }
@@ -213,8 +258,8 @@ async function inspect(
   // Reopening deletes a materialized result, but does not erase its history.
   // Retained result audits therefore also hold the group for owner review.
   const resultHistory = citationIds.length
-    ? await db.$queryRaw<{ id: string; citationId: string }[]>(Prisma.sql`
-    SELECT "id", COALESCE("newValue"->>'citationId', "previousValue"->>'citationId') AS "citationId"
+    ? await db.$queryRaw<ResultAudit[]>(Prisma.sql`
+    SELECT "id", "entityId", "action", "previousValue", "newValue", "metadata", "reason", "createdAt", "userId", COALESCE("newValue"->>'citationId', "previousValue"->>'citationId') AS "citationId"
     FROM "AuditEvent" WHERE "projectId" IN (${Prisma.join(family.projectIds)})
     AND "entityType" = 'CitationStageResult'
     AND COALESCE("newValue"->>'citationId', "previousValue"->>'citationId') IN (${Prisma.join(citationIds)})
@@ -321,8 +366,85 @@ async function inspect(
     );
     if (new Set(metadataSignatures).size > 1)
       reasons.push("INCONSISTENT_LINKED_STATE");
-    if (results.some(inGroup)) reasons.push("FINALIZED_STAGE_RESULT");
-    if (resultHistory.some(inGroup)) reasons.push("FINALIZED_STAGE_HISTORY");
+    const coReviewerFingerprint = digest({
+      decisions: rows.filter(
+        (r) => inGroup(r) && r.reviewerId !== input.reviewerId,
+      ),
+      assignments: assignments.filter(
+        (r) => inGroup(r) && r.reviewerId !== input.reviewerId,
+      ),
+    });
+    const stageByCitation = new Map(
+      group.map((c) => [
+        c.id,
+        family.stages.find((s) => s.projectId === c.projectId)!.id,
+      ]),
+    );
+    const stagePolicyFingerprint = digest(
+      family.stages.map((s) => [
+        s.id,
+        s.type,
+        s.reviewersPerCitation,
+        s.blinded,
+        s.maybeGeneratesConflict,
+      ]),
+    );
+    const liveReviewers = new Map(
+      states[index]!.rows.map((row, i) => [
+        group[i]!.id,
+        row.liveDecisions.map((d) => d.reviewerId),
+      ]),
+    );
+    const consensus =
+      input.mode === "consensus" && !manifest
+        ? verifiedConsensusSnapshot(
+            results.filter(inGroup),
+            resultHistory.filter(inGroup),
+            ids,
+            stageByCitation,
+            coReviewerFingerprint,
+            stagePolicyFingerprint,
+            liveReviewers,
+          )
+        : null;
+    // Only this exact two-review automatic exclusion provenance can reopen a result.
+    const consensusCoverage =
+      family.stages.every((s) => s.reviewersPerCitation === 2) &&
+      states[index]!.rows.every(
+        (row) =>
+          row.liveDecisions.length === 2 &&
+          row.liveDecisions.every((d) => d.decision === "EXCLUDE"),
+      ) &&
+      !conflicts.some(inGroup);
+    const validConsensus = !!consensus && consensusCoverage;
+    const validRestoreHistory =
+      manifest?.version === 2 &&
+      !!saved?.consensus &&
+      saved.consensus.coReviewerFingerprint === coReviewerFingerprint &&
+      saved.consensus.stagePolicyFingerprint === stagePolicyFingerprint &&
+      family.stages.every((s) => s.reviewersPerCitation === 2) &&
+      states[index]!.rows.every(
+        (row) =>
+          row.liveDecisions.length === 1 &&
+          row.liveDecisions[0]!.reviewerId !== input.reviewerId &&
+          row.liveDecisions[0]!.decision === "EXCLUDE",
+      ) &&
+      !conflicts.some(inGroup) &&
+      !results.some(inGroup) &&
+      verifiedConsensusRestorationHistory(
+        saved.consensus,
+        resultHistory.filter(inGroup),
+        batch!.id,
+      );
+    if (results.some(inGroup) && !validConsensus)
+      reasons.push("FINALIZED_STAGE_RESULT");
+    if (resultHistory.some(inGroup) && !validConsensus && !validRestoreHistory)
+      reasons.push("FINALIZED_STAGE_HISTORY");
+    if (
+      input.mode === "consensus" &&
+      !(manifest ? validRestoreHistory : validConsensus)
+    )
+      reasons.push("CONSENSUS_PROVENANCE_UNVERIFIED");
     if (
       conflicts.some(
         (r) => inGroup(r) && (r.adjudication || r.status === "RESOLVED"),
@@ -411,6 +533,8 @@ async function inspect(
         citations.find((c) => c.id === ids[0])?.title ?? "Unavailable abstract",
       copies: ids.length,
       decisionIds: own.map((d) => d.id),
+      consensus,
+      reopensFinalizedResults: validConsensus ? ids.length : 0,
       reasons: [...new Set(reasons)],
       eligible: reasons.length === 0,
     };
@@ -448,6 +572,9 @@ async function inspect(
         .filter((_, i) => views[i]!.eligible)
         .map((group) => ({
           citationIds: group.map((c) => c.id).sort(),
+          consensus:
+            views.find((v) => v.citationIds.includes(group[0]!.id))
+              ?.consensus ?? undefined,
           rows: rows
             .filter(
               (d) =>
@@ -521,6 +648,10 @@ async function inspect(
         : 0,
       completedBefore: quota?.completed ?? null,
       remainingBefore: quota?.remaining ?? null,
+      finalizedResultsToReopen: eligible.reduce(
+        (sum, g) => sum + g.reopensFinalizedResults,
+        0,
+      ),
     },
   };
 }
@@ -528,7 +659,7 @@ async function inspect(
 export async function previewWithdrawal(
   ctx: Ctx,
   guidelineId: string,
-  raw: Input,
+  raw: z.input<typeof withdrawalPreviewSchema>,
 ) {
   const input = withdrawalPreviewSchema.parse(raw);
   return prisma.$transaction(
@@ -577,7 +708,10 @@ function previewResult(
       projects: state.family.pool.members.map((m) => m.project),
     },
     reviewerId: input.reviewerId,
-    groups: state.groups,
+    // Result snapshots and co-reviewer fingerprint remain server-side/ledger-only.
+    groups: state.groups.map(({ consensus: _, ...group }) => group),
+    mode: input.mode,
+    externalUseCleared: !!input.externalUseClearance,
     summary: state.summary,
   };
 }
@@ -592,11 +726,14 @@ export async function previewRestoration(
     where: { id: input.withdrawalId, guidelineId },
   });
   if (!batch) throw notFound("Withdrawal");
-  const selection = {
+  const retained = manifestSchema.parse(batch.manifest);
+  const selection = withdrawalPreviewSchema.parse({
     poolId: batch.poolId,
     reviewerId: batch.reviewerId,
     reason: input.reason,
-  };
+    mode: retained.version === 2 ? "consensus" : "unfinalized",
+    externalUseClearance: input.externalUseClearance,
+  });
   return prisma.$transaction(
     async (tx) => {
       const state = await inspect(tx, ctx, guidelineId, selection, batch.id);
@@ -646,6 +783,8 @@ export async function executeRecovery(
     poolId: claims.poolId,
     reviewerId: claims.reviewerId,
     reason: claims.reason,
+    mode: claims.mode,
+    externalUseClearance: claims.externalUseClearance,
   };
   return prisma.$transaction(
     async (tx) => {
@@ -741,7 +880,13 @@ export async function executeRecovery(
       const manifest =
         claims.operation === "withdraw"
           ? manifestSchema.parse({
-              version: 1,
+              version: input.mode === "consensus" ? 2 : 1,
+              ...(input.mode === "consensus"
+                ? {
+                    mode: "consensus",
+                    externalUseClearance: input.externalUseClearance,
+                  }
+                : {}),
               projectIds: state.family.projectIds,
               stageIds: state.family.stages.map((s) => s.id),
               groups: state.originals,
@@ -762,6 +907,38 @@ export async function executeRecovery(
         });
       const stages = new Map(state.family.stages.map((s) => [s.id, s]));
       for (const group of manifest.groups) {
+        if (claims.operation === "withdraw" && group.consensus) {
+          for (const {
+            creationAuditId: _,
+            creationAuditFingerprint: __,
+            ...result
+          } of group.consensus.results) {
+            const removed = await tx.citationStageResult.deleteMany({
+              where: {
+                id: result.id,
+                stageId: result.stageId,
+                citationId: result.citationId,
+                outcome: result.outcome,
+                resolvedVia: result.resolvedVia,
+                resolvedAt: new Date(result.resolvedAt),
+              },
+            });
+            if (removed.count !== 1)
+              throw invalidState(
+                "Consensus result changed; nothing was changed. Preview again",
+              );
+            await audit.record(tx, {
+              projectId: stages.get(result.stageId)!.projectId,
+              userId: ctx.userId,
+              entityType: "CitationStageResult",
+              entityId: result.id,
+              action: AuditActions.SCREENING_RESULT_REOPENED,
+              previousValue: result,
+              reason: input.reason,
+              metadata: { withdrawalId, mode: "consensus" },
+            });
+          }
+        }
         for (const row of group.rows) {
           const previous = await tx.screeningDecision.findUniqueOrThrow({
             where: { id: row.id },
@@ -826,13 +1003,14 @@ export async function executeRecovery(
                 metadata: { withdrawalId },
               });
             }
-          } else
-            await evaluateCitation(
-              tx,
-              ctx,
-              stages.get(row.stageId)!,
-              row.citationId,
-            );
+          }
+          // Recompute ordinary derived state in the same transaction after removal or restoration.
+          await evaluateCitation(
+            tx,
+            ctx,
+            stages.get(row.stageId)!,
+            row.citationId,
+          );
         }
       }
       const after = await quotaProgress(
@@ -876,6 +1054,14 @@ export async function executeRecovery(
           poolId: input.poolId,
           reviewerId: input.reviewerId,
           decisionIds: manifest.groups.flatMap((g) => g.rows.map((r) => r.id)),
+          mode: input.mode,
+          externalUseClearance: input.externalUseClearance,
+          reopenedResultIds:
+            claims.operation === "withdraw"
+              ? manifest.groups.flatMap(
+                  (g) => g.consensus?.results.map((r) => r.id) ?? [],
+                )
+              : [],
         },
       });
       return { withdrawalId, replayed: false, summary };
