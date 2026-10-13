@@ -93,6 +93,7 @@ export function verifiedConsensusSnapshot(
     };
     if (
       !creationMatches(events[0]!, snapshot) ||
+      events[0]!.createdAt.getTime() < result.resolvedAt.getTime() ||
       !liveReviewers.get(citationId)?.includes(events[0]!.userId)
     )
       return null;

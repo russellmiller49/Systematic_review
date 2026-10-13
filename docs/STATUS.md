@@ -8,7 +8,7 @@ finalization/history holds. Adjudication, uncertain history and downstream work
 remain held. Both consensus withdrawal and guarded whole-batch restoration require
 explicit external-use clearance; no clearance is inferred from general approval.
 
-Synthetic validation: **669 unit tests**, **498 integration tests**, and **2 recovery
+Synthetic validation: **669 unit tests**, **499 integration tests**, and **2 recovery
 browser tests** passed, including mobile/keyboard clearance gating, six linked
 copies across five PICOs, preservation, stale plans, races, rollback, retries and
 restoration limits. Typecheck, schema validation, production build and diff checks

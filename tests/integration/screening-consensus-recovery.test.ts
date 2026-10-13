@@ -286,6 +286,7 @@ it.each([
   "wrong-actor",
   "previous-value",
   "include-result",
+  "wrong-result-time",
   "adjudicated-result",
   "resolved-conflict",
   "single-reviewer",
@@ -342,6 +343,11 @@ it.each([
     await prisma.citationStageResult.update({
       where: { id: result.id },
       data: { outcome: "INCLUDE" },
+    });
+  if (change === "wrong-result-time")
+    await prisma.citationStageResult.update({
+      where: { id: result.id },
+      data: { resolvedAt: new Date(event.createdAt.getTime() + 60_000) },
     });
   if (change === "adjudicated-result")
     await prisma.citationStageResult.update({

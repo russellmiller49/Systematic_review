@@ -80,7 +80,7 @@ or selection clears the displayed plan. Unknown external use blocks this mode.
 
 Eligibility requires every linked copy to have exactly two completed agreeing
 Exclude reviews, an Exclude result with consensus origin, exactly one matching
-result-creation audit from a participating reviewer, no prior finalization/reopening
+result-creation audit from a participating reviewer with consistent timestamp ordering, no prior finalization/reopening
 history, no conflict/adjudication records, and no current stored downstream work.
 Missing, additional or mismatched history remains held. This does not relax the
 general historical holds. Every participating pooled stage must require two reviews.
