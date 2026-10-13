@@ -65,9 +65,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .fill("1");
   await dialog.getByRole("button", { name: "Save quotas" }).click();
   const progress = page.getByLabel("Your reviewer quota");
-  await expect(progress).toContainText(
-    "Target: 1 · Completed: 0 · Remaining: 1",
-  );
+  await expect(progress).toContainText("0 of 1 completed · 1 remaining");
   const navigator = page.getByRole("complementary", {
     name: "Article navigator",
   });
@@ -75,9 +73,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .getByRole("button", { name: /Gamma shared abstract/ })
     .click();
   await page.getByRole("button", { name: /^Include/ }).click();
-  await expect(progress).toContainText(
-    "Target: 1 · Completed: 1 · Remaining: 0",
-  );
+  await expect(progress).toContainText("1 of 1 completed · 0 remaining");
   await page.reload();
   await expect(progress).toContainText("Target reached");
   await page
@@ -91,7 +87,7 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .getByRole("spinbutton", { name: `Target for ${name}`, exact: true })
     .fill("2");
   await dialog.getByRole("button", { name: "Save quotas" }).click();
-  await expect(progress).toContainText("Remaining: 1");
+  await expect(progress).toContainText("1 remaining");
   await expect(
     navigator.getByRole("button", { name: /Alpha shared abstract/ }),
   ).toBeVisible();
@@ -114,10 +110,10 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .getByRole("checkbox", { name: `No target for ${name}`, exact: true })
     .check();
   await dialog.getByRole("button", { name: "Save quotas" }).click();
-  await expect(progress).toContainText("Target: No target · Completed: 1");
+  await expect(progress).toContainText("1 review completed");
   await expect(progress).not.toContainText("Remaining:");
   await page.getByRole("button", { name: /^Include/ }).click();
-  await expect(progress).toContainText("Completed: 2");
+  await expect(progress).toContainText("2 reviews completed");
   await expect(page.getByRole("button", { name: /^Include/ })).toBeEnabled();
 
   const guideline = await post(page.request, `/api/orgs/${org.id}/projects`, {
@@ -153,11 +149,9 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     .getByRole("spinbutton", { name: `Target for ${name}`, exact: true })
     .fill("1");
   await dialog.getByRole("button", { name: "Save quotas" }).click();
-  await expect(progress).toContainText("Completed: 0 · Remaining: 1");
+  await expect(progress).toContainText(/0 of \d+ completed · 1 remaining/);
   await page.getByRole("button", { name: /^Include/ }).click();
-  await expect(progress).toContainText(
-    "Target: 1 · Completed: 1 · Remaining: 0",
-  );
+  await expect(progress).toContainText("1 of 1 completed · 0 remaining");
   await page.reload();
   await expect(progress).toContainText("Target reached");
   await page.screenshot({
@@ -171,11 +165,11 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
   dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "No target", exact: true }).click();
   await dialog.getByRole("button", { name: "Save quotas" }).click();
-  await expect(progress).toContainText("Target: No target · Completed: 1");
+  await expect(progress).toContainText("1 review completed");
   await page.reload();
   await expect(progress).not.toContainText("Remaining:");
   await page.getByRole("button", { name: /^Include/ }).click();
-  await expect(progress).toContainText("Completed: 2");
+  await expect(progress).toContainText("2 reviews completed");
   await expect(page.getByRole("button", { name: /^Include/ })).toBeEnabled();
   await page.screenshot({
     path: "test-results/quota-pool-no-target.png",

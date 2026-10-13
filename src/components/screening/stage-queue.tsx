@@ -24,7 +24,8 @@ import {
   Spinner,
 } from "@/components/ui/misc";
 import { CitationCard } from "@/components/citations/citation-card";
-import { QuotaProgress } from "./quota-assignments-dialog";
+import { PersonalScreeningProgress } from "./personal-screening-progress";
+import { STAGE_LABELS } from "./types";
 import { DecisionControls } from "./decision-controls";
 import { ArticlePosition } from "./article-position";
 import { useScreeningShortcuts } from "./use-screening-shortcuts";
@@ -79,6 +80,7 @@ export function StageQueue({
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [progressRefreshing, setProgressRefreshing] = useState(true);
   const [navigatorError, setNavigatorError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [tally, setTally] = useState<Record<DecisionValue, number>>({
@@ -111,6 +113,7 @@ export function StageQueue({
 
   useEffect(() => {
     const generation = ++loadGenerationRef.current;
+    setProgressRefreshing(true);
     if (data === null) setLoading(true);
     setNavigatorError(null);
     const params = new URLSearchParams({
@@ -153,7 +156,10 @@ export function StageQueue({
         if (data === null) toast.error(message);
       })
       .finally(() => {
-        if (generation === loadGenerationRef.current) setLoading(false);
+        if (generation === loadGenerationRef.current) {
+          setLoading(false);
+          setProgressRefreshing(false);
+        }
       });
     // `reloadKey` deliberately forces a refresh after a decision or explicit retry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,11 +174,16 @@ export function StageQueue({
       batchExcludeOpen
     )
       return;
-    const timer = window.setInterval(() => {
+    const refresh = () => {
       if (document.visibilityState === "visible")
         setReloadKey((key) => key + 1);
-    }, 15000);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
   }, [inFlight, batchBusy, abstractEditing, excludeOpen, batchExcludeOpen]);
 
   function chooseFilter(next: ScreeningNavigatorFilter) {
@@ -552,33 +563,47 @@ export function StageQueue({
 
   if (data === null && loading) {
     return (
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)]">
-        <Skeleton className="h-[34rem] w-full" />
-        <div className="space-y-4">
-          <Skeleton className="h-6 w-48" />
-          <Skeleton className="h-1.5 w-full" />
-          <Skeleton className="h-96 w-full" />
+      <>
+        <PersonalScreeningProgress
+          quota={undefined}
+          context={`${STAGE_LABELS[stage.type]} · This project`}
+          loading
+        />
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)]">
+          <Skeleton className="h-[34rem] w-full" />
+          <div className="space-y-4">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-1.5 w-full" />
+            <Skeleton className="h-96 w-full" />
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
   if (data === null && navigatorError) {
     return (
-      <EmptyState
-        icon={TriangleAlert}
-        title="Couldn't load your article list"
-        description={navigatorError}
-        action={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setReloadKey((key) => key + 1)}
-          >
-            <RefreshCw /> Try again
-          </Button>
-        }
-      />
+      <>
+        <PersonalScreeningProgress
+          quota={undefined}
+          context={`${STAGE_LABELS[stage.type]} · This project`}
+          error={navigatorError}
+        />
+        <EmptyState
+          icon={TriangleAlert}
+          title="Couldn't load your article list"
+          description={navigatorError}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setReloadKey((key) => key + 1)}
+            >
+              <RefreshCw /> Try again
+            </Button>
+          }
+        />
+      </>
     );
   }
 
@@ -592,7 +617,13 @@ export function StageQueue({
 
   return (
     <>
-      <QuotaProgress quota={data.quota} available={data.summary.undecided} />
+      <PersonalScreeningProgress
+        quota={data.quota}
+        available={data.summary.undecided}
+        context={`${STAGE_LABELS[stage.type]} · This project`}
+        refreshing={progressRefreshing || inFlight > 0 || batchBusy}
+        error={navigatorError}
+      />
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)]">
         <ArticleNavigator
           data={data}

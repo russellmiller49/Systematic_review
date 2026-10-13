@@ -1,3 +1,17 @@
+## Current state (2026-10-13) — prominent personal screening progress
+
+My screening now shows a shared personal-progress card with completed/assigned
+target/remaining counts, a labeled progress bar, and separate article availability.
+Values come directly from the authenticated queue's existing quota response;
+pooled abstracts retain one logical credit across linked copies. No quota means
+no invented target or totals; an unlimited quota still shows completed reviews.
+Loading/errors and cached refreshes are explicit. Saves, visible polling and
+window focus refresh counts, including after audited withdrawal and re-review.
+Scope/account navigation resets the workspace, and Admin view stays separate.
+
+See [personal progress contracts and verification](personal-screening-progress.md).
+No server counting, recovery, eligibility, schema, or production changes.
+
 ## Current state (2026-10-12) — screening scope and assignment clarity
 
 Dashboard/queue entry links now name the configured combined or individual screening scope.

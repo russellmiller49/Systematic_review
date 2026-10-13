@@ -287,8 +287,9 @@ test("configured scope, explicit entry, independent PICO switches, admin inspect
     );
     await expect(reviewer.getByRole("tab", { name: "Admin view", exact: true })).toHaveCount(0);
     await expect(reviewer.getByLabel("Your reviewer quota")).toContainText(
-      "Target: 400 · Completed: 0 · Remaining: 400 · Available to review: 1",
+      "0 of 400 completed · 400 remaining",
     );
+    await expect(reviewer.getByLabel("Your reviewer quota")).toContainText("Available to review: 1");
     await reviewer.setViewportSize({ width: 390, height: 844 });
     expect(
       await reviewer.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -297,7 +298,7 @@ test("configured scope, explicit entry, independent PICO switches, admin inspect
     await reviewer.getByRole("heading", { name: "Shared abstract", exact: true }).click();
     await reviewer.keyboard.press("i");
     await expect(reviewer.getByLabel("Your reviewer quota")).toContainText(
-      "Completed: 1 · Remaining: 399",
+      "1 of 400 completed · 399 remaining",
     );
     await reviewer.getByLabel("Filter article status").selectOption("MY_REVIEWED");
     await expect(
