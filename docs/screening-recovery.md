@@ -25,9 +25,9 @@ once per abstract, including multiple copies in one PICO.
 - Current owner/admin access to the guideline and every pooled PICO is required,
   along with the selected reviewer's current screening access throughout the
   family and active organization membership.
-- Groups with final results, retained finalized-result audits, resolved or
+- Standard recovery holds groups with final results, retained finalized-result audits, resolved or
   adjudicated conflicts, downstream work, or inconsistent linked state are
-  held. This workflow never reopens outcomes, deletes history, or adjudicates.
+  held. Standard recovery never reopens outcomes, deletes history, or adjudicates.
 - A ten-minute signed preflight is bound to its actor, guideline, pool, reviewer,
   reason and state fingerprint. Execution locks the corpus, stages, quota,
   participants' memberships and selected citations, then rechecks permissions
@@ -61,6 +61,53 @@ and the recovery-batch ledger. Historical identity fields in the ledger are
 scalars deliberately: changing or deleting the live pool must not cascade-delete
 the recovery evidence. The manifest records exact citation, stage, reviewer,
 decision and assignment keys; restoration validates all of them.
+
+## Explicit automatic-consensus recovery
+
+The separate **Automatic two-review exclusion consensus only** mode withdraws
+only the selected reviewer's current title/abstract Exclude votes. It necessarily
+reopens dependent automatic exclusions: the remaining reviewer is preserved,
+but one review no longer satisfies a two-review stage. Include/Maybe choices and
+individual PICO queues remain outside this operation.
+
+Before either consensus withdrawal or restoration, an owner/admin must explicitly
+confirm that the review lead has cleared external exports, analyses and manuscript
+uses that depend on these exclusions, and provide clearance details. No clearance
+is inferred from approval to withdraw votes or from zero app-stored dependencies.
+The unchecked UI confirmation, details, mode and reason are bound to the signed
+preflight and recorded in the private recovery ledger/audit. A changed confirmation
+or selection clears the displayed plan. Unknown external use blocks this mode.
+
+Eligibility requires every linked copy to have exactly two completed agreeing
+Exclude reviews, an Exclude result with consensus origin, exactly one matching
+result-creation audit from a participating reviewer with consistent timestamp ordering, no prior finalization/reopening
+history, no conflict/adjudication records, and no current stored downstream work.
+Missing, additional or mismatched history remains held. This does not relax the
+general historical holds. Every participating pooled stage must require two reviews.
+
+Execution rechecks the signed snapshot under the existing locks. It conditionally
+removes only the exact materialized consensus result identities/timestamps, writes
+reopening audits, softly withdraws only the target's votes, changes only their exact
+completed assignments to pending, and reevaluates derived state in one transaction.
+The version-2 JSON manifest retains original result IDs, fields, timestamps and
+creation audit fingerprints, the selected reviewer's original vote/assignment
+snapshots, and opaque hashes of the remaining work and stage policy. Other reviewers'
+vote values or notes do not enter preview responses, signed plans or recovery manifests.
+Logical quota credit decreases once per abstract, not once per linked copy.
+
+Whole-batch restoration requires fresh external-use clearance, unchanged original
+pool/group/assignment identities, unchanged remaining reviewer work and stage policy,
+one remaining Exclude review, no replacement reviews/results/conflicts/downstream
+work, available quota, and exactly the original creation audit plus this batch's
+matching reopening audit for each result. Extra history blocks restoration. Ordinary
+evaluation creates newly audited consensus results; original result identities stay
+in the immutable manifest and audits. Any failure rolls back the entire operation.
+Existing version-1 batches retain their standard recovery/restoration behavior.
+
+No new database migration is required for this extension. A draft implementation
+does not authorize deployment or live recovery: both require independent review,
+explicit release approval and resolved external-use clearance. Use synthetic test
+fixtures; never put live research identities or decisions in a public PR.
 
 Local tests apply this migration only to disposable synthetic databases.
 Production requires a separately approved coordinated migration and application

@@ -15,9 +15,11 @@ type Summary = {
   linkedDecisions: number;
   completedBefore: number | null;
   remainingBefore: number | null;
+  finalizedResultsToReopen?: number;
 };
 type Preview = {
   operation: "withdraw" | "restore";
+  mode: "unfinalized" | "consensus";
   token: string | null;
   expiresAt: string;
   reviewerId: string;
@@ -38,6 +40,8 @@ type Batch = {
   restoredAt: string | null;
 };
 const holds: Record<string, string> = {
+  CONSENSUS_PROVENANCE_UNVERIFIED:
+    "Automatic two-review exclusion consensus or its exact retained history could not be verified",
   INCONSISTENT_LINKED_STATE: "Linked screening records differ",
   FINALIZED_STAGE_RESULT: "A stage result is already final",
   FINALIZED_STAGE_HISTORY:
@@ -66,6 +70,9 @@ export function RecoveryClient({ guidelineId }: { guidelineId: string }) {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [reviewerId, setReviewerId] = useState("");
   const [reason, setReason] = useState("");
+  const [mode, setMode] = useState<"unfinalized" | "consensus">("unfinalized");
+  const [externalUseCleared, setExternalUseCleared] = useState(false);
+  const [clearanceReason, setClearanceReason] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -107,8 +114,22 @@ export function RecoveryClient({ guidelineId }: { guidelineId: string }) {
         await apiPost<Preview>(
           `${base}/recovery/${withdrawalId ? "restore-preview" : "preview"}`,
           withdrawalId
-            ? { withdrawalId, reason }
-            : { poolId: config?.pool?.id, reviewerId, reason },
+            ? {
+                withdrawalId,
+                reason,
+                externalUseClearance: externalUseCleared
+                  ? { confirmed: true, reason: clearanceReason }
+                  : undefined,
+              }
+            : {
+                poolId: config?.pool?.id,
+                reviewerId,
+                reason,
+                mode,
+                externalUseClearance: externalUseCleared
+                  ? { confirmed: true, reason: clearanceReason }
+                  : undefined,
+              },
         ),
       );
     } catch (e) {
@@ -155,9 +176,11 @@ export function RecoveryClient({ guidelineId }: { guidelineId: string }) {
         votes are preserved.
       </p>
       <p className="text-sm text-muted-foreground">
-        Preflight makes no changes. Finalized results, adjudication, downstream
-        work, and inconsistent linked records are held for separate review.
-        Restoration requires unchanged retained votes and available review
+        Preflight makes no changes. Standard recovery holds finalized results
+        and history. Consensus recovery requires explicit external-use clearance
+        and reopens only verified automatic exclusions requiring two reviews.
+        Adjudication, downstream work, and inconsistent linked records remain
+        held. Restoration requires unchanged retained votes and available review
         slots.
       </p>
       {error && (
@@ -224,7 +247,74 @@ export function RecoveryClient({ guidelineId }: { guidelineId: string }) {
               }}
             />
           </div>
-          <Button type="submit" disabled={busy || !reviewerId || !valid}>
+          <div className="space-y-1">
+            <Label htmlFor="recovery-mode">Recovery mode</Label>
+            <select
+              id="recovery-mode"
+              value={mode}
+              disabled={busy}
+              className="block w-full rounded border bg-background p-2"
+              onChange={(e) => {
+                setMode(e.target.value as typeof mode);
+                setPreview(null);
+              }}
+            >
+              <option value="unfinalized">
+                Unfinalized Exclude votes only
+              </option>
+              <option value="consensus">
+                Automatic two-review exclusion consensus only
+              </option>
+            </select>
+          </div>
+          <p className="text-sm">
+            Consensus recovery withdraws only the selected reviewer's Exclude
+            votes. The dependent completed exclusions return to awaiting another
+            review; other reviewers' work and original result history remain.
+            Include and Maybe votes are preserved.
+          </p>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={externalUseCleared}
+              disabled={busy}
+              onChange={(e) => {
+                setExternalUseCleared(e.target.checked);
+                setPreview(null);
+              }}
+            />
+            Review lead confirmed that no external exports, analyses, or
+            manuscript use depend on these exclusions. Required for consensus
+            withdrawal or restoration.
+          </label>
+          {externalUseCleared && (
+            <div className="space-y-1">
+              <Label htmlFor="recovery-clearance">
+                External-use clearance details
+              </Label>
+              <Input
+                id="recovery-clearance"
+                value={clearanceReason}
+                disabled={busy}
+                minLength={3}
+                maxLength={2000}
+                onChange={(e) => {
+                  setClearanceReason(e.target.value);
+                  setPreview(null);
+                }}
+              />
+            </div>
+          )}
+          <Button
+            type="submit"
+            disabled={
+              busy ||
+              !reviewerId ||
+              !valid ||
+              (mode === "consensus" &&
+                (!externalUseCleared || clearanceReason.trim().length < 3))
+            }
+          >
             Preview withdrawal
           </Button>
         </form>
@@ -250,6 +340,13 @@ export function RecoveryClient({ guidelineId }: { guidelineId: string }) {
             {preview.summary.heldGroups} held; {preview.summary.linkedDecisions}{" "}
             linked votes to change.
           </p>
+          {!!preview.summary.finalizedResultsToReopen && (
+            <p>
+              {preview.summary.finalizedResultsToReopen} automatic consensus
+              results will reopen. The other review remains; another independent
+              review is required.
+            </p>
+          )}
           <p>
             Current logical credit:{" "}
             {preview.summary.completedBefore ?? "No saved quota"}; quota

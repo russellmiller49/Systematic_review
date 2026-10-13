@@ -1,3 +1,21 @@
+## Current state (2026-10-13) — consensus-only recovery preparation
+
+An explicit owner/admin recovery mode can preflight automatic two-review exclusion
+consensus, retain exact original result snapshots/provenance, softly withdraw only
+the selected reviewer's current Exclude votes, reopen dependent results and their
+assignments, and recompute derived state atomically. Standard recovery keeps its
+finalization/history holds. Adjudication, uncertain history and downstream work
+remain held. Both consensus withdrawal and guarded whole-batch restoration require
+explicit external-use clearance; no clearance is inferred from general approval.
+
+Synthetic validation: **669 unit tests**, **499 integration tests**, and **2 recovery
+browser tests** passed, including mobile/keyboard clearance gating, six linked
+copies across five PICOs, preservation, stale plans, races, rollback, retries and
+restoration limits. Typecheck, schema validation, production build and diff checks
+passed. See [recovery boundaries](screening-recovery.md). No new migration. This is
+draft engineering preparation, not authorization or confirmation of deployment or
+live consensus recovery; independent review and release approval remain required.
+
 ## Current state (2026-10-12) — screening scope and assignment clarity
 
 Dashboard/queue entry links now name the configured combined or individual screening scope.
