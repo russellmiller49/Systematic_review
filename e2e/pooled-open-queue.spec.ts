@@ -179,9 +179,8 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
       name: "Selected screening article",
     });
     const progress = reviewer.getByLabel("Your reviewer quota");
-    await expect(progress).toContainText(
-      "Target: 3 · Completed: 0 · Remaining: 3 · Available to review: 65",
-    );
+    await expect(progress).toContainText("Available to review: 65");
+    await expect(progress).toContainText("0 of 3 completed · 3 remaining");
     await expect(navigator.getByRole("listitem")).toHaveCount(50);
     await expect(
       reviewer.getByRole("button", { name: "Reviewer quotas", exact: true }),
@@ -247,9 +246,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
       fullPage: true,
     });
     await article.getByRole("button", { name: /^Maybe/ }).click();
-    await expect(progress).toContainText(
-      "Completed: 1 · Remaining: 2 · Available to review: 64",
-    );
+    await expect(progress).toContainText(/1 of \d+ completed · 2 remaining/);
     await expect(
       navigator.getByRole("button", { name: /Open abstract 037/ }),
     ).toHaveCount(0);
@@ -284,7 +281,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
       "Review eligibility with the group",
     );
     await article.getByRole("button", { name: /^Include/ }).click();
-    await expect(progress).toContainText("Completed: 1 · Remaining: 2");
+    await expect(progress).toContainText(/1 of \d+ completed · 2 remaining/);
     await expect(article).toContainText("Your decision: include");
     await navigator
       .getByLabel("Filter article status")
@@ -321,7 +318,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
     await expect(
       navigator.getByRole("button", { name: /Open abstract 001/ }),
     ).toHaveCount(0);
-    await expect(progress).toContainText("Completed: 1 · Remaining: 2");
+    await expect(progress).toContainText(/1 of \d+ completed · 2 remaining/);
     expect(
       await db.screeningAssignment.count({
         where: { citationId: { in: stale.citationIds }, reviewerId },
@@ -370,7 +367,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
       .selectOption("AVAILABLE");
     await choose(reviewer, "002");
     await reviewer.keyboard.press("1");
-    await expect(progress).toContainText("Completed: 2 · Remaining: 1");
+    await expect(progress).toContainText(/2 of \d+ completed · 1 remaining/);
     const quick = await db.screeningDecision.findMany({
       where: {
         reviewerId,
@@ -409,9 +406,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
       where: { projectId: pico1.id },
     });
     await reviewer.goto(`/projects/${pico1.id}/screening`);
-    await expect(progress).toContainText(
-      "Target: 4 · Completed: 0 · Remaining: 4",
-    );
+    await expect(progress).toContainText("0 of 4 completed · 4 remaining");
     await expect(navigator.getByRole("listitem")).toHaveCount(50);
     await choose(reviewer, "037");
     await reviewer.keyboard.press("ArrowRight");
@@ -451,20 +446,20 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
     await article.getByLabel("Reviewer note").fill("Independent PICO 1 note");
     await reviewer.keyboard.press("Escape");
     await reviewer.keyboard.press("m");
-    await expect(progress).toContainText("Completed: 1 · Remaining: 3");
+    await expect(progress).toContainText(/1 of \d+ completed · 3 remaining/);
     await navigator.getByLabel("Filter article status").selectOption("DECIDED");
     await expect(article.getByLabel("Reviewer note")).toHaveValue(
       "Independent PICO 1 note",
     );
     await article.getByRole("button", { name: /^Include/ }).click();
     await expect(article).toContainText("Your decision: include");
-    await expect(progress).toContainText("Completed: 1 · Remaining: 3");
+    await expect(progress).toContainText(/1 of \d+ completed · 3 remaining/);
     await navigator
       .getByLabel("Filter article status")
       .selectOption("UNDECIDED");
     await choose(reviewer, "038");
     await reviewer.keyboard.press("1");
-    await expect(progress).toContainText("Completed: 2 · Remaining: 2");
+    await expect(progress).toContainText(/2 of \d+ completed · 2 remaining/);
     await choose(reviewer, "039");
     await article.getByRole("button", { name: /^Exclude / }).click();
     const exclusion = reviewer.getByRole("dialog");
@@ -472,7 +467,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
     await exclusion
       .getByLabel("Exclusion reason subgroup")
       .selectOption({ index: 1 });
-    await expect(progress).toContainText("Completed: 3 · Remaining: 1");
+    await expect(progress).toContainText(/3 of \d+ completed · 1 remaining/);
     const individualQueue = await get(owner.request, `${ordinary}/navigator`);
     const shared = individualQueue.items.find(
       (i: { citation: { title: string } }) =>
@@ -486,7 +481,7 @@ test("pooled reviewer freely navigates, skips, screens a non-first abstract, and
     await choose(reviewer, "040");
     await expect(article).toContainText("1 of 2 required reviews submitted");
     await reviewer.keyboard.press("i");
-    await expect(progress).toContainText("Completed: 4 · Remaining: 0");
+    await expect(progress).toContainText(/4 of \d+ completed · 0 remaining/);
     const individualDecisions = await db.screeningDecision.findMany({
       where: { reviewerId, citation: { projectId: pico1.id } },
       include: { citation: true, exclusionReason: true },

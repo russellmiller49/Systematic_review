@@ -20,10 +20,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScreeningScopePanel } from "./scope-panel";
 import { pooledScopeLabel } from "@/lib/screening-scope";
 import { useScreeningShortcuts } from "./use-screening-shortcuts";
-import {
-  QuotaAssignmentsDialog,
-  QuotaProgress,
-} from "./quota-assignments-dialog";
+import { QuotaAssignmentsDialog } from "./quota-assignments-dialog";
+import { PersonalScreeningProgress } from "./personal-screening-progress";
 import { PooledAssignDialog } from "./pooled-assign-dialog";
 import type {
   DecisionValue,
@@ -116,14 +114,19 @@ export function PooledScreeningWorkspace({
 
   useEffect(() => {
     if (busy || excludeOpen) return;
-    const timer = window.setInterval(() => {
+    const refresh = () => {
       if (
         document.visibilityState === "visible" &&
         !document.querySelector('[role="dialog"]')
       )
         setReloadKey((key) => key + 1);
-    }, 15000);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
   }, [busy, excludeOpen]);
 
   useEffect(() => {
@@ -329,6 +332,16 @@ export function PooledScreeningWorkspace({
         )}
       </TabsList>
       <TabsContent value={view} className="space-y-4">
+        {view === "my-screening" && canScreen && (
+          <PersonalScreeningProgress
+            quota={queue?.quota}
+            available={queue?.summary.available}
+            context={`Title & abstract · ${pooledScopeLabel(pool.picos)}`}
+            loading={!queue && loading}
+            refreshing={Boolean(queue) && (loading || busy)}
+            error={error}
+          />
+        )}
         {view === "admin-view" && (
           <Alert>
             Admin inspection covers the shared pool, independently of your
@@ -340,19 +353,6 @@ export function PooledScreeningWorkspace({
         )}
         {queue && (
           <>
-            {view === "my-screening" && (
-              <QuotaProgress
-                quota={queue.quota}
-                available={queue.summary.available}
-              />
-            )}
-            {view === "my-screening" && !queue.quota && (
-              <Alert>
-                {queue.summary.available === 0 && queue.summary.myReviewed === 0
-                  ? "No personal target or available fixed assignment is configured for you in this pool. Ask an Owner or Admin to confirm your screening assignment. An empty queue does not confirm that your assignment is complete."
-                  : "You have no personal target in this pool. Existing fixed assignments and your saved reviews remain available; an Owner or Admin can confirm your workload and give you a target for the open queue."}
-              </Alert>
-            )}
             {view === "admin-view" && queue.adminSummary && (
               <details
                 open
