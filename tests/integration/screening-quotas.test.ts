@@ -39,7 +39,7 @@ async function setup(target = 2) {
 describe("shared abstract reviewer quotas", () => {
   beforeAll(resetDb);
 
-  it("offers any abstract without preassigning records, counts once, and stops at the target", async () => {
+  it("offers any abstract without preassigning records, counts once, and requires opt-in beyond the target", async () => {
     const { project, stage, reviewer1, citations } = await setup(1);
     const scope = { stageId: stage.id };
     const me = ctx(reviewer1.id);
@@ -69,7 +69,7 @@ describe("shared abstract reviewer quotas", () => {
       completed: 1,
       remaining: 0,
     });
-    expect((await screening.getQueue(me, project.id, stage.id)).total).toBe(0);
+    expect((await screening.getQueue(me, project.id, stage.id)).total).toBe(2);
     await expect(
       screening.createDecision(me, project.id, stage.id, {
         citationId: citations[0]!.id,
@@ -86,6 +86,172 @@ describe("shared abstract reviewer quotas", () => {
       decision: "EXCLUDE",
       notes: "Updated",
     });
+  });
+
+  it("continues beyond a positive target without changing targets or counting duplicate submissions", async () => {
+    const { project, stage, reviewer1, citations } = await setup(1);
+    const me = ctx(reviewer1.id);
+    const decide = (citationId: string, continueBeyondQuota = false) =>
+      screening.createDecision(me, project.id, stage.id, {
+        citationId,
+        decision: "INCLUDE",
+        continueBeyondQuota,
+      });
+    await decide(citations[0]!.id);
+    await expect(decide(citations[1]!.id)).rejects.toMatchObject({
+      code: "INVALID_STATE",
+    });
+    await prisma.citation.update({
+      where: { id: citations[1]!.id },
+      data: { abstract: "" },
+    });
+    await addCitationAbstract(me, project.id, citations[1]!.id, {
+      abstract: "Recovered after reaching the target",
+    });
+    await Promise.all([
+      decide(citations[1]!.id, true),
+      decide(citations[1]!.id, true),
+    ]);
+    expect(
+      await quotas.quotaProgress(prisma, { stageId: stage.id }, reviewer1.id),
+    ).toEqual({ target: 1, completed: 2, remaining: 0 });
+    expect(
+      await prisma.screeningDecision.count({ where: { stageId: stage.id } }),
+    ).toBe(2);
+    expect(
+      await prisma.auditEvent.count({
+        where: { projectId: project.id, action: "screening.quota.updated" },
+      }),
+    ).toBe(3);
+    await decide(citations[2]!.id, true);
+    const empty = await screening.getScreeningNavigator(
+      me,
+      project.id,
+      stage.id,
+      query,
+    );
+    expect(empty.summary.undecided).toBe(0);
+    expect(empty.quota).toEqual({ target: 1, completed: 3, remaining: 0 });
+  });
+
+  it("keeps two independent reviewers under concurrent opted-in submissions after each target is reached", async () => {
+    const { project, stage, reviewer1, reviewer2, owner, citations } =
+      await setup(1);
+    const reviewers = [reviewer1, reviewer2, owner];
+    for (let i = 0; i < reviewers.length; i++) {
+      await screening.createDecision(
+        ctx(reviewers[i]!.id),
+        project.id,
+        stage.id,
+        {
+          citationId: citations[i]!.id,
+          decision: "INCLUDE",
+        },
+      );
+    }
+    const shared = await createTestCitation(project.id);
+    const results = await Promise.allSettled(
+      reviewers.map((user) =>
+        screening.createDecision(ctx(user.id), project.id, stage.id, {
+          citationId: shared.id,
+          decision: "MAYBE",
+          continueBeyondQuota: true,
+        }),
+      ),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+    const votes = await prisma.screeningDecision.findMany({
+      where: { citationId: shared.id },
+    });
+    expect(new Set(votes.map((v) => v.reviewerId)).size).toBe(2);
+    for (const vote of votes) {
+      expect(
+        await quotas.quotaProgress(
+          prisma,
+          { stageId: stage.id },
+          vote.reviewerId,
+        ),
+      ).toEqual({ target: 1, completed: 2, remaining: 0 });
+    }
+  });
+
+  it("allows an opted-in batch beyond target and retains atomic rollback on a stale article", async () => {
+    const { project, stage, reviewer1, reviewer2, owner, citations } =
+      await setup(1);
+    const reason = await prisma.exclusionReason.create({
+      data: {
+        projectId: project.id,
+        label: "Outside scope",
+        stage: "TITLE_ABSTRACT",
+      },
+    });
+    await screening.createDecision(ctx(reviewer1.id), project.id, stage.id, {
+      citationId: citations[0]!.id,
+      decision: "INCLUDE",
+    });
+    const batch = {
+      citationIds: citations.slice(1).map((c) => c.id),
+      exclusionReasonId: reason.id,
+      continueBeyondQuota: true,
+    };
+    await screening.batchExclude(
+      ctx(reviewer1.id),
+      project.id,
+      stage.id,
+      batch,
+    );
+    expect(
+      await quotas.quotaProgress(prisma, { stageId: stage.id }, reviewer1.id),
+    ).toEqual({ target: 1, completed: 3, remaining: 0 });
+    await screening.createDecision(ctx(reviewer2.id), project.id, stage.id, {
+      citationId: citations[2]!.id,
+      decision: "INCLUDE",
+    });
+    const fresh = await createTestCitation(project.id);
+    await expect(
+      screening.batchExclude(ctx(owner.id), project.id, stage.id, {
+        ...batch,
+        citationIds: [fresh.id, citations[2]!.id],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    expect(
+      await prisma.screeningDecision.count({ where: { citationId: fresh.id } }),
+    ).toBe(0);
+  });
+
+  it("does not turn continuation into an assignment or override a zero-target pause or removed membership", async () => {
+    const { project, stage, reviewer1, reviewer2, owner, org, citations } =
+      await setup(0);
+    const input = {
+      citationId: citations[0]!.id,
+      decision: "INCLUDE" as const,
+      continueBeyondQuota: true,
+    };
+    await expect(
+      screening.createDecision(ctx(reviewer1.id), project.id, stage.id, input),
+    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    await prisma.screeningQuota.deleteMany({
+      where: { stageId: stage.id, reviewerId: reviewer2.id },
+    });
+    await expect(
+      screening.createDecision(ctx(reviewer2.id), project.id, stage.id, input),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await quotas.saveQuotas(
+      ctx(owner.id),
+      project.id,
+      { stageId: stage.id },
+      { reviewers: [{ reviewerId: reviewer1.id, target: 1 }] },
+    );
+    await prisma.organizationMember.update({
+      where: { orgId_userId: { orgId: org.id, userId: reviewer1.id } },
+      data: { status: "REMOVED" },
+    });
+    await expect(
+      screening.createDecision(ctx(reviewer1.id), project.id, stage.id, input),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(
+      await prisma.screeningDecision.count({ where: { stageId: stage.id } }),
+    ).toBe(0);
   });
 
   it("removes a conflicted abstract for everyone else and rejects stale third reviews", async () => {
@@ -147,14 +313,12 @@ describe("shared abstract reviewer quotas", () => {
       results.findIndex((r) => r.status === "rejected")
     ]!;
     const lastSlot = await Promise.allSettled(
-      citations
-        .slice(1)
-        .map((c) =>
-          screening.createDecision(ctx(loser.id), project.id, stage.id, {
-            citationId: c.id,
-            decision: "INCLUDE",
-          }),
-        ),
+      citations.slice(1).map((c) =>
+        screening.createDecision(ctx(loser.id), project.id, stage.id, {
+          citationId: c.id,
+          decision: "INCLUDE",
+        }),
+      ),
     );
     expect(lastSlot.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(
@@ -411,7 +575,7 @@ describe("shared abstract reviewer quotas", () => {
       poolId: pool.id,
     });
     expect(after.quota).toEqual({ target: 1, completed: 1, remaining: 0 });
-    expect(after.total).toBe(0);
+    expect(after.total).toBe(1);
     const loser = [reviewer1, reviewer2, owner][
       results.findIndex((r) => r.status === "rejected")
     ]!;
@@ -422,26 +586,24 @@ describe("shared abstract reviewer quotas", () => {
     expect(remaining.items[0]?.citationIds).not.toContain(a.id);
     expect(JSON.stringify(remaining)).not.toContain(winner.id);
     // The last abstract also leaves the pool when the two reviews disagree.
-    await quotas.saveQuotas(
-      ctx(owner.id),
-      guideline.id,
-      { poolId: pool.id },
-      {
-        reviewers: [owner, reviewer1, reviewer2].map((user) => ({
-          reviewerId: user.id,
-          target: 2,
-        })),
-      },
-    );
     const outstanding = remaining.items[0]!;
+    await expect(
+      pooled.createPooledDecision(ctx(winner.id), guideline.id, {
+        poolId: pool.id,
+        citationIds: outstanding.citationIds,
+        decision: "INCLUDE",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_STATE" });
     await pooled.createPooledDecision(ctx(reviewer1.id), guideline.id, {
       poolId: pool.id,
       citationIds: outstanding.citationIds,
+      continueBeyondQuota: true,
       decision: "INCLUDE",
     });
     await pooled.createPooledDecision(ctx(reviewer2.id), guideline.id, {
       poolId: pool.id,
       citationIds: outstanding.citationIds,
+      continueBeyondQuota: true,
       decision: "EXCLUDE",
       exclusionReasonLabel: remaining.reasons[0]!.label,
     });
@@ -456,9 +618,21 @@ describe("shared abstract reviewer quotas", () => {
       pooled.createPooledDecision(ctx(owner.id), guideline.id, {
         poolId: pool.id,
         citationIds: outstanding.citationIds,
+        continueBeyondQuota: true,
         decision: "INCLUDE",
       }),
     ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    expect(
+      (
+        await pooled.getPooledQueue(ctx(winner.id), guideline.id, {
+          poolId: pool.id,
+        })
+      ).quota,
+    ).toEqual({
+      target: 1,
+      completed: winner.id === owner.id ? 1 : 2,
+      remaining: 0,
+    });
     const replacementPicos = [];
     for (const title of ["Replacement one", "Replacement two"]) {
       const pico = await projects.createSubProject(

@@ -59,6 +59,7 @@ export const createPooledAssignmentsSchema = z.object({
 });
 
 export const createPooledDecisionSchema = z.object({
+  continueBeyondQuota: z.boolean().optional(),
   poolId: z.string().trim().min(1),
   citationIds: z
     .array(z.string().trim().min(1))
@@ -818,8 +819,16 @@ export async function createPooledDecision(
       throw invalidState(
         "This abstract has a final stage outcome. An administrator must reopen every linked record before revision.",
       );
-    if (!personal.hasReviewed && quota?.remaining === 0)
-      throw invalidState("Your review quota is complete");
+    if (!personal.hasReviewed && quota?.target === 0)
+      throw invalidState("New reviews are paused by your assigned target");
+    if (
+      !personal.hasReviewed &&
+      quota?.remaining === 0 &&
+      !input.continueBeyondQuota
+    )
+      throw invalidState(
+        "Your target is reached. Choose Continue screening to review more abstracts.",
+      );
     if (!personal.available && !personal.canRevise)
       throw forbidden(
         "You need a reviewer quota or live fixed assignments across every linked PICO to screen this abstract",
@@ -874,6 +883,7 @@ export async function createPooledDecision(
           {
             citationId: citation.id,
             decision: input.decision,
+            continueBeyondQuota: input.continueBeyondQuota,
             exclusionReasonId: reasonByProject.get(citation.projectId) ?? null,
             notes: input.notes,
             labels: [],

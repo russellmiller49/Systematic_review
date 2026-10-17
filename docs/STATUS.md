@@ -1,3 +1,15 @@
+## Current state (2026-10-17) — optional screening beyond positive targets
+
+Reviewers can choose **Continue screening** after reaching a positive personal target,
+for individual title/abstract queues and the configured combined pool. Completed/target
+and remaining-to-target counts stay authoritative; eligible articles remain visible after
+target completion. A session opt-in accompanies decision requests, including batches;
+without it the server still stops at the goal. Zero targets still pause new reviews.
+
+Existing assignments, one-credit pooled counting, independent-review capacity, stage locks,
+blinding, recovery and audit history remain in place. No schema or migration changes.
+See [continuation contract and verification](screening-beyond-quota.md).
+
 ## Current state (2026-10-13) — prominent personal screening progress
 
 My screening now shows a shared personal-progress card with completed/assigned

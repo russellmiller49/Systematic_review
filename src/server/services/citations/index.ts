@@ -135,7 +135,7 @@ export async function addCitationAbstract(
         const quota = stage ? await quotaProgress(tx, pool ? { poolId: pool.poolId } : { stageId: stage.id }, ctx.userId) : null;
         const completed = stage ? await tx.screeningAssignment.count({ where: { stageId: stage.id, citationId, status: "COMPLETED" } }) : 0;
         const result = stage ? await tx.citationStageResult.findUnique({ where: { stageId_citationId: { stageId: stage.id, citationId } } }) : null;
-        if (!stage || !quota || quota.remaining === 0 || completed >= stage.reviewersPerCitation || result) {
+        if (!stage || !quota || quota.target === 0 || completed >= stage.reviewersPerCitation || result) {
           throw forbidden("You can add an abstract only to a citation assigned or available to you");
         }
       }

@@ -42,6 +42,7 @@ export function PooledScreeningWorkspace({
   pool: { id: string; name: string; picos: PooledPico[] };
   showHeader?: boolean;
 }) {
+  const [continuing, setContinuing] = useState(false);
   const [queue, setQueue] = useState<PooledQueueResponse | null>(null);
   const [view, setView] = useState("my-screening");
   const [filter, setFilter] = useState<PooledNavigatorFilter>("AVAILABLE");
@@ -140,6 +141,16 @@ export function PooledScreeningWorkspace({
   const currentIndex =
     queue?.items.findIndex((item) => item.id === selectedId) ?? -1;
   const current = currentIndex < 0 ? null : queue!.items[currentIndex]!;
+  const continuationRequired = Boolean(
+    queue?.quota &&
+    queue.quota.target !== null &&
+    queue.quota.target > 0 &&
+    queue.quota.remaining === 0 &&
+    !continuing,
+  );
+  const canDecide = Boolean(
+    current?.canDecide && (current.myDecision || !continuationRequired),
+  );
   const reasons =
     queue?.reasons.map((reason) => ({
       id: reason.label,
@@ -190,7 +201,8 @@ export function PooledScreeningWorkspace({
   ) {
     if (
       view !== "my-screening" ||
-      !current?.canDecide ||
+      !current ||
+      !canDecide ||
       busyRef.current ||
       loading
     )
@@ -203,6 +215,7 @@ export function PooledScreeningWorkspace({
     try {
       await apiPost(endpoint, {
         poolId: pool.id,
+        continueBeyondQuota: continuing,
         citationIds: item.citationIds,
         decision,
         exclusionReasonLabel,
@@ -229,7 +242,7 @@ export function PooledScreeningWorkspace({
           : "Failed to save the pooled decision";
       toast.error(message);
       setExcludeOpen(false);
-      // Includes stale capacity, exhausted quota, changed membership and synchronization.
+      // Includes stale capacity, target reached without opt-in, changed membership and synchronization.
       setLoading(true);
       refresh();
     } finally {
@@ -247,7 +260,7 @@ export function PooledScreeningWorkspace({
   };
   useScreeningShortcuts({
     blocked: busy || loading || excludeOpen || helpOpen,
-    canDecide: view === "my-screening" && Boolean(current?.canDecide),
+    canDecide: view === "my-screening" && canDecide,
     reasons,
     onDecision: handleDecision,
     onQuickExclude: quickExclude,
@@ -334,6 +347,8 @@ export function PooledScreeningWorkspace({
       <TabsContent value={view} className="space-y-4">
         {view === "my-screening" && canScreen && (
           <PersonalScreeningProgress
+            continuing={continuing}
+            onContinue={() => setContinuing(true)}
             quota={queue?.quota}
             available={queue?.summary.available}
             context={`Title & abstract · ${pooledScopeLabel(pool.picos)}`}
@@ -563,11 +578,18 @@ export function PooledScreeningWorkspace({
                             This is an inspection view. Switch to My screening
                             to enter your own decision.
                           </Alert>
+                        ) : continuationRequired &&
+                          !current.myDecision &&
+                          current.canDecide ? (
+                          <Alert>
+                            Target reached. Choose Continue screening above to
+                            review more abstracts.
+                          </Alert>
                         ) : !current.canDecide ? (
                           <Alert>
                             This abstract is currently unavailable for a new
                             decision. Choose another article or ask an
-                            administrator to adjust your target.
+                            administrator to confirm your assignment.
                           </Alert>
                         ) : (
                           <>

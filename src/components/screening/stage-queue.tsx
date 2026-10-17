@@ -73,6 +73,7 @@ export function StageQueue({
 }) {
   const decisionsUrl = `/api/projects/${projectId}/screening/stages/${stage.id}/decisions`;
 
+  const [continuing, setContinuing] = useState(false);
   const [data, setData] = useState<ScreeningNavigatorResponse | null>(null);
   const [filter, setFilter] = useState<ScreeningNavigatorFilter>("UNDECIDED");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -253,6 +254,17 @@ export function StageQueue({
   const current =
     currentIndex >= 0 ? (data?.items[currentIndex] ?? null) : null;
 
+  const targetReached = Boolean(
+    data?.quota &&
+    data.quota.target !== null &&
+    data.quota.target > 0 &&
+    data.quota.remaining === 0,
+  );
+  const continuationRequired = targetReached && !continuing;
+  const canDecide = Boolean(
+    current?.canDecide && (current.myDecision || !continuationRequired),
+  );
+
   // A server refresh can replace the selection without going through selectArticle.
   // Hydrate the current reviewer's saved note so revisiting or revising an article never
   // makes the note appear lost (or accidentally clears it on the next decision).
@@ -331,7 +343,12 @@ export function StageQueue({
     noteText: string | null,
     exclusionReasonLabel?: string,
   ) {
-    if (!item.canDecide || handledRef.current.has(item.citation.id)) return;
+    if (
+      !item.canDecide ||
+      (!item.myDecision && continuationRequired) ||
+      handledRef.current.has(item.citation.id)
+    )
+      return;
 
     const itemIndex =
       data?.items.findIndex((row) => row.citation.id === item.citation.id) ??
@@ -403,7 +420,13 @@ export function StageQueue({
       decision: DecisionValue;
       exclusionReasonId?: string;
       notes: string | null;
-    } = { citationId: item.citation.id, decision, notes: noteText };
+      continueBeyondQuota: boolean;
+    } = {
+      citationId: item.citation.id,
+      decision,
+      notes: noteText,
+      continueBeyondQuota: continuing,
+    };
     if (exclusionReasonId) body.exclusionReasonId = exclusionReasonId;
 
     apiPost(decisionsUrl, body)
@@ -436,7 +459,7 @@ export function StageQueue({
   }
 
   function handleDecision(decision: DecisionValue) {
-    if (!current?.canDecide) return;
+    if (!current || !canDecide) return;
     if (decision === "EXCLUDE") {
       setExcludeOpen(true);
       return;
@@ -447,7 +470,7 @@ export function StageQueue({
 
   function confirmExclude(exclusionReasonId: string, noteText: string) {
     setExcludeOpen(false);
-    if (!current?.canDecide) return;
+    if (!current || !canDecide) return;
     const reason = reasons?.find((item) => item.id === exclusionReasonId);
     submitDecision(
       current,
@@ -459,7 +482,7 @@ export function StageQueue({
   }
 
   function quickExclude(reason: ExclusionReasonOption) {
-    if (!current?.canDecide) return;
+    if (!current || !canDecide) return;
     const trimmed = note.trim();
     submitDecision(
       current,
@@ -492,7 +515,7 @@ export function StageQueue({
 
   async function confirmBatchExclude(exclusionReasonId: string) {
     const citationIds = [...batchSelectedIds];
-    if (citationIds.length === 0 || batchBusy) return;
+    if (citationIds.length === 0 || batchBusy || continuationRequired) return;
 
     setBatchBusy(true);
     inFlightRef.current += 1;
@@ -503,6 +526,7 @@ export function StageQueue({
         {
           citationIds,
           exclusionReasonId,
+          continueBeyondQuota: continuing,
         },
       );
       const reason = reasons?.find((item) => item.id === exclusionReasonId);
@@ -538,7 +562,7 @@ export function StageQueue({
 
   useScreeningShortcuts({
     blocked: excludeOpen || batchExcludeOpen || helpOpen,
-    canDecide: Boolean(current?.canDecide),
+    canDecide,
     reasons,
     onDecision: handleDecision,
     onQuickExclude: quickExclude,
@@ -618,6 +642,8 @@ export function StageQueue({
   return (
     <>
       <PersonalScreeningProgress
+        continuing={continuing}
+        onContinue={() => setContinuing(true)}
         quota={data.quota}
         available={data.summary.undecided}
         context={`${STAGE_LABELS[stage.type]} · This project`}
@@ -634,7 +660,7 @@ export function StageQueue({
           highlightsEnabled={highlightsEnabled}
           loading={loading}
           batchSelectedIds={batchSelectedIds}
-          batchBusy={batchBusy}
+          batchBusy={batchBusy || continuationRequired}
           onFilterChange={chooseFilter}
           onSelect={selectArticle}
           onBatchSelect={changeBatchSelection}
@@ -823,7 +849,14 @@ export function StageQueue({
                     </div>
                   )}
 
-                  {current.canDecide ? (
+                  {continuationRequired &&
+                  !current.myDecision &&
+                  current.canDecide ? (
+                    <Alert>
+                      Target reached. Choose Continue screening above to review
+                      more abstracts.
+                    </Alert>
+                  ) : current.canDecide ? (
                     <>
                       {current.myDecision && (
                         <p className="text-xs text-muted-foreground">

@@ -56,6 +56,7 @@ export const resetPendingAssignmentsSchema = z.object({
 });
 
 export const createDecisionSchema = z.object({
+  continueBeyondQuota: z.boolean().optional(),
   citationId: z.string().min(1),
   decision: z.enum(["INCLUDE", "EXCLUDE", "MAYBE"]),
   exclusionReasonId: z.string().min(1).nullable().optional(),
@@ -65,6 +66,7 @@ export const createDecisionSchema = z.object({
 });
 
 export const batchExcludeSchema = z.object({
+  continueBeyondQuota: z.boolean().optional(),
   citationIds: z
     .array(z.string().min(1))
     .min(1, "Choose at least one citation")
@@ -913,7 +915,7 @@ export async function getScreeningNavigator(
     },
     stageResults: { none: { stageId } },
     ...(quota
-      ? quota.remaining === null || quota.remaining > 0
+      ? quota.target !== 0
         ? {}
         : { id: { in: [] } }
       : {
@@ -1126,7 +1128,7 @@ export async function getScreeningNavigator(
           (decision !== null ||
             ((reviewCounts.get(citation.id) ?? 0) <
               stage.reviewersPerCitation &&
-              (!quota || quota.remaining === null || quota.remaining > 0))),
+              (!quota || quota.target !== 0))),
         aiSuggestion: suggestion
           ? {
               score: suggestion.score,
@@ -1436,6 +1438,7 @@ export async function batchExclude(
           {
             citationId,
             decision: "EXCLUDE",
+            continueBeyondQuota: input.continueBeyondQuota,
             exclusionReasonId: input.exclusionReasonId,
             notes: null,
             labels: [],
@@ -1519,8 +1522,12 @@ export async function createDecisionInTransaction(
     ? null
     : await quotaProgress(tx, { stageId: stage.id }, ctx.userId);
   if (!alreadyReviewed) {
-    if (quota && quota.remaining === 0)
-      throw invalidState("Your review quota is complete");
+    if (quota?.target === 0)
+      throw invalidState("New reviews are paused by your assigned target");
+    if (quota?.remaining === 0 && !input.continueBeyondQuota)
+      throw invalidState(
+        "Your target is reached. Choose Continue screening to review more abstracts.",
+      );
     const completed = await tx.screeningAssignment.count({
       where: {
         stageId: stage.id,
@@ -1537,7 +1544,7 @@ export async function createDecisionInTransaction(
   if (
     !assignment &&
     (pooledQuotaAuthorized ||
-      (quota && (quota.remaining === null || quota.remaining > 0)))
+      (quota && quota.target !== 0))
   ) {
     assignment = await tx.screeningAssignment.create({
       data: {
@@ -1637,7 +1644,9 @@ export async function createDecisionInTransaction(
       notes: decision.notes,
       labels: decision.labels,
     },
-    metadata: auditMetadata,
+    metadata: input.continueBeyondQuota
+      ? { ...auditMetadata, continueBeyondQuota: true }
+      : auditMetadata,
   });
 
   // R6: conflict/consensus evaluation runs in the SAME transaction as the decision write.
