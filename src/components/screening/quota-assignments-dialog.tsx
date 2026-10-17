@@ -113,9 +113,10 @@ export function QuotaAssignmentsDialog({
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
           Existing completed reviews count toward the target. Each combined-pool
-          abstract counts once. Choose No target to allow reviews without a
-          limit. Set a target to 0 to pause new reviews. Unselected reviewers
-          keep their current targets.
+          abstract counts once. Positive targets are progress goals; reviewers
+          can choose Continue screening after reaching them. Choose No target
+          for reviews without a numerical goal. Set a target to 0 to pause new
+          reviews. Unselected reviewers keep their current targets.
         </p>
         {error && <Alert variant="error">{error}</Alert>}
         {!reviewers ? (

@@ -163,7 +163,7 @@ describe("quota-authorized pooled open queue", () => {
       completed: 3,
       remaining: 0,
     });
-    expect((await f.queue()).total).toBe(0);
+    expect((await f.queue()).total).toBe(2);
     const skipped = [f.groups[0]!, f.groups[2]!].flat();
     expect(
       await prisma.screeningAssignment.count({
