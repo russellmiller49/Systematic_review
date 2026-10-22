@@ -176,3 +176,83 @@ test("shared quota assignment and personal progress in a PICO and combined pool"
     fullPage: true,
   });
 });
+
+test("reviewers explicitly continue beyond their goal in individual and combined queues", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await signUp(page, "Optional reviewer", `optional-${Date.now()}@test.local`);
+  const org = await post(page.request, "/api/orgs", {
+    name: `Optional quota ${Date.now()}`,
+  });
+  const guideline = await post(page.request, `/api/orgs/${org.id}/projects`, {
+    title: "Optional screening guideline",
+    reviewType: "GUIDELINE_EVIDENCE_REVIEW",
+    isGuideline: true,
+  });
+  const picos = [];
+  for (const number of [1, 2, 3]) {
+    const pico = await post(
+      page.request,
+      `/api/projects/${guideline.id}/subprojects`,
+      {
+        title: `PICO ${number}`,
+        researchQuestion: `Question ${number}`,
+      },
+    );
+    await importAbstracts(page.request, pico.id);
+    picos.push(pico);
+  }
+  const poolResponse = await page.request.put(
+    `/api/projects/${guideline.id}/screening/pool`,
+    {
+      data: {
+        name: "Combined PICOs 2–3",
+        projectIds: picos.slice(1).map((p) => p.id),
+      },
+    },
+  );
+  expect(poolResponse.ok()).toBeTruthy();
+  for (const projectId of [picos[0].id, guideline.id]) {
+    await page.goto(`/projects/${projectId}/screening`);
+    await page
+      .getByRole("button", { name: "Reviewer quotas", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("checkbox").first().check();
+    await dialog
+      .getByRole("spinbutton", {
+        name: "Target for Optional reviewer",
+        exact: true,
+      })
+      .fill("1");
+    await dialog.getByRole("button", { name: "Save quotas" }).click();
+    const progress = page.getByLabel("Your reviewer quota");
+    await expect(progress).toContainText("0 of 1 completed · 1 remaining");
+    await page.getByRole("button", { name: /^Include/ }).click();
+    await expect(progress).toContainText("1 of 1 completed · 0 remaining");
+    await expect(progress).toContainText("Available to review: 2");
+    await expect(page.getByRole("button", { name: /^Include/ })).toHaveCount(0);
+    await page.keyboard.press("i");
+    await expect(progress).toContainText("1 of 1 completed");
+    await page
+      .getByRole("button", { name: "Continue screening", exact: true })
+      .click();
+    await page.getByRole("button", { name: /^Include/ }).click();
+    await expect(progress).toContainText("2 of 1 completed · 0 remaining");
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "Continue screening", exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Continue screening", exact: true })
+      .click();
+    await page.getByRole("button", { name: /^Include/ }).click();
+    await expect(progress).toContainText("3 of 1 completed · 0 remaining");
+    await expect(progress).toContainText("No eligible articles remaining");
+    await expect(
+      page.getByRole("button", { name: "Continue screening", exact: true }),
+    ).toHaveCount(0);
+    await expectNoErrorOverlay(page);
+  }
+});

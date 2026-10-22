@@ -8,7 +8,9 @@ separate queue measure, not the reviewer's workload or proof of completion.
 The card consumes the existing authenticated `quota` projection. It does not
 derive completed credit from linked citation rows, session tally, filtered
 article lists, or shared corpus size. Pooled credit continues to count a logical
-abstract once. No server counting or recovery behavior changes.
+abstract once. Counting and recovery behavior are unchanged. Positive targets now support explicit
+[optional continuation](screening-beyond-quota.md); queue availability is independent
+of reaching a positive target.
 
 - A missing quota reports no personal target and unspecified totals. Existing
   fixed assignments and reviewed articles remain usable in the queue; their

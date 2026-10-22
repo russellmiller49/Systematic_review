@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { Progress, Skeleton } from "@/components/ui/misc";
 import type { ReviewerQuota } from "./types";
 
@@ -10,6 +11,8 @@ export function PersonalScreeningProgress({
   loading = false,
   refreshing = false,
   error,
+  continuing = false,
+  onContinue,
 }: {
   quota: ReviewerQuota | null | undefined;
   available?: number;
@@ -17,6 +20,8 @@ export function PersonalScreeningProgress({
   loading?: boolean;
   refreshing?: boolean;
   error?: string | null;
+  continuing?: boolean;
+  onContinue?: () => void;
 }) {
   return (
     <section
@@ -92,8 +97,25 @@ export function PersonalScreeningProgress({
                   ? "Target reached. Completed reviews exceed the current target and remain counted."
                   : quota.remaining === 0
                     ? "Target reached. Your completed reviews remain saved."
-                    : "Your assigned target is your personal workload. Each abstract counts once toward it."}
+                    : "Your assigned target is a progress goal. Each abstract counts once toward it."}
           </p>
+          {quota.target !== null &&
+            quota.target > 0 &&
+            quota.remaining === 0 && (
+              <div className="mt-3 space-y-2 text-sm">
+                <p>
+                  You may stop here or voluntarily review more eligible
+                  abstracts. Your target stays the same.
+                </p>
+                {continuing ? (
+                  <p>Continuing beyond your target for this session.</p>
+                ) : available !== undefined && available > 0 && onContinue ? (
+                  <Button onClick={onContinue} disabled={refreshing}>
+                    Continue screening
+                  </Button>
+                ) : null}
+              </div>
+            )}
         </>
       )}
       {!loading && !error && available !== undefined && (
@@ -101,6 +123,12 @@ export function PersonalScreeningProgress({
           <p>
             Available to review: <strong>{available.toLocaleString()}</strong>
           </p>
+          {available === 0 && quota?.target !== 0 && (
+            <p className="mt-1">
+              No eligible articles remaining in this view. This is separate from
+              your target; filters or new shared work may change availability.
+            </p>
+          )}
           <p className="mt-1 text-xs text-muted-foreground">
             Available articles are queue choices, not your remaining assigned
             reviews. An empty article view does not confirm assignment
