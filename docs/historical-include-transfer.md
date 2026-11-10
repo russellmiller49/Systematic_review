@@ -47,7 +47,7 @@ not table-locked. Run in a coordinated maintenance window, with a 10-second lock
 120-second transaction timeout. Any timeout rolls back the whole transaction.
 
 Per-group digests include the entire pool/corpus/stage/authority context, complete
-citation fields/identifiers, protocol/criteria context, all reviewer decisions (including withdrawn history),
+citation fields/identifiers, protocol/criteria and exclusion-reason configuration, all reviewer decisions (including withdrawn history),
 assignments, conflicts, source adjudication and materialized outcomes. Live decisions
 use withdrawnAt=null. Identical live reviewer evidence and a still-valid conflict are
 required. Targets must still be exactly the approved OPEN conflicts without outcomes

@@ -274,7 +274,16 @@ async function readState(
       outcomes: { orderBy: { id: "asc" } },
     },
   });
-  const sharedDigest = transferDigest({ ...context, corpus, protocols });
+  const reasonConfiguration = await tx.exclusionReason.findMany({
+    where: { projectId: { in: [m.guidelineId, ...context.projects] } },
+    orderBy: { id: "asc" },
+  });
+  const sharedDigest = transferDigest({
+    ...context,
+    corpus,
+    protocols,
+    reasonConfiguration,
+  });
   const groups = m.groups.map((approved) => {
     const state = states.find((s) =>
       s.group.some((c) => approved.citationIds.includes(c.id)),

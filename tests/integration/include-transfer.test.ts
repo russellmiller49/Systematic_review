@@ -18,6 +18,7 @@ import {
   validateManifest,
   type IncludeTransferManifest,
 } from "@/server/services/screening/include-transfer";
+import { updateExclusionReason } from "@/server/services/protocols";
 import { listPooledConflicts } from "@/server/services/screening/pooled-adjudication";
 
 beforeAll(async () => {
@@ -554,3 +555,83 @@ it("runs default-dry-run CLI, durable backup, explicit apply, retry and guarded 
     await rm(dir, { recursive: true, force: true });
   }
 }, 30000);
+it("rejects coordinated reason-label changes even when cross-copy reviewer evidence still agrees", async () => {
+  const f = await fixture();
+  const citations = await prisma.citation.findMany({
+    where: { id: { in: f.manifest.groups[0]!.citationIds } },
+  });
+  const reasons = [];
+  for (const c of citations) {
+    const reason = await prisma.exclusionReason.findFirstOrThrow({
+      where: { projectId: c.projectId, label: "Wrong population" },
+    });
+    reasons.push(reason);
+    await prisma.screeningDecision.updateMany({
+      where: { citationId: c.id, decision: "EXCLUDE" },
+      data: { exclusionReasonId: reason.id },
+    });
+  }
+  const plan = await dryRunIncludeTransfer(f.owner.id, f.manifest);
+  for (const reason of reasons)
+    await updateExclusionReason(
+      { userId: f.owner.id },
+      reason.projectId,
+      reason.id,
+      { label: "Updated population criterion" },
+    );
+  const fresh = await dryRunIncludeTransfer(f.owner.id, f.manifest);
+  expect(fresh.digest).not.toBe(plan.digest);
+  let backedUp = false;
+  await expect(
+    applyIncludeTransfer(f.owner.id, f.manifest, plan, async () => {
+      backedUp = true;
+      throw new Error("must not reach backup");
+    }),
+  ).rejects.toThrow("Preconditions changed");
+  expect(backedUp).toBe(false);
+});
+it("serializes reason writers behind migration project context guards", async () => {
+  const f = await fixture();
+  const plan = await dryRunIncludeTransfer(f.owner.id, f.manifest);
+  const reason = await prisma.exclusionReason.findFirstOrThrow({
+    where: { projectId: f.picos[2]!.id, label: "Wrong population" },
+  });
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let ready!: () => void;
+  const acquired = new Promise<void>((r) => (ready = r));
+  const running = applyIncludeTransfer(
+    f.owner.id,
+    f.manifest,
+    plan,
+    async (image) => {
+      ready();
+      await held;
+      return {
+        sha256: transferDigest(image),
+        location: "/private/test-before.json",
+      };
+    },
+  );
+  await acquired;
+  let completed = false;
+  const edit = updateExclusionReason(
+    { userId: f.owner.id },
+    reason.projectId,
+    reason.id,
+    { label: "Later criterion" },
+  ).then(() => {
+    completed = true;
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    expect(completed).toBe(false);
+  } finally {
+    release();
+  }
+  await running;
+  await edit;
+  await expect(
+    applyIncludeTransfer(f.owner.id, f.manifest, plan, capture().backup),
+  ).rejects.toThrow("changed");
+});
