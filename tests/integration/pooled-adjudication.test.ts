@@ -1,0 +1,239 @@
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { prisma } from "@/server/db";
+import * as audit from "@/server/services/audit";
+import * as screening from "@/server/services/screening";
+import * as adjudication from "@/server/services/screening/pooled-adjudication";
+import { resetDb } from "../db-utils";
+import { pooledReadinessFixture } from "../fixtures/pooled-readiness";
+import { createTestUser } from "../factories";
+
+// Refuse even the suite's local truncation unless the target is explicitly a local test DB.
+// The integration runner's global setup runs earlier, so verify the URL before invoking it too.
+beforeAll(async () => {
+  const url = new URL(process.env.TEST_DATABASE_URL ?? "");
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+      !/(^|[_-])test([_-]|$)/i.test(url.pathname.slice(1))) {
+    throw new Error("Pooled adjudication tests require a local, test-named database");
+  }
+  await resetDb();
+});
+afterEach(() => vi.restoreAllMocks());
+
+type Fixture = Awaited<ReturnType<typeof pooledReadinessFixture>>;
+const citationIds = (f: Fixture) => f.groups[0]!.map((copy) => copy.id);
+const ctx = (f: Fixture) => ({ userId: f.owner.id });
+async function fixture() {
+  const f = await pooledReadinessFixture({ count: 1, reviewers: 2 });
+  await f.decide(0, 0, "INCLUDE", "Reviewer one rationale");
+  await f.decide(1, 0, "EXCLUDE", "Reviewer two rationale");
+  return f;
+}
+async function item(f: Fixture) {
+  const list = await adjudication.listPooledConflicts(ctx(f), f.guideline.id, { poolId: f.pool.id });
+  const found = list.items.find((row) => row.citationIds.includes(citationIds(f)[0]!));
+  expect(found).toBeDefined();
+  return found!;
+}
+async function input(f: Fixture) {
+  const row = await item(f);
+  return { poolId: f.pool.id, citationIds: row.citationIds, stateToken: row.stateToken,
+    finalDecision: "INCLUDE" as const, reason: "Adjudicator reviewed both rationales" };
+}
+async function snapshot(f: Fixture) {
+  const where = { citationId: { in: citationIds(f) } };
+  return {
+    quotas: await prisma.screeningQuota.findMany({ where: { poolId: f.pool.id }, orderBy: { id: "asc" } }),
+    votes: await prisma.screeningDecision.findMany({ where, orderBy: { id: "asc" } }),
+    assignments: await prisma.screeningAssignment.findMany({ where, orderBy: { id: "asc" } }),
+    conflicts: await prisma.screeningConflict.findMany({ where, include: { adjudication: true }, orderBy: { id: "asc" } }),
+    results: await prisma.citationStageResult.findMany({ where, orderBy: { id: "asc" } }),
+    audits: await prisma.auditEvent.findMany({ where: { projectId: { in: f.picos.map((p) => p.id) } }, orderBy: { id: "asc" } }),
+  };
+}
+
+it.each(["INCLUDE", "EXCLUDE"] as const)("adjudicates %s on every copy without changing reviewer votes, assignments, or quota credit", async (finalDecision) => {
+  const f = await fixture();
+  const before = await snapshot(f);
+  const quotaBefore = await Promise.all(f.users.map((_, i) => f.queue(i).then((q) => q.quota)));
+  const row = await item(f);
+  expect(row.status).toBe("OPEN");
+  expect([...row.citationIds].sort()).toEqual(citationIds(f).sort());
+  await adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, {
+    ...await input(f), finalDecision,
+    ...(finalDecision === "EXCLUDE" ? { exclusionReasonLabel: "Wrong population" } : {}),
+  });
+  const after = await snapshot(f);
+  expect(after.quotas).toEqual(before.quotas);
+  expect(after.votes).toEqual(before.votes);
+  expect(after.assignments).toEqual(before.assignments);
+  expect(after.results).toHaveLength(3);
+  expect(after.results.every((r) => r.outcome === finalDecision && r.resolvedVia === "ADJUDICATION")).toBe(true);
+  expect(after.conflicts.every((c) => c.status === "RESOLVED" && c.adjudication?.finalDecision === finalDecision && c.adjudication.adjudicatorId === f.owner.id)).toBe(true);
+  if (finalDecision === "EXCLUDE") {
+    const rows = await prisma.screeningAdjudication.findMany({ where: { conflictId: { in: after.conflicts.map((c) => c.id) } }, include: { exclusionReason: true, conflict: { include: { stage: true } } } });
+    expect(rows.every((r) => r.exclusionReason?.label === "Wrong population" && r.exclusionReason.projectId === r.conflict.stage.projectId)).toBe(true);
+  }
+  expect(await Promise.all(f.users.map((_, i) => f.queue(i).then((q) => q.quota)))).toEqual(quotaBefore);
+  expect((await item(f)).status).toBe("RESOLVED");
+  expect(after.audits.length).toBeGreaterThan(before.audits.length);
+});
+
+it("denies blinded reviewers and outsiders without exposing conflicts or changing state", async () => {
+  const f = await fixture();
+  const outsider = await createTestUser();
+  const request = await input(f);
+  const before = await snapshot(f);
+  for (const userId of [f.users[0]!.id, outsider.id]) {
+    await expect(adjudication.listPooledConflicts({ userId }, f.guideline.id, { poolId: f.pool.id })).rejects.toThrow();
+    await expect(adjudication.adjudicatePooledConflict({ userId }, f.guideline.id, request)).rejects.toThrow();
+  }
+  expect(await snapshot(f)).toEqual(before);
+});
+
+it("rejects an incomplete copy selection atomically", async () => {
+  const f = await fixture();
+  const request = await input(f);
+  const before = await snapshot(f);
+  await expect(adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, { ...request, citationIds: request.citationIds.slice(1) })).rejects.toThrow();
+  expect(await snapshot(f)).toEqual(before);
+});
+
+it("invalidates a stale token after a synchronized reviewer revision", async () => {
+  const f = await fixture();
+  const request = await input(f);
+  await f.decide(0, 0, "INCLUDE", "Revised evidence assessment");
+  const before = await snapshot(f);
+  expect((await item(f)).stateToken).not.toBe(request.stateToken);
+  await expect(adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, request)).rejects.toThrow();
+  expect(await snapshot(f)).toEqual(before);
+});
+
+it("rejects historical partial adjudication without silently migrating it", async () => {
+  const f = await fixture();
+  const request = await input(f);
+  const copy = f.groups[0]![0]!;
+  const conflict = await prisma.screeningConflict.findUniqueOrThrow({ where: { stageId_citationId: { stageId: copy.stageId, citationId: copy.id } } });
+  await prisma.screeningAdjudication.create({ data: { conflictId: conflict.id, adjudicatorId: f.owner.id, finalDecision: "EXCLUDE", reason: "Historical individual decision" } });
+  await prisma.screeningConflict.update({ where: { id: conflict.id }, data: { status: "RESOLVED", resolvedAt: new Date() } });
+  await prisma.citationStageResult.create({ data: { stageId: copy.stageId, citationId: copy.id, outcome: "EXCLUDE", resolvedVia: "ADJUDICATION" } });
+  const before = await snapshot(f);
+  const row = await item(f);
+  expect(row.status).toBe("NEEDS_SYNCHRONIZATION");
+  await expect(adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, { ...request, stateToken: row.stateToken })).rejects.toThrow();
+  await expect(adjudication.reopenPooledConflict(ctx(f), f.guideline.id, { ...request, stateToken: row.stateToken })).rejects.toThrow();
+  expect(await snapshot(f)).toEqual(before);
+});
+
+it("rejects individual adjudication and individual reopening for pooled title/abstract copies", async () => {
+  const f = await fixture();
+  const copy = f.groups[0]![0]!;
+  const before = await snapshot(f);
+  const conflict = before.conflicts.find((c) => c.citationId === copy.id)!;
+  await expect(screening.adjudicateConflict(ctx(f), copy.projectId, conflict.id, { finalDecision: "INCLUDE", reason: "Attempt per-PICO decision" })).rejects.toThrow();
+  expect(await snapshot(f)).toEqual(before);
+  await adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, await input(f));
+  const resolved = await snapshot(f);
+  await expect(screening.reopenCitation(ctx(f), copy.projectId, copy.id, { stageType: "TITLE_ABSTRACT", reason: "Attempt per-PICO reopen" })).rejects.toThrow();
+  expect(await snapshot(f)).toEqual(resolved);
+});
+
+it("reopens all copies together, preserves votes and credit, and permits a new pooled adjudication", async () => {
+  const f = await fixture();
+  await adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, await input(f));
+  const before = await snapshot(f);
+  const request = await input(f);
+  await expect(adjudication.reopenPooledConflict({ userId: f.users[0]!.id }, f.guideline.id, request)).rejects.toThrow();
+  await adjudication.reopenPooledConflict(ctx(f), f.guideline.id, { ...request, reason: "Reconsider with corrected protocol" });
+  const reopened = await snapshot(f);
+  expect(reopened.results).toHaveLength(0);
+  expect(reopened.conflicts.every((c) => c.status === "VOIDED")).toBe(true);
+  expect(reopened.votes).toEqual(before.votes);
+  expect(reopened.assignments).toEqual(before.assignments);
+  await f.decide(0, 0, "INCLUDE", "Reviewed again after reopening");
+  expect((await item(f)).status).toBe("OPEN");
+  await expect(adjudication.reopenPooledConflict(ctx(f), f.guideline.id, request)).rejects.toThrow();
+  await adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, { ...await input(f), finalDecision: "EXCLUDE", exclusionReasonLabel: "Wrong population" });
+  const final = await snapshot(f);
+  expect(final.conflicts.map((c) => c.adjudication?.id)).toEqual(before.conflicts.map((c) => c.adjudication?.id));
+  expect(final.results.every((r) => r.outcome === "EXCLUDE")).toBe(true);
+});
+
+it("rolls back every copy and audit if a later audit write fails", async () => {
+  const f = await fixture();
+  const request = await input(f);
+  const before = await snapshot(f);
+  const original = audit.record;
+  let calls = 0;
+  vi.spyOn(audit, "record").mockImplementation(async (...args) => {
+    if (++calls === 2) throw new Error("Injected pooled audit failure");
+    return original(...args);
+  });
+  await expect(adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, request)).rejects.toThrow("Injected pooled audit failure");
+  expect(calls).toBe(2);
+  expect(await snapshot(f)).toEqual(before);
+});
+
+it("allows only one concurrent adjudicator to commit the same state token", async () => {
+  const f = await fixture();
+  const other = await createTestUser();
+  await prisma.organizationMember.create({ data: { orgId: f.org.id, userId: other.id, role: "MEMBER" } });
+  await prisma.projectMember.create({ data: { projectId: f.guideline.id, userId: other.id, roles: ["ADJUDICATOR"] } });
+  const request = await input(f);
+  const results = await Promise.allSettled([
+    adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, request),
+    adjudication.adjudicatePooledConflict({ userId: other.id }, f.guideline.id, { ...request, finalDecision: "EXCLUDE", exclusionReasonLabel: "Wrong population" }),
+  ]);
+  expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+  expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+  const final = await snapshot(f);
+  expect(final.results).toHaveLength(3);
+  expect(new Set(final.results.map((r) => r.outcome)).size).toBe(1);
+  expect(new Set(final.conflicts.map((c) => c.adjudication?.adjudicatorId)).size).toBe(1);
+  expect(final.conflicts.every((c) => c.status === "RESOLVED")).toBe(true);
+});
+
+it.each(["standalone title/abstract", "pooled full-text"] as const)("preserves individual adjudication and reopen for %s", async (scenario) => {
+  const f = await pooledReadinessFixture({ count: 1, reviewers: 2 });
+  const pooledCopy = f.groups[0]![0]!;
+  const projectId = scenario === "pooled full-text" ? pooledCopy.projectId : f.picos[0]!.id;
+  const stageType = scenario === "pooled full-text" ? "FULL_TEXT" as const : "TITLE_ABSTRACT" as const;
+  const stage = await prisma.screeningStage.findUniqueOrThrow({ where: { projectId_type: { projectId, type: stageType } } });
+  const citation = scenario === "pooled full-text" ? pooledCopy : await prisma.citation.create({ data: { projectId, title: "Standalone citation", normalizedTitle: "standalone citation", authors: [] } });
+  if (stageType === "FULL_TEXT") {
+    await prisma.citationStageResult.create({ data: { stageId: pooledCopy.stageId, citationId: citation.id, outcome: "INCLUDE", resolvedVia: "CONSENSUS" } });
+  }
+  const conflict = await prisma.screeningConflict.create({ data: { stageId: stage.id, citationId: citation.id } });
+  await screening.adjudicateConflict(ctx(f), projectId, conflict.id, { finalDecision: "INCLUDE", reason: "Ordinary individual adjudication" });
+  expect(await prisma.citationStageResult.findUnique({ where: { stageId_citationId: { stageId: stage.id, citationId: citation.id } } })).toMatchObject({ outcome: "INCLUDE", resolvedVia: "ADJUDICATION" });
+  await screening.reopenCitation(ctx(f), projectId, citation.id, { stageType, reason: "Ordinary individual reopen" });
+  expect(await prisma.citationStageResult.findUnique({ where: { stageId_citationId: { stageId: stage.id, citationId: citation.id } } })).toBeNull();
+  expect(await prisma.screeningConflict.findUnique({ where: { id: conflict.id } })).toMatchObject({ status: "VOIDED" });
+});
+
+it.each(["doi", "pmid"] as const)("blocks identity groups with inconsistent %s values even when all reviews agree across copies", async (field) => {
+  const f = await fixture();
+  await prisma.citation.update({ where: { id: citationIds(f)[0]! }, data: { [field]: field === "doi" ? "10.6000/different-study" : "99999999" } });
+  const before = await snapshot(f);
+  const row = await item(f);
+  expect(row.status).toBe("NEEDS_SYNCHRONIZATION");
+  await expect(adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, await input(f))).rejects.toThrow();
+  expect(await snapshot(f)).toEqual(before);
+});
+
+it("blocks a same-PICO duplicate in an otherwise synchronized identity group", async () => {
+  const f = await fixture();
+  const copy = f.groups[0]![0]!;
+  const source = await prisma.citation.findUniqueOrThrow({ where: { id: copy.id } });
+  const duplicate = await prisma.citation.create({ data: { projectId: copy.projectId, title: source.title, normalizedTitle: source.normalizedTitle, doi: source.doi, pmid: source.pmid, authors: [] } });
+  const sourceVotes = await prisma.screeningDecision.findMany({ where: { citationId: copy.id } });
+  for (const vote of sourceVotes) {
+    await prisma.screeningAssignment.create({ data: { citationId: duplicate.id, stageId: copy.stageId, reviewerId: vote.reviewerId, status: "COMPLETED" } });
+    await prisma.screeningDecision.create({ data: { citationId: duplicate.id, stageId: copy.stageId, reviewerId: vote.reviewerId, decision: vote.decision, exclusionReasonId: vote.exclusionReasonId, notes: vote.notes, labels: vote.labels } });
+  }
+  await prisma.screeningConflict.create({ data: { citationId: duplicate.id, stageId: copy.stageId } });
+  f.groups[0]!.push({ id: duplicate.id, projectId: copy.projectId, stageId: copy.stageId });
+  const before = await snapshot(f);
+  expect((await item(f)).status).toBe("NEEDS_SYNCHRONIZATION");
+  await expect(adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, await input(f))).rejects.toThrow();
+  expect(await snapshot(f)).toEqual(before);
+});

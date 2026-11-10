@@ -1931,6 +1931,7 @@ export async function adjudicateConflict(
       },
     });
     if (!conflictRow) throw notFound("Conflict");
+    await assertIndividualTitleAbstractAllowed(tx, conflictRow.stage);
     if (conflictRow.status !== "OPEN")
       throw invalidState("Conflict is not open");
     if (conflictRow.citation.status !== "ACTIVE") {
@@ -2089,6 +2090,7 @@ export async function reopenCitation(
     if (!stage) throw notFound("Screening stage");
     if (stage.type === "FULL_TEXT") await lockDedupProject(tx, projectId);
     await lockScreeningStages(tx, [stage.id]);
+    await assertIndividualTitleAbstractAllowed(tx, stage);
     const result = await tx.citationStageResult.findUnique({
       where: {
         stageId_citationId: { stageId: stage.id, citationId: citation.id },
