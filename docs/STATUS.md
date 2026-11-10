@@ -1,3 +1,11 @@
+## Local implementation (2026-11-10) — pooled abstract adjudication
+
+Added atomic guideline-pool adjudication and reopening for synchronized title/abstract
+records, per-PICO endpoint guards, preserved read-only historical attribution, stale-state
+and identity safeguards, and dedicated integration/browser checks. No schema migration,
+production data migration, push, or deployment is part of this change.
+See [workflow and verification](pooled-adjudication.md).
+
 ## Current state (2026-10-17) — optional screening beyond positive targets
 
 Reviewers can choose **Continue screening** after reaching a positive personal target,
