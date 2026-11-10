@@ -240,7 +240,7 @@ try {
       adjudication: {
         finalDecision: "EXCLUDE",
         reason: "Historical clinical rationale",
-        adjudicator: { id: "y", name: "Yaron" },
+        adjudicator: { id: "prior-adjudicator", name: "Prior Adjudicator" },
         exclusionReason: { label: "Wrong population" },
         createdAt: "2026-10-01T00:00:00Z",
       },
@@ -251,7 +251,7 @@ try {
     .getByRole("button", { name: "Needs synchronization", exact: true })
     .click();
   await expect(page.getByText("Historical clinical rationale")).toBeVisible();
-  await expect(page.getByText(/Yaron/)).toBeVisible();
+  await expect(page.getByText(/Prior Adjudicator/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Adjudicate across linked PICOs" }),
   ).toHaveCount(0);
