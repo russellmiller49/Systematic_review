@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@/server/db";
 import * as audit from "@/server/services/audit";
 import * as screening from "@/server/services/screening";
+import * as citations from "@/server/services/citations";
+import * as protocols from "@/server/services/protocols";
 import * as adjudication from "@/server/services/screening/pooled-adjudication";
 import { resetDb } from "../db-utils";
 import { pooledReadinessFixture } from "../fixtures/pooled-readiness";
@@ -350,13 +352,11 @@ it("allows only one concurrent adjudicator to commit the same state token", asyn
     },
   });
   await prisma.projectMember.createMany({
-    data: f.picos
-      .slice(1)
-      .map((p) => ({
-        projectId: p.id,
-        userId: other.id,
-        roles: ["ADJUDICATOR" as const],
-      })),
+    data: f.picos.slice(1).map((p) => ({
+      projectId: p.id,
+      userId: other.id,
+      roles: ["ADJUDICATOR" as const],
+    })),
   });
   const request = await input(f);
   const results = await Promise.allSettled([
@@ -848,3 +848,285 @@ it("measures listing and one adjudication across a realistic 4110-abstract pool"
     }),
   );
 }, 180_000);
+
+const staleContextCases = (["adjudicate", "reopen"] as const).flatMap(
+  (operation) =>
+    (
+      [
+        "citation title",
+        "citation abstract",
+        "criterion create",
+        "criterion update",
+        "criterion delete",
+      ] as const
+    ).map((change) => ({ operation, change })),
+);
+it.each(staleContextCases)(
+  "rejects stale $operation after $change and accepts refreshed context",
+  async ({ operation, change }) => {
+    const f = await fixture();
+    const copy = f.groups[0]![0]!;
+    const protocol = await prisma.protocol.upsert({
+      where: { projectId: copy.projectId },
+      create: { projectId: copy.projectId },
+      update: {},
+    });
+    const criterion = await prisma.eligibilityCriterion.create({
+      data: {
+        protocolId: protocol.id,
+        type: "INCLUSION",
+        category: "population",
+        text: "Original eligibility population",
+      },
+    });
+    if (operation === "reopen")
+      await adjudication.adjudicatePooledConflict(
+        ctx(f),
+        f.guideline.id,
+        await input(f),
+      );
+    if (change === "citation abstract")
+      await prisma.citation.update({
+        where: { id: copy.id },
+        data: { abstract: null },
+      });
+    const oldRequest = await input(f);
+    const amendmentReason = "Correct clinical context after screening began";
+    if (change === "citation title")
+      await prisma.citation.update({
+        where: { id: copy.id },
+        data: { title: "Corrected title with materially different population" },
+      });
+    if (change === "citation abstract")
+      await citations.addCitationAbstract(ctx(f), copy.projectId, copy.id, {
+        abstract: "Corrected study abstract. ".repeat(150),
+      });
+    if (change === "criterion create")
+      await protocols.createCriterion(ctx(f), copy.projectId, {
+        type: "EXCLUSION",
+        category: "design",
+        text: "Exclude retrospective studies",
+        amendmentReason,
+      });
+    if (change === "criterion update")
+      await protocols.updateCriterion(ctx(f), copy.projectId, criterion.id, {
+        text: "Updated population: adults only",
+        amendmentReason,
+      });
+    if (change === "criterion delete")
+      await protocols.deleteCriterion(ctx(f), copy.projectId, criterion.id, {
+        amendmentReason,
+      });
+    const before = await snapshot(f);
+    const freshRequest = await input(f);
+    expect(freshRequest.stateToken).not.toBe(oldRequest.stateToken);
+    const execute =
+      operation === "adjudicate"
+        ? adjudication.adjudicatePooledConflict
+        : adjudication.reopenPooledConflict;
+    await expect(
+      execute(ctx(f), f.guideline.id, oldRequest),
+    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    expect(await snapshot(f)).toEqual(before);
+    await execute(ctx(f), f.guideline.id, freshRequest);
+    const after = await snapshot(f);
+    if (operation === "adjudicate") {
+      expect(after.results).toHaveLength(citationIds(f).length);
+      expect(after.conflicts.every((c) => c.status === "RESOLVED")).toBe(true);
+    } else {
+      expect(after.results).toHaveLength(0);
+      expect(after.conflicts.every((c) => c.status === "VOIDED")).toBe(true);
+    }
+  },
+);
+
+it("keeps adjudication creation dates while exposing the effective date of the latest rationale", async () => {
+  const f = await fixture();
+  await adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, {
+    ...(await input(f)),
+    reason: "Original adjudication rationale",
+  });
+  const original = await snapshot(f);
+  const historicalCreatedAt = new Date("2001-01-01T00:00:00.000Z");
+  // Model a long-lived adjudication record that is updated in place on reconsideration.
+  await prisma.screeningAdjudication.updateMany({
+    where: { conflictId: { in: original.conflicts.map((c) => c.id) } },
+    data: { createdAt: historicalCreatedAt },
+  });
+  const firstResolved = await item(f);
+  expect(firstResolved.historicalAdjudications).toHaveLength(
+    citationIds(f).length,
+  );
+  for (const history of firstResolved.historicalAdjudications) {
+    const conflict = original.conflicts.find(
+      (c) => c.citationId === history.citationId,
+    )!;
+    expect(new Date(history.effectiveAt!).getTime()).toBe(
+      conflict.resolvedAt!.getTime(),
+    );
+    expect(history.adjudication.createdAt).toEqual(historicalCreatedAt);
+  }
+  await adjudication.reopenPooledConflict(ctx(f), f.guideline.id, {
+    ...(await input(f)),
+    reason: "Reconsider original rationale",
+  });
+  await f.decide(0, 0, "INCLUDE", "Fresh review after reconsideration");
+  const reopened = await item(f);
+  expect(reopened.status).toBe("OPEN");
+  for (const history of reopened.historicalAdjudications) {
+    const earlier = firstResolved.historicalAdjudications.find(
+      (h) => h.citationId === history.citationId,
+    )!;
+    expect(new Date(history.effectiveAt!).getTime()).toBe(
+      new Date(earlier.effectiveAt!).getTime(),
+    );
+    expect(history.adjudication.reason).toBe("Original adjudication rationale");
+  }
+  await adjudication.adjudicatePooledConflict(ctx(f), f.guideline.id, {
+    ...(await input(f)),
+    finalDecision: "EXCLUDE",
+    exclusionReasonLabel: "Wrong population",
+    reason: "Replacement rationale after reconsideration",
+  });
+  const latest = await item(f);
+  const final = await snapshot(f);
+  expect(latest.status).toBe("RESOLVED");
+  for (const history of latest.historicalAdjudications) {
+    const conflict = final.conflicts.find(
+      (c) => c.citationId === history.citationId,
+    )!;
+    const previous = original.conflicts.find(
+      (c) => c.citationId === history.citationId,
+    )!;
+    expect(history.adjudication.id).toBe(previous.adjudication!.id);
+    expect(history.adjudication.createdAt).toEqual(historicalCreatedAt);
+    expect(history.adjudication.reason).toBe(
+      "Replacement rationale after reconsideration",
+    );
+    expect(new Date(history.effectiveAt!).getTime()).toBe(
+      conflict.resolvedAt!.getTime(),
+    );
+    expect(new Date(history.effectiveAt!).getTime()).toBeGreaterThan(
+      historicalCreatedAt.getTime(),
+    );
+    expect(new Date(history.effectiveAt!).getTime()).toBeGreaterThanOrEqual(
+      previous.resolvedAt!.getTime(),
+    );
+  }
+});
+
+it.each(["abstract", "criterion"] as const)(
+  "holds %s context writers until pooled adjudication commits",
+  async (kind) => {
+    const f = await fixture();
+    const copy = f.groups[0]![0]!;
+    if (kind === "abstract")
+      await prisma.citation.update({
+        where: { id: copy.id },
+        data: { abstract: null },
+      });
+    const request = await input(f);
+    let entered!: () => void;
+    let release!: () => void;
+    const insideWrite = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const originalRecord = audit.record;
+    let paused = false;
+    vi.spyOn(audit, "record").mockImplementation(async (...args) => {
+      const result = await originalRecord(...args);
+      if (
+        !paused &&
+        args[1].action === audit.AuditActions.SCREENING_CONFLICT_ADJUDICATED
+      ) {
+        paused = true;
+        entered();
+        await gate;
+      }
+      return result;
+    });
+    const committing = adjudication.adjudicatePooledConflict(
+      ctx(f),
+      f.guideline.id,
+      request,
+    );
+    // Attach a rejection handler immediately so cleanup can safely await either result.
+    const committed = committing.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    let contextWrite: Promise<{ ok: boolean; error?: unknown }> | undefined;
+    try {
+      await Promise.race([
+        insideWrite,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error("Adjudication did not reach held audit boundary"),
+              ),
+            3000,
+          ),
+        ),
+      ]);
+      let settled = false;
+      const edit =
+        kind === "abstract"
+          ? citations.addCitationAbstract(ctx(f), copy.projectId, copy.id, {
+              abstract: "New clinical context arriving during adjudication",
+            })
+          : protocols.createCriterion(ctx(f), copy.projectId, {
+              type: "EXCLUSION",
+              text: "Exclude retrospective studies",
+              amendmentReason: "Correct eligibility context during screening",
+            });
+      contextWrite = edit.then(
+        () => {
+          settled = true;
+          return { ok: true };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { ok: false, error };
+        },
+      );
+      // The adjudicator holds its transaction open at a real post-write boundary.
+      // The context edit must not finish (or fail spuriously) while those locks are held.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(settled).toBe(false);
+      expect(
+        await prisma.citationStageResult.count({
+          where: { citationId: { in: citationIds(f) } },
+        }),
+      ).toBe(0);
+      release();
+      expect((await committed).ok).toBe(true);
+      expect((await contextWrite).ok).toBe(true);
+      const after = await snapshot(f);
+      expect(after.results).toHaveLength(citationIds(f).length);
+      expect(after.results.every((r) => r.outcome === "INCLUDE")).toBe(true);
+      if (kind === "abstract")
+        expect(
+          await prisma.citation.findUnique({ where: { id: copy.id } }),
+        ).toMatchObject({
+          abstract: "New clinical context arriving during adjudication",
+        });
+      else
+        expect(
+          await prisma.eligibilityCriterion.count({
+            where: {
+              protocol: { projectId: copy.projectId },
+              text: "Exclude retrospective studies",
+            },
+          }),
+        ).toBe(1);
+    } finally {
+      release();
+      await committed;
+      if (contextWrite) await contextWrite;
+    }
+  },
+);

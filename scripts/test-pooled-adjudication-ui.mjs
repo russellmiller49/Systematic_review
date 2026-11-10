@@ -235,6 +235,8 @@ try {
       projectId: "p1",
       citationId: "c1",
       conflictStatus: "RESOLVED",
+      effectiveAt: "2026-11-10T16:45:00Z",
+      timestampSource: "audit",
       adjudication: {
         finalDecision: "EXCLUDE",
         reason: "Historical clinical rationale",
@@ -256,6 +258,19 @@ try {
   console.log(
     "PASS synchronization exceptions show historical attribution without actions",
   );
+  await expect(page.locator('time[datetime="2026-11-10T16:45:00Z"]')).toBeVisible();
+  await expect(page.locator('time[datetime="2026-10-01T00:00:00Z"]')).toHaveCount(0);
+  const effectiveDisplay = await page.evaluate(() => new Date("2026-11-10T16:45:00Z").toLocaleString());
+  const originalDisplay = await page.evaluate(() => new Date("2026-10-01T00:00:00Z").toLocaleString());
+  await expect(page.getByText(`Adjudicated: ${effectiveDisplay}`, { exact: true })).toBeVisible();
+  await expect(page.getByText(originalDisplay, { exact: true })).toHaveCount(0);
+  data.items[0].historicalAdjudications[0].effectiveAt = null;
+  data.items[0].historicalAdjudications[0].timestampSource = "unknown";
+  await page.goto(url);
+  await page.getByRole("button", { name: "Needs synchronization", exact: true }).click();
+  await expect(page.getByText("Adjudication time unavailable", { exact: true })).toBeVisible();
+  await expect(page.locator("time")).toHaveCount(0);
+  console.log("PASS historical adjudication uses effective action date, never original creation date; unknown time is explicit");
   forbidden = true;
   await page.goto(url);
   await expect(

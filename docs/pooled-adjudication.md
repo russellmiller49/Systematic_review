@@ -19,12 +19,17 @@ remain per PICO.
   locks keep authorization stable through commit. Project guards and sorted stage
   locks serialize against screening, imports/deduplication, pool configuration, and
   full-text assignment creation. A state token rejects stale group membership, votes,
-  outcomes, assignments, or conflicts.
+  outcomes, assignments, conflicts, citation evidence, or protocol/eligibility context.
+  Abstract and protocol writers take conflicting project guards so edits cannot race
+  between final context validation and commit.
 - Exclusion requires an active matching reason label throughout the configured pool;
   each copy stores its own project's reason ID.
 - Multiple copies within one PICO or conflicting DOI/PMID values block pooled writes.
   Divergent history is shown read-only with original per-PICO adjudication attribution
-  and rationale. There is no automatic historical migration or reconciliation.
+  and rationale. Effective adjudication times come from the current resolved conflict
+  or a matching adjudication audit event, never the reused row’s original creation
+  time or a later consensus timestamp. Unavailable historical times are labeled unknown.
+  There is no automatic historical migration or reconciliation.
 - Synchronized adjudicated and consensus outcomes can be reopened together. Reopen
   deletes stage results and voids resolved conflicts, retaining adjudication history.
   A later reviewer revision re-evaluates the conflict under the existing lifecycle.
@@ -57,7 +62,7 @@ regressions. The standalone browser harness uses only in-memory API fixtures:
 `node scripts/test-pooled-adjudication-ui.mjs`
 
 The 4,110-abstract scale fixture with 2,001 listed groups produced approximately
-5.46 MB of JSON, a 1.84-second list, and a 2.04-second adjudication on the development
+5.46 MB of JSON, a 2.82-second list, and a 3.02-second adjudication on the development
 Mac. These are diagnostics, not timing gates. The first implementation scans current
 pooled state on writes and loads all resolved history; server pagination and narrower
 state loading are future improvements. Administrative writes hold stage guards during

@@ -49,6 +49,8 @@ type Item = {
     projectId: string;
     citationId: string;
     conflictStatus: string;
+    effectiveAt: string | null;
+    timestampSource: "conflict" | "audit" | "unknown";
     adjudication: {
       finalDecision: string;
       reason: string;
@@ -667,8 +669,12 @@ function HistoricalAdjudications({ item }: { item: Item }) {
               <p>
                 {adjudication.adjudicator.name ?? "Adjudicator"} ·{" "}
                 {adjudication.finalDecision.toLowerCase()} ·{" "}
-                {record.conflictStatus.toLowerCase()} ·{" "}
-                {new Date(adjudication.createdAt).toLocaleString()}
+                {record.conflictStatus.toLowerCase()}
+              </p>
+              <p>
+                {record.effectiveAt && record.timestampSource !== "unknown" ? (
+                  <>Adjudicated: <time dateTime={record.effectiveAt}>{new Date(record.effectiveAt).toLocaleString()}</time></>
+                ) : "Adjudication time unavailable"}
               </p>
               {adjudication.exclusionReason && (
                 <p>Exclusion reason: {adjudication.exclusionReason.label}</p>

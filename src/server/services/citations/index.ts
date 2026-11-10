@@ -6,6 +6,7 @@ import { prisma } from "@/server/db";
 import { conflict, forbidden, invalidState, notFound } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
 import { can, requirePermission } from "@/server/permissions";
+import { lockScreeningContextProject } from "@/server/services/screening/context-locks";
 import { quotaProgress } from "@/server/services/screening/quotas";
 import * as audit from "@/server/services/audit";
 import { AuditActions } from "@/server/services/audit";
@@ -109,6 +110,7 @@ export async function addCitationAbstract(
     can(member.roles, "project.edit") || can(member.roles, "import.manage");
 
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     // R9: the route project is part of the citation lookup, so cross-project IDs are 404s.
     const citation = await tx.citation.findFirst({
       where: { id: citationId, projectId },

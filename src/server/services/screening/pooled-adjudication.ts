@@ -91,36 +91,84 @@ async function snapshot(tx: Tx, f: Family) {
     stageId: { in: f.stages.map((s) => s.id) },
     citation: { status: "ACTIVE" as const },
   };
-  const [states, conflicts, decisions, assignments, results] =
-    await Promise.all([
-      loadPooledState(
-        tx,
-        f.projectIds,
-        f.stages.map((s) => s.id),
-      ),
-      tx.screeningConflict.findMany({
-        where,
-        orderBy: { id: "asc" },
-        include: {
-          adjudication: {
-            include: {
-              adjudicator: { select: { id: true, name: true } },
-              exclusionReason: { select: { label: true } },
-            },
+  const [
+    states,
+    conflicts,
+    decisions,
+    assignments,
+    results,
+    sourceCitations,
+    protocols,
+    reasonConfiguration,
+  ] = await Promise.all([
+    loadPooledState(
+      tx,
+      f.projectIds,
+      f.stages.map((s) => s.id),
+    ),
+    tx.screeningConflict.findMany({
+      where,
+      orderBy: { id: "asc" },
+      include: {
+        adjudication: {
+          include: {
+            adjudicator: { select: { id: true, name: true } },
+            exclusionReason: { select: { label: true } },
           },
         },
+      },
+    }),
+    tx.screeningDecision.findMany({
+      where: { ...where, withdrawnAt: null },
+      orderBy: { id: "asc" },
+      include: {
+        reviewer: { select: { id: true, name: true } },
+        exclusionReason: { select: { label: true } },
+      },
+    }),
+    tx.screeningAssignment.findMany({ where, orderBy: { id: "asc" } }),
+    tx.citationStageResult.findMany({ where, orderBy: { id: "asc" } }),
+    tx.citation.findMany({
+      where: { projectId: { in: f.projectIds }, status: "ACTIVE" },
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        title: true,
+        abstract: true,
+        authors: true,
+        year: true,
+        doi: true,
+        pmid: true,
+        updatedAt: true,
+      },
+    }),
+    tx.protocol.findMany({
+      where: { projectId: { in: f.projectIds } },
+      orderBy: { id: "asc" },
+      include: {
+        criteria: { orderBy: { id: "asc" } },
+        picoQuestions: { orderBy: { id: "asc" } },
+        outcomes: { orderBy: { id: "asc" } },
+      },
+    }),
+    tx.exclusionReason.findMany({
+      where: { projectId: { in: f.projectIds } },
+      orderBy: { id: "asc" },
+    }),
+  ]);
+  const clinicalContextDigest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        projects: f.pool.members.map((m) => ({
+          id: m.projectId,
+          title: m.project.title,
+          researchQuestion: m.project.researchQuestion,
+        })),
+        protocols,
+        reasonConfiguration,
       }),
-      tx.screeningDecision.findMany({
-        where: { ...where, withdrawnAt: null },
-        orderBy: { id: "asc" },
-        include: {
-          reviewer: { select: { id: true, name: true } },
-          exclusionReason: { select: { label: true } },
-        },
-      }),
-      tx.screeningAssignment.findMany({ where, orderBy: { id: "asc" } }),
-      tx.citationStageResult.findMany({ where, orderBy: { id: "asc" } }),
-    ]);
+    )
+    .digest("hex");
   return states.flatMap((state) => {
     const ids = new Set(state.group.map((c) => c.id));
     const linked = conflicts.filter((c) => ids.has(c.citationId));
@@ -216,6 +264,8 @@ async function snapshot(tx: Tx, f: Family) {
             s.updatedAt,
           ]),
           group: state.group,
+          clinicalContextDigest,
+          citationEvidence: sourceCitations.filter((c) => ids.has(c.id)),
           conflicts: linked,
           decisions: votes,
           assignments: assignments.filter((a) => ids.has(a.citationId)),
@@ -247,35 +297,88 @@ export async function listPooledConflicts(
     async (tx) => {
       const f = await family(tx, ctx, guidelineId, input.poolId);
       const rows = await snapshot(tx, f);
-      const [citations, reasons, criteria] = await Promise.all([
-        tx.citation.findMany({
-          where: {
-            id: { in: rows.flatMap((r) => r.state.group.map((c) => c.id)) },
-          },
-          select: {
-            id: true,
-            title: true,
-            abstract: true,
-            authors: true,
-            year: true,
-            doi: true,
-            pmid: true,
-          },
-        }),
-        tx.exclusionReason.findMany({
-          where: {
-            projectId: { in: f.projectIds },
-            isActive: true,
-            stage: { in: ["TITLE_ABSTRACT", "BOTH"] },
-          },
-          orderBy: [{ order: "asc" }, { label: "asc" }],
-        }),
-        tx.eligibilityCriterion.findMany({
-          where: { protocol: { projectId: { in: f.projectIds } } },
-          orderBy: [{ type: "asc" }, { order: "asc" }],
-          include: { protocol: { select: { projectId: true } } },
-        }),
-      ]);
+      const [citations, reasons, criteria, adjudicationEvents] =
+        await Promise.all([
+          tx.citation.findMany({
+            where: {
+              id: { in: rows.flatMap((r) => r.state.group.map((c) => c.id)) },
+            },
+            select: {
+              id: true,
+              title: true,
+              abstract: true,
+              authors: true,
+              year: true,
+              doi: true,
+              pmid: true,
+            },
+          }),
+          tx.exclusionReason.findMany({
+            where: {
+              projectId: { in: f.projectIds },
+              isActive: true,
+              stage: { in: ["TITLE_ABSTRACT", "BOTH"] },
+            },
+            orderBy: [{ order: "asc" }, { label: "asc" }],
+          }),
+          tx.eligibilityCriterion.findMany({
+            where: { protocol: { projectId: { in: f.projectIds } } },
+            orderBy: [{ type: "asc" }, { order: "asc" }],
+            include: { protocol: { select: { projectId: true } } },
+          }),
+          tx.auditEvent.findMany({
+            where: {
+              projectId: { in: f.projectIds },
+              entityType: "ScreeningAdjudication",
+              action: AuditActions.SCREENING_CONFLICT_ADJUDICATED,
+              entityId: {
+                in: rows.flatMap((r) =>
+                  r.linked.flatMap((c) =>
+                    c.adjudication ? [c.adjudication.id] : [],
+                  ),
+                ),
+              },
+            },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            select: {
+              entityId: true,
+              userId: true,
+              reason: true,
+              newValue: true,
+              metadata: true,
+              createdAt: true,
+            },
+          }),
+        ]);
+      const effectiveTime = (c: (typeof rows)[number]["linked"][number]) => {
+        if (c.status === "RESOLVED" && c.resolvedAt)
+          return {
+            effectiveAt: c.resolvedAt,
+            timestampSource: "conflict" as const,
+          };
+        const a = c.adjudication!;
+        const event = adjudicationEvents.find((e) => {
+          const value = e.newValue as Record<string, unknown> | null;
+          return (
+            e.entityId === a.id &&
+            (value?.adjudicatorId ?? e.userId) === a.adjudicatorId &&
+            (value?.reason ?? e.reason) === a.reason &&
+            value?.finalDecision === a.finalDecision &&
+            (value.exclusionReasonId ?? null) === a.exclusionReasonId
+          );
+        });
+        if (!event)
+          return { effectiveAt: null, timestampSource: "unknown" as const };
+        const explicit =
+          (event.newValue as Record<string, unknown> | null)?.effectiveAt ??
+          (event.metadata as Record<string, unknown> | null)?.sourceDecisionAt;
+        const date = typeof explicit === "string" ? new Date(explicit) : null;
+        return {
+          effectiveAt:
+            date && Number.isFinite(date.getTime()) ? date : event.createdAt,
+          timestampSource: "audit" as const,
+        };
+      };
       return {
         pool: { id: f.pool.id, name: f.pool.name },
         picos: f.picos,
@@ -341,6 +444,7 @@ export async function listPooledConflicts(
               citationId: c.citationId,
               conflictStatus: c.status,
               adjudication: c.adjudication!,
+              ...effectiveTime(c),
             })),
         })),
         summary: {
@@ -501,7 +605,7 @@ export async function adjudicatePooledConflict(
           entityId: adjudication.id,
           action: AuditActions.SCREENING_CONFLICT_ADJUDICATED,
           previousValue: conflict.adjudication ?? undefined,
-          newValue: { conflictId: conflict.id, ...data },
+          newValue: { conflictId: conflict.id, ...data, effectiveAt: now },
           reason: input.reason,
           metadata,
         });
