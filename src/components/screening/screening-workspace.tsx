@@ -254,6 +254,13 @@ function GuidelineScreeningWorkspace({
         />
       )}
 
+      {configuration?.pool && (
+        <Link className={buttonVariants({ variant: "outline" })}
+          href={`/projects/${guidelineId}/screening/pooled/conflicts?poolId=${encodeURIComponent(configuration.pool.id)}`}>
+          Open pooled abstract adjudication
+        </Link>
+      )}
+
       {configuration && !configuration.pool && canConfigure && (
         <Alert>
           No combined pool is configured. Create and name one in{" "}

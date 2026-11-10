@@ -413,6 +413,9 @@ export async function createAssignments(
   await requirePermission(ctx, projectId, "screening.configure");
   return prisma.$transaction(async (tx) => {
     const stage = await getStageOr404(tx, projectId, stageId);
+    // Pooled abstract reopen holds these same stage guards while checking downstream
+    // work. Do not assign full-text work against an eligibility result being removed.
+    if (stage.type === "FULL_TEXT") await lockScreeningStages(tx, [stage.id]);
     await assertIndividualTitleAbstractAllowed(tx, stage);
     const reviewerIds = [...new Set(input.reviewerIds)];
 
@@ -1931,6 +1934,7 @@ export async function adjudicateConflict(
       },
     });
     if (!conflictRow) throw notFound("Conflict");
+    await assertIndividualTitleAbstractAllowed(tx, conflictRow.stage);
     if (conflictRow.status !== "OPEN")
       throw invalidState("Conflict is not open");
     if (conflictRow.citation.status !== "ACTIVE") {
@@ -2089,6 +2093,7 @@ export async function reopenCitation(
     if (!stage) throw notFound("Screening stage");
     if (stage.type === "FULL_TEXT") await lockDedupProject(tx, projectId);
     await lockScreeningStages(tx, [stage.id]);
+    await assertIndividualTitleAbstractAllowed(tx, stage);
     const result = await tx.citationStageResult.findUnique({
       where: {
         stageId_citationId: { stageId: stage.id, citationId: citation.id },

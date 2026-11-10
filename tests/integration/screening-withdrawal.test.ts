@@ -3,6 +3,7 @@ import { prisma } from "@/server/db";
 import * as recovery from "@/server/services/screening/withdrawal";
 import * as screening from "@/server/services/screening";
 import * as pooled from "@/server/services/screening/pooled";
+import * as pooledAdjudication from "@/server/services/screening/pooled-adjudication";
 import * as quotas from "@/server/services/screening/quotas";
 import { getDashboard } from "@/server/services/dashboard";
 import { computePrismaCounts } from "@/server/services/prisma-report";
@@ -609,14 +610,20 @@ it("concurrent duplicate execution creates one batch and one logical credit reve
 });
 
 it("holds prior consensus history after every linked result has been reopened", async () => {
-  const f = await fixture(1);
+  // A synchronized group, without this suite's deliberate same-PICO duplicate,
+  // is eligible for pooled reopening. The historical withdrawal guard is unchanged.
+  const f = await pooledReadinessFixture({ count: 1 });
   await f.decide(0, 0, "EXCLUDE");
   await f.decide(1, 0, "EXCLUDE");
-  for (const c of f.groups[0]!)
-    await screening.reopenCitation(ownerCtx(f), c.projectId, c.id, {
-      stageType: "TITLE_ABSTRACT",
-      reason: "Synthetic reopened consensus",
-    });
+  const listing = await pooledAdjudication.listPooledConflicts(ownerCtx(f), f.guideline.id, { poolId: f.pool.id });
+  expect(listing.items).toHaveLength(1);
+  expect(listing.items[0]!.status).toBe("RESOLVED");
+  await pooledAdjudication.reopenPooledConflict(ownerCtx(f), f.guideline.id, {
+    poolId: f.pool.id,
+    citationIds: listing.items[0]!.citationIds,
+    stateToken: listing.items[0]!.stateToken,
+    reason: "Synthetic reopened consensus",
+  });
   expect(
     await prisma.citationStageResult.count({
       where: { citationId: { in: f.groups[0]!.map((c) => c.id) } },

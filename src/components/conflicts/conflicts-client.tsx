@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { CheckCircle2, Gavel, History, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
@@ -51,6 +52,8 @@ export function ConflictsClient({ projectId }: { projectId: string }) {
     TITLE_ABSTRACT: null,
     FULL_TEXT: null,
   });
+  const [pool, setPool] = useState<{ id: string; name: string; guidelineId: string } | null>(null);
+  const [projectError, setProjectError] = useState(false);
   const [criteria, setCriteria] = useState<EligibilityCriterion[]>([]);
   const [forbidden, setForbidden] = useState(false);
   const [stage, setStage] = useState<StageType>("TITLE_ABSTRACT");
@@ -58,29 +61,47 @@ export function ConflictsClient({ projectId }: { projectId: string }) {
   const [adjudicating, setAdjudicating] = useState<ConflictRow | null>(null);
   const [reopening, setReopening] = useState<ConflictRow | null>(null);
 
-  // One fetch per stage (all statuses) so counts and chip filters are local.
+  // Resolve pool membership before querying abstract conflicts. Pooled abstract
+  // decisions must be viewed and changed only through the authorized pool API.
   const load = useCallback(() => {
-    for (const s of STAGES) {
-      api<ConflictListResponse>(`/api/projects/${projectId}/conflicts?stage=${s}`)
-        .then((res) => {
-          setLists((prev) => ({ ...prev, [s]: res.conflicts }));
-          setCriteria(res.criteria);
-        })
-        .catch((err) => {
-          if (err instanceof ApiError && err.status === 403) {
-            setForbidden(true);
-          } else {
-            toast.error(`Failed to load ${STAGE_LABELS[s].toLowerCase()} conflicts`);
-            setLists((prev) => ({ ...prev, [s]: [] }));
-          }
-        });
-    }
+    setProjectError(false);
+    setForbidden(false);
+    api<{ screeningPoolMembership: { pool: { id: string; name: string; guidelineId: string } } | null }>(`/api/projects/${projectId}`)
+      .then((project) => {
+        const nextPool = project.screeningPoolMembership?.pool ?? null;
+        setPool(nextPool);
+        if (nextPool) setLists((prev) => ({ ...prev, TITLE_ABSTRACT: [] }));
+        for (const s of nextPool ? ["FULL_TEXT" as const] : STAGES) {
+          api<ConflictListResponse>(`/api/projects/${projectId}/conflicts?stage=${s}`)
+            .then((res) => {
+              setLists((prev) => ({ ...prev, [s]: res.conflicts }));
+              setCriteria(res.criteria);
+            })
+            .catch((err) => {
+              if (err instanceof ApiError && err.status === 403) setForbidden(true);
+              else {
+                toast.error(`Failed to load ${STAGE_LABELS[s].toLowerCase()} conflicts`);
+                setLists((prev) => ({ ...prev, [s]: [] }));
+              }
+            });
+        }
+      })
+      .catch(() => setProjectError(true));
   }, [projectId]);
 
   useEffect(load, [load]);
 
   const count = (s: StageType, st: ConflictStatus) =>
     (lists[s] ?? []).filter((c) => c.status === st).length;
+
+  const pooledLink = pool && <Alert className="mb-4">
+    Title-and-abstract adjudication for “{pool.name}” applies across linked PICOs. {" "}
+    <Link className="font-medium underline" href={`/projects/${pool.guidelineId}/screening/pooled/conflicts?poolId=${encodeURIComponent(pool.id)}`}>
+      Open pooled abstract adjudication
+    </Link>. Full-text adjudication remains on this page.
+  </Alert>;
+
+  if (projectError) return <Alert variant="error">The project could not be loaded. Refresh to verify pool membership before adjudicating.</Alert>;
 
   if (forbidden) {
     return (
@@ -89,6 +110,7 @@ export function ConflictsClient({ projectId }: { projectId: string }) {
           title="Conflicts"
           description="Resolve reviewer disagreements with a final adjudicated decision."
         />
+        {pooledLink}
         <Alert variant="warning" className="flex items-start gap-2.5">
           <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
@@ -111,9 +133,11 @@ export function ConflictsClient({ projectId }: { projectId: string }) {
         description="Resolve reviewer disagreements with a final adjudicated decision."
       />
 
+      {pooledLink}
+
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {loaded ? (
-          STAGES.flatMap((s) => [
+          (pool ? ["FULL_TEXT" as const] : STAGES).flatMap((s) => [
             <StatCard
               key={`${s}-open`}
               label={`Open · ${STAGE_LABELS[s]}`}
@@ -167,12 +191,12 @@ export function ConflictsClient({ projectId }: { projectId: string }) {
 
         {STAGES.map((s) => (
           <TabsContent key={s} value={s}>
-            <StageConflictList
+            {s === "TITLE_ABSTRACT" && pool ? <p className="py-4 text-sm text-muted-foreground">Use pooled abstract adjudication above to review and resolve combined conflicts.</p> : <StageConflictList
               conflicts={lists[s]}
               status={status}
               onAdjudicate={setAdjudicating}
               onReopen={setReopening}
-            />
+            />}
           </TabsContent>
         ))}
       </Tabs>

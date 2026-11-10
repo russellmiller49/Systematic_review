@@ -14,6 +14,7 @@ import type {
   ProtocolVersion,
   ReasonStage,
 } from "@prisma/client";
+import { lockScreeningContextProject } from "@/server/services/screening/context-locks";
 import { prisma, type Tx } from "@/server/db";
 import { conflict, invalidState, notFound, validationError } from "@/server/errors";
 import type { Ctx } from "@/server/auth/session";
@@ -291,7 +292,12 @@ function diffProtocolInput(before: Protocol, input: UpdateProtocolInput) {
 
 export async function getProtocol(ctx: Ctx, projectId: string) {
   await requirePermission(ctx, projectId, "project.view");
-  const base = await ensureProtocol(prisma, projectId);
+  // Even a read can lazily create the protocol; serialize that insertion with
+  // pooled context validation just like explicit protocol mutations.
+  const base = await prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
+    return ensureProtocol(tx, projectId);
+  });
   const protocol = await prisma.protocol.findUniqueOrThrow({
     where: { id: base.id },
     include: {
@@ -307,6 +313,7 @@ export async function getProtocol(ctx: Ctx, projectId: string) {
 export async function updateProtocol(ctx: Ctx, projectId: string, input: UpdateProtocolInput) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await ensureProtocol(tx, projectId);
     const begun = await checkAmendmentGate(tx, projectId, input.amendmentReason);
     const { data, previous, next } = diffProtocolInput(before, input);
@@ -348,6 +355,7 @@ export async function updateProtocol(ctx: Ctx, projectId: string, input: UpdateP
 export async function publishProtocol(ctx: Ctx, projectId: string) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const protocol = await ensureProtocol(tx, projectId);
     const versionNumber = (await lastVersionNumber(tx, protocol.id)) + 1;
     const snapshot = await buildSnapshot(tx, projectId, protocol.id);
@@ -413,6 +421,7 @@ const picoFields = (row: {
 export async function createPico(ctx: Ctx, projectId: string, input: CreatePicoInput) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const protocol = await ensureProtocol(tx, projectId);
     const begun = await checkAmendmentGate(tx, projectId, input.amendmentReason);
     const pico = await tx.pICOQuestion.create({
@@ -457,6 +466,7 @@ export async function updatePico(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.pICOQuestion.findFirst({
       where: { id: picoId, protocol: { projectId } },
     });
@@ -502,6 +512,7 @@ export async function deletePico(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.pICOQuestion.findFirst({
       where: { id: picoId, protocol: { projectId } },
     });
@@ -545,6 +556,7 @@ const criterionFields = (row: {
 export async function createCriterion(ctx: Ctx, projectId: string, input: CreateCriterionInput) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const protocol = await ensureProtocol(tx, projectId);
     const begun = await checkAmendmentGate(tx, projectId, input.amendmentReason);
     const criterion = await tx.eligibilityCriterion.create({
@@ -587,6 +599,7 @@ export async function updateCriterion(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.eligibilityCriterion.findFirst({
       where: { id: criterionId, protocol: { projectId } },
     });
@@ -630,6 +643,7 @@ export async function deleteCriterion(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.eligibilityCriterion.findFirst({
       where: { id: criterionId, protocol: { projectId } },
     });
@@ -680,6 +694,7 @@ const outcomeFields = (row: {
 export async function createOutcome(ctx: Ctx, projectId: string, input: CreateOutcomeInput) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const protocol = await ensureProtocol(tx, projectId);
     const begun = await checkAmendmentGate(tx, projectId, input.amendmentReason);
     const outcome = await tx.outcomeDefinition.create({
@@ -723,6 +738,7 @@ export async function updateOutcome(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.outcomeDefinition.findFirst({
       where: { id: outcomeId, protocol: { projectId } },
     });
@@ -767,6 +783,7 @@ export async function deleteOutcome(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.outcomeDefinition.findFirst({
       where: { id: outcomeId, protocol: { projectId } },
     });
@@ -832,6 +849,7 @@ export async function createExclusionReason(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const existing = await tx.exclusionReason.findUnique({
       where: { projectId_label: { projectId, label: input.label } },
     });
@@ -864,6 +882,7 @@ export async function updateExclusionReason(
 ) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.exclusionReason.findFirst({ where: { id: reasonId, projectId } });
     if (!before) throw notFound("Exclusion reason");
     if (input.label !== undefined && input.label !== before.label) {
@@ -896,6 +915,7 @@ export async function updateExclusionReason(
 export async function deleteExclusionReason(ctx: Ctx, projectId: string, reasonId: string) {
   await requirePermission(ctx, projectId, "protocol.edit");
   return prisma.$transaction(async (tx) => {
+    await lockScreeningContextProject(tx, projectId);
     const before = await tx.exclusionReason.findFirst({ where: { id: reasonId, projectId } });
     if (!before) throw notFound("Exclusion reason");
     const [decisionRefs, adjudicationRefs] = await Promise.all([
